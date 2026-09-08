@@ -26,7 +26,7 @@ Hotspot (persistent). 408 LOC, max cyclomatic complexity 141.0, 1 commits in chu
 
 ## Suggested actions
 
-- Strengthen assertions in src/elements.test.ts at the stryker survivors: arrow edge-point maths (lines 257, 299-305, 337-338) and the summariser (436-454); characterization-style, exact coordinates and strings
+- Strengthen assertions in src/elements.test.ts at the stryker survivors in src/elements.ts: the shape roundness branch (line 257), the arrow edge-point maths (299-305, 337-338) and the summariser (436-454); characterization-style, exact coordinates and strings
 - Target: npm run mutate reports elements.ts mutation score >= 80% (from 55.6%)
 - Only then consider splitting buildElements (fn ccn 67) per spec type behind the new tests
 

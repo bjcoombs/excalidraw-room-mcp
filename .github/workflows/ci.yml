@@ -27,7 +27,11 @@ jobs:
           {
             echo '## Line coverage (files loaded by the unit tests)'
             echo '```'
-            awk '/^SF:/{f=substr($0,4)} /^LF:/{lf=substr($0,4)} /^LH:/{lh=substr($0,4)} /^end_of_record/{printf "%-24s %3d%% (%s/%s)\n", f, (lf>0?100*lh/lf:0), lh, lf}' coverage/lcov.info
+            if [[ -f coverage/lcov.info ]]; then
+              awk '/^SF:/{f=substr($0,4)} /^LF:/{lf=substr($0,4)} /^LH:/{lh=substr($0,4)} /^end_of_record/{printf "%-24s %3d%% (%s/%s)\n", f, (lf>0?100*lh/lf:0), lh, lf}' coverage/lcov.info
+            else
+              echo 'No LCOV report was produced.'
+            fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4

@@ -30,7 +30,8 @@ EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js  # run the server with diagnostics on
 
 ## Testing boundaries
 
-- Unit tests cover the pure modules: crypto, reconcile, elements. `room.ts`, `firebase.ts`, and `index.ts` are only exercised by the manual e2e driver against a live room. If you change them, run the e2e with a browser open on the link and check both directions (server writes appear on the canvas; a pencil stroke appears in `read_scene`).
+- Unit tests cover crypto, reconcile, elements, the Firestore load/save paths (fetch stubbed), and the link-parsing and pre-join paths of `room.ts`. The socket, broadcast and persist paths of `room.ts`, and all of `index.ts`, are exercised only by the manual e2e driver against a live room. If you change those, run the e2e with a browser open on the link and check both directions (server writes appear on the canvas; a pencil stroke appears in `read_scene`).
+- `src/interop.test.ts` decrypts a scene excalidraw.com wrote (`tests/fixtures/`). If upstream changes its element shape, it fails there first; update the `allowed` field list in that test only after checking the upstream source.
 - Text metrics are approximations (`measureText`). Tests assert containment, not exact pixels.
 
 ## Git

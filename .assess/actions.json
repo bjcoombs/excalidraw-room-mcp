@@ -25,7 +25,7 @@
     },
     {
       "rank": 2,
-      "action": "Strengthen assertions in src/elements.test.ts at the stryker survivors in buildElements: arrow edge-point maths (src/elements.ts:257, 299-305, 337-338) and the summariser (436-454), characterization-style",
+      "action": "Strengthen assertions in src/elements.test.ts at the stryker survivors in buildElements: the shape roundness branch (src/elements.ts:257), the arrow edge-point maths (299-305, 337-338) and the summariser (436-454), characterization-style",
       "layer": 6,
       "effort": "medium",
       "files": [
@@ -53,7 +53,7 @@
         "package.json",
         ".github/workflows/ci.yml"
       ],
-      "first_step": "npm i -D eslint typescript-eslint; write eslint.config.js; gh api -X PUT repos/bjcoombs/excalidraw-room-mcp/branches/main/protection with required_status_checks.contexts=[\"test\"]",
+      "first_step": "npm i -D eslint typescript-eslint; write eslint.config.js; gh api -X PUT repos/bjcoombs/excalidraw-room-mcp/branches/main/protection --input protection.json where the file holds {\"required_status_checks\":{\"strict\":true,\"contexts\":[\"test\"]},\"enforce_admins\":false,\"required_pull_request_reviews\":null,\"restrictions\":null}",
       "done_when": "npm run lint runs in CI and passes (buildElements fenced by one documented eslint-disable-next-line complexity naming Action 2), and a PR with a failing test check cannot be merged",
       "scope_fence": "Config and workflow only; no source edits beyond the one documented disable",
       "finding": "unexplained_complexity",
