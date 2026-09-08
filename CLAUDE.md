@@ -36,6 +36,12 @@ EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js  # run the server with diagnostics on
 - `src/interop.test.ts` decrypts a scene excalidraw.com wrote (`tests/fixtures/`). If upstream changes its element shape, it fails there first; update the `allowed` field list in that test only after checking the upstream source.
 - Text metrics are approximations (`measureText`). Tests assert containment, not exact pixels.
 
+## Project management
+
+- Work is tracked in GitHub Issues on this repo, through the `gh` CLI. No Task Master, no external tracker.
+- Define new features and bugs as issues before starting them; reference the issue by full URL in the PR.
+- Labels: `agent-ready` means an agent can pick it up unaided; `needs-triage` means open questions remain; `in-progress` while an agent is on it; `assess-finding` for items raised by `/assess`.
+
 ## Git
 
 - Work in a worktree off `main`; the `excalidraw-room-mcp-main` checkout stays clean.
