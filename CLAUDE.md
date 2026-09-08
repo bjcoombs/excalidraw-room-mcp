@@ -38,9 +38,9 @@ EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js  # run the server with diagnostics on
 
 ## Project management
 
-- Work is tracked in GitHub Issues on this repo, through the `gh` CLI. No Task Master, no external tracker.
+- Work is tracked in GitHub Issues on this repo, through the `gh` CLI.
 - Define new features and bugs as issues before starting them; reference the issue by full URL in the PR.
-- Labels: `agent-ready` means an agent can pick it up unaided; `needs-triage` means open questions remain; `in-progress` while an agent is on it; `assess-finding` for items raised by `/assess`.
+- Labels: `agent-ready` means an agent can pick it up unaided; `needs-triage` means open questions remain; `in-progress` while an agent is on it.
 
 ## Git
 
