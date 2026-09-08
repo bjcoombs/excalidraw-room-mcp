@@ -20,7 +20,8 @@
       "status": "pending",
       "claimed_by": null,
       "completed_sha": null,
-      "mode": "verify_then_retire"
+      "mode": "verify_then_retire",
+      "issue": "#3"
     },
     {
       "rank": 2,
@@ -39,7 +40,8 @@
       "status": "pending",
       "claimed_by": null,
       "completed_sha": null,
-      "mode": "verify_then_retire"
+      "mode": "verify_then_retire",
+      "issue": "#4"
     },
     {
       "rank": 3,
@@ -58,7 +60,8 @@
       "status": "pending",
       "claimed_by": null,
       "completed_sha": null,
-      "mode": "characterize_first"
+      "mode": "characterize_first",
+      "issue": "#5"
     }
   ]
 }
