@@ -8,7 +8,7 @@ import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { highlightElements } from "./highlights.js";
-import { parsePayload, sceneSignature, type ShowRoomPayload } from "./payload.js";
+import { parsePayload, roomLink, sceneSignature, type ShowRoomPayload } from "./payload.js";
 
 /** How often the view asks the server for the room again, in milliseconds. */
 const POLL_INTERVAL_MS = 2000;
@@ -94,6 +94,7 @@ export function RoomView({ app }: { app: App }) {
 function Header({ payload, note }: { payload: ShowRoomPayload | null; note: string }) {
   if (!payload) return <header className="room-header">{note}</header>;
   const peers = payload.peers.length;
+  const href = roomLink(payload.link);
   return (
     <header className="room-header">
       <span className={payload.connected ? "dot dot-on" : "dot dot-off"} />
@@ -104,8 +105,8 @@ function Header({ payload, note }: { payload: ShowRoomPayload | null; note: stri
       </span>
       <span className="sep">·</span>
       <span>{payload.elements.length} elements</span>
-      {payload.link ? (
-        <a className="open-link" href={payload.link} target="_blank" rel="noreferrer">
+      {href ? (
+        <a className="open-link" href={href} target="_blank" rel="noreferrer">
           Open on excalidraw.com
         </a>
       ) : null}

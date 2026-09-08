@@ -22,7 +22,7 @@
   "scripts": {
     "build": "npm run build:server && npm run build:view",
     "build:server": "tsc -p tsconfig.json",
-    "build:view": "vite build --config view/vite.config.ts",
+    "build:view": "tsc -p view/tsconfig.json && vite build --config view/vite.config.ts",
     "test": "npm run build && node --test dist/*.test.js",
     "test:coverage": "npm run build && mkdir -p coverage && node --test --experimental-test-coverage --test-coverage-exclude=\"dist/*.test.js\" --test-coverage-exclude=\"dist/e2e.js\" --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info dist/*.test.js",
     "lint": "eslint .",

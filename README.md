@@ -37,6 +37,12 @@ Or with any other MCP client that speaks stdio, using the same command.
 
 Or the other way round: ask the agent to create a room, and open the link it gives you.
 
+### See the canvas in the chat
+
+In a host that supports MCP Apps (Claude Desktop, claude.ai), joining or creating a room renders the drawing in the chat window. The view refreshes every two seconds while it is on screen, so a shape someone draws on excalidraw.com turns up in the chat without another prompt; it stops asking when the window is hidden. Pending `@claude` mentions are outlined on the canvas and listed in a strip beside it, and clear from both when the agent acknowledges them. Ask for `show_room` to bring the view back at any point.
+
+The view is read-only: it never writes to the room. Editing happens on excalidraw.com, and the header carries an **Open on excalidraw.com** link to the room. Hosts without MCP Apps support get the same text results as before.
+
 ### Talk to it on the canvas
 
 Type a text element containing `@claude` next to the thing you mean, for example `@claude add a cache between these`. The agent calls `wait_for_mention`, which blocks until such a text appears and has stopped changing, then returns the instruction together with the elements around it. When it has acted, `acknowledge_mention` turns the text grey and appends a check mark (or a short note, such as why it declined), so you can see on the canvas what has been dealt with. Edit the text again and it becomes pending again.
@@ -49,6 +55,7 @@ A loop that keeps an agent listening is just: `wait_for_mention` (up to 10 minut
 |---|---|
 | `create_room` | Make a new empty room, join it, return the link to open. |
 | `join_room` | Join a room from its link. Loads the scene from a peer, or from the persisted copy if nobody else is there. |
+| `show_room` | The room as JSON (link, connection state, peers, elements, pending mentions) and, in a host that supports MCP Apps, the canvas rendered in the chat. |
 | `room_status` | Connection state, peers, element counts. |
 | `read_scene` | The drawing as one line per element (default), or the full element JSON. Freehand strokes come back as a sampled path so a scribble is legible. |
 | `add_elements` | Add shapes, text, arrows, lines and freehand strokes from compact specs. Arrows bind to element ids; edge points are computed. |
@@ -99,9 +106,13 @@ The room key is the only secret, and it is in the link. The server uses it local
 ## Development
 
 ```bash
-npm test          # build + unit tests
+npm test          # build (server + view) + unit tests
+npm run build:view   # just the in-chat view: view/ -> dist/view/canvas.html
+npm run e2e:show-room -- "<collab link>"   # join a real room and print the show_room payload
 EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js   # run with diagnostics on stderr
 ```
+
+The in-chat view is a separate Vite build under `view/` (paths relative to the repo root). It bundles `@excalidraw/excalidraw` into the single file `dist/view/canvas.html`, which `src/view.ts` serves as the MCP Apps resource. The Node server itself never imports that package.
 
 ## License
 

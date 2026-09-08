@@ -95,12 +95,12 @@ test("buildShowRoomPayload reports a disconnected room with a null link", () => 
   assert.deepEqual(payload.mentions, []);
 });
 
-test("buildShowRoomPayload output is JSON-serialisable to the four documented keys", () => {
+test("the show_room result body is JSON with exactly the five documented keys", () => {
   const parsed = JSON.parse(JSON.stringify(buildShowRoomPayload(status(), [element()], [])));
   assert.deepEqual(Object.keys(parsed).sort(), ["connected", "elements", "link", "mentions", "peers"]);
 });
 
-test("the pre-join message names the room and the tools that open one", () => {
+test("show_room's pre-join message names the room and the tools that open one", () => {
   assert.match(NOT_IN_ROOM_TEXT, /room/);
   for (const forbidden of ["not found", "unknown tool", "-32602"]) {
     assert.ok(!NOT_IN_ROOM_TEXT.toLowerCase().includes(forbidden), `must not contain ${forbidden}`);
@@ -109,7 +109,7 @@ test("the pre-join message names the room and the tools that open one", () => {
   assert.match(NOT_IN_ROOM_TEXT, /join_room/);
 });
 
-test("registerCanvasResource registers the canvas URI with the MCP Apps MIME type", async () => {
+test("registerCanvasResource serves canvas.html at the URI show_room's _meta points to", async () => {
   const calls: { name: string; uri: string; config: { mimeType?: string } }[] = [];
   let read!: (uri: URL) => Promise<{ contents: { uri: string; mimeType?: string; text?: string }[] }>;
   registerCanvasResource(

@@ -23,6 +23,17 @@ export interface ShowRoomPayload {
   mentions: ShowRoomMention[];
 }
 
+/** Every room link the server hands out has this prefix; anything else is not one. */
+const ROOM_LINK_PREFIX = "https://excalidraw.com/#room=";
+
+/**
+ * The href for the "Open on excalidraw.com" link, or null when there is no room
+ * to open. The prefix check keeps the anchor from pointing anywhere else.
+ */
+export function roomLink(link: string | null): string | null {
+  return link && link.startsWith(ROOM_LINK_PREFIX) ? link : null;
+}
+
 interface ToolResultLike {
   content?: { type?: string; text?: string }[];
   isError?: boolean;
