@@ -1,0 +1,985 @@
+{
+  "run_id": "20260908145107-5ed23362",
+  "artifact_schema_version": "1.0.0",
+  "run_date": "2026-09-08",
+  "scope": null,
+  "scope_slug": null,
+  "measured_commit": {
+    "available": true,
+    "head_sha": "fd6461b63f55be437181e341324dc68982152806",
+    "head_short": "fd6461b63f55",
+    "committed_date": "2026-09-08",
+    "subject": "feat: Headless Excalidraw collaboration room client as an MCP server (#1)",
+    "dirty": true,
+    "upstream": null,
+    "behind": null
+  },
+  "prior_stats_exists": true,
+  "stats_summary": {
+    "files_scored": 19,
+    "loc": {
+      "p50": 55.0,
+      "p95": 263.99999999999966,
+      "max": 408.0,
+      "total": 1650
+    },
+    "est_tokens": {
+      "p50": 583.0,
+      "p95": 2918.4999999999973,
+      "max": 4111.0,
+      "total": 19059,
+      "budget": {
+        "total": 19059,
+        "budget": 200000,
+        "budget_basis": "estimate (~4 chars/token, documented default)",
+        "chars_per_token": 4,
+        "files_over_budget": 0,
+        "subtrees_over_budget": 0,
+        "over_budget_subtrees": []
+      }
+    },
+    "ccn": {
+      "basis": "file-aggregate",
+      "p50": 8.0,
+      "p95": 91.49999999999989,
+      "max": 141.0
+    },
+    "top_hotspots": [
+      {
+        "path": "src/elements.ts",
+        "loc": 408,
+        "est_tokens": 4111,
+        "ccn": 141.0,
+        "ccn_basis": "file-aggregate",
+        "max_fn_ccn": 67.0,
+        "commits": 1,
+        "source": "lizard"
+      },
+      {
+        "path": "src/room.ts",
+        "loc": 248,
+        "est_tokens": 2786,
+        "ccn": 86.0,
+        "ccn_basis": "file-aggregate",
+        "max_fn_ccn": 13.0,
+        "commits": 1,
+        "source": "lizard"
+      },
+      {
+        "path": "src/index.ts",
+        "loc": 218,
+        "est_tokens": 2473,
+        "ccn": 21.0,
+        "ccn_basis": "file-aggregate",
+        "max_fn_ccn": 6.0,
+        "commits": 1,
+        "source": "lizard"
+      },
+      {
+        "path": "src/elements.test.ts",
+        "loc": 120,
+        "est_tokens": 1439,
+        "ccn": 33.0,
+        "ccn_basis": "file-aggregate",
+        "max_fn_ccn": 5.0,
+        "commits": 1,
+        "source": "lizard"
+      },
+      {
+        "path": "src/reconcile.ts",
+        "loc": 55,
+        "est_tokens": 506,
+        "ccn": 17.0,
+        "ccn_basis": "file-aggregate",
+        "max_fn_ccn": 9.0,
+        "commits": 1,
+        "source": "lizard"
+      },
+      {
+        "path": "src/firebase.ts",
+        "loc": 74,
+        "est_tokens": 983,
+        "ccn": 10.0,
+        "ccn_basis": "file-aggregate",
+        "max_fn_ccn": 3.0,
+        "commits": 1,
+        "source": "lizard"
+      },
+      {
+        "path": "src/e2e.ts",
+        "loc": 60,
+        "est_tokens": 715,
+        "ccn": 9.0,
+        "ccn_basis": "file-aggregate",
+        "max_fn_ccn": 3.0,
+        "commits": 1,
+        "source": "lizard"
+      },
+      {
+        "path": "src/firebase.test.ts",
+        "loc": 83,
+        "est_tokens": 1035,
+        "ccn": 17.0,
+        "ccn_basis": "file-aggregate",
+        "max_fn_ccn": 3.0,
+        "commits": 0,
+        "source": "lizard"
+      },
+      {
+        "path": "src/crypto.ts",
+        "loc": 57,
+        "est_tokens": 583,
+        "ccn": 8.0,
+        "ccn_basis": "file-aggregate",
+        "max_fn_ccn": 2.0,
+        "commits": 1,
+        "source": "lizard"
+      },
+      {
+        "path": "src/reconcile.test.ts",
+        "loc": 34,
+        "est_tokens": 377,
+        "ccn": 8.0,
+        "ccn_basis": "file-aggregate",
+        "max_fn_ccn": 1.0,
+        "commits": 1,
+        "source": "lizard"
+      }
+    ]
+  },
+  "instruction_files": {
+    "CLAUDE.md": {
+      "grade": "B+",
+      "score": 64,
+      "subscores": {
+        "positive_directives": 8,
+        "tradeoff_phrases": 2,
+        "path_references": 14,
+        "verifiable_outcomes": 0,
+        "line_count": 39,
+        "word_count": 422,
+        "bloat_penalty": 0
+      },
+      "freshness_days": 0,
+      "line_count": 39,
+      "present": true
+    }
+  },
+  "instructions_grade": "B+",
+  "diff": {
+    "graduated": 1,
+    "regressed": 0,
+    "new": 1,
+    "persistent": 9
+  },
+  "diff_reliable": true,
+  "diff_version_note": null,
+  "diff_trend_reset": false,
+  "prior_plugin_version": "1.56.1",
+  "schema_version": 1,
+  "prior_schema_version": 1,
+  "tool_versions": {
+    "lizard": "1.23.0",
+    "scc": "3.7.0"
+  },
+  "prior_tool_versions": {
+    "lizard": "1.23.0",
+    "scc": "3.7.0"
+  },
+  "diff_detail": {
+    "graduated": [
+      {
+        "path": "src/crypto.test.ts",
+        "ccn_delta": 0,
+        "commits_delta": 0,
+        "loc_delta": 0
+      }
+    ],
+    "regressed": [],
+    "new": [
+      {
+        "path": "src/firebase.test.ts",
+        "ccn_delta": 0,
+        "commits_delta": 0,
+        "loc_delta": 0
+      }
+    ],
+    "persistent": [
+      {
+        "path": "src/elements.ts",
+        "ccn_delta": 0.0,
+        "commits_delta": 0,
+        "loc_delta": 0
+      },
+      {
+        "path": "src/room.ts",
+        "ccn_delta": 0.0,
+        "commits_delta": 0,
+        "loc_delta": 0
+      },
+      {
+        "path": "src/index.ts",
+        "ccn_delta": 0.0,
+        "commits_delta": 0,
+        "loc_delta": 0
+      },
+      {
+        "path": "src/elements.test.ts",
+        "ccn_delta": 0.0,
+        "commits_delta": 0,
+        "loc_delta": 0
+      },
+      {
+        "path": "src/reconcile.ts",
+        "ccn_delta": 0.0,
+        "commits_delta": 0,
+        "loc_delta": 0
+      },
+      {
+        "path": "src/firebase.ts",
+        "ccn_delta": 0.0,
+        "commits_delta": 0,
+        "loc_delta": 0
+      },
+      {
+        "path": "src/e2e.ts",
+        "ccn_delta": 0.0,
+        "commits_delta": 0,
+        "loc_delta": 0
+      },
+      {
+        "path": "src/crypto.ts",
+        "ccn_delta": 0.0,
+        "commits_delta": 0,
+        "loc_delta": 0
+      },
+      {
+        "path": "src/reconcile.test.ts",
+        "ccn_delta": 0.0,
+        "commits_delta": 0,
+        "loc_delta": 0
+      }
+    ]
+  },
+  "pruned_hotspots": [],
+  "log_integrity": {
+    "valid": true,
+    "broken_at_entry": null
+  },
+  "doc_graph": {
+    "available": true,
+    "reason": "",
+    "doc_count": 2,
+    "edge_count": 0,
+    "hubs": [
+      {
+        "path": "CLAUDE.md",
+        "pagerank": 0.5,
+        "out_degree": 0,
+        "in_degree": 0
+      },
+      {
+        "path": "README.md",
+        "pagerank": 0.5,
+        "out_degree": 0,
+        "in_degree": 0
+      }
+    ],
+    "orphans": [],
+    "orphan_rate": 0.0,
+    "island_count": 2,
+    "reachability_pct": 1.0,
+    "entry_points": [
+      "CLAUDE.md",
+      "README.md"
+    ],
+    "unreachable": [],
+    "declared_mocs": [],
+    "moc_named_but_not_wired": [],
+    "doc_to_code_edges": [],
+    "dangling_links": 0,
+    "broken_links": [],
+    "missing_xrefs": [],
+    "ambiguous_wikilinks": 0,
+    "vault_detected": false,
+    "obsidiantools_available": false,
+    "excluded_raw_trees": [],
+    "raw_source_doc_count": 0,
+    "curated_doc_count": 2,
+    "raw_source_orphan_rate": 0.0,
+    "raw_source_broken_links": 0
+  },
+  "doc_staleness": {
+    "available": true,
+    "churn_window": "commits (all-time)",
+    "churn_degenerate": true,
+    "docs": [
+      {
+        "path": "CLAUDE.md",
+        "last_commit_days": null,
+        "doc_churn_in_window": 0,
+        "code_churn_in_window": 10,
+        "subject_code_count": 13,
+        "subject_method": "repo-baseline",
+        "ratio": 10.0,
+        "confidence": "low"
+      },
+      {
+        "path": "README.md",
+        "last_commit_days": 0,
+        "doc_churn_in_window": 1,
+        "code_churn_in_window": 10,
+        "subject_code_count": 13,
+        "subject_method": "nearest-ancestor",
+        "ratio": 10.0,
+        "confidence": "high"
+      }
+    ],
+    "association": {
+      "code_file_count": 13,
+      "doc_count": 2,
+      "code_under_base_doc": 13,
+      "pct_code_under_base_doc": 1.0,
+      "docs_mapping_to_code": 1,
+      "pct_docs_mapping_to_code": 0.5,
+      "methods": {
+        "repo-baseline": 1,
+        "nearest-ancestor": 1
+      }
+    },
+    "modularity": {
+      "module_dir_count": 1,
+      "module_dirs_with_base_doc": 1,
+      "base_doc_dir_ratio": 1.0,
+      "base_doc_coverage_when_present": 1.0,
+      "code_file_count": 13,
+      "large_repo": false
+    }
+  },
+  "stale_hubs": [
+    {
+      "path": "README.md",
+      "pagerank": 0.5,
+      "last_commit_days": 0,
+      "code_churn_in_window": 10,
+      "ratio": 10.0,
+      "subject_method": "nearest-ancestor",
+      "confidence": "high",
+      "priority": 5.0
+    },
+    {
+      "path": "CLAUDE.md",
+      "pagerank": 0.5,
+      "last_commit_days": null,
+      "code_churn_in_window": 10,
+      "ratio": 10.0,
+      "subject_method": "repo-baseline",
+      "confidence": "low",
+      "priority": 5.0
+    }
+  ],
+  "churn_degenerate": true,
+  "untracked_instruction_files": [],
+  "broken_instruction_refs": [],
+  "sensitive_instruction_content": {},
+  "archetype": {
+    "available": true,
+    "archetype": "software",
+    "detected_via": "heuristic",
+    "override": null,
+    "override_contradicts_signals": false,
+    "contradiction_details": null,
+    "reason": "a runtime surface is present (code-file ratio 0.87); scored as a software repo",
+    "signals": {
+      "code_file_count": 13,
+      "doc_file_count": 2,
+      "other_file_count": 8,
+      "code_file_ratio": 0.867,
+      "has_runtime_surface": true
+    },
+    "applicable_layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "na_layers": [],
+    "denominator": 8,
+    "kb_maintenance": {
+      "documented": false,
+      "signals_found": [],
+      "gist_cited": false,
+      "gist": "https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f"
+    }
+  },
+  "ancestor_instruction_files": [
+    "CLAUDE.md (4 level(s) above repo root)",
+    "~/.claude/CLAUDE.md (global user instructions)"
+  ],
+  "skills_present": false,
+  "skills_count": 0,
+  "skill_files": [],
+  "instruction_file_size": {
+    "CLAUDE.md": {
+      "line_count": 39,
+      "word_count": 422,
+      "bloat_penalty": 0
+    }
+  },
+  "dead_code": {
+    "available": true,
+    "candidate_count": 0,
+    "candidates": [],
+    "tools": [
+      {
+        "language": "typescript",
+        "tool": "ts-prune",
+        "status": "ran",
+        "reason": "0 candidate(s)"
+      }
+    ],
+    "caveat": "Static reachability proves nothing in THIS repo references the symbol; it cannot prove no external consumer (a mobile app, another service) calls it. Cross-boundary liveness needs telemetry or a named human."
+  },
+  "observability": {
+    "rung": 0,
+    "instrumented": {
+      "present": false,
+      "signals": []
+    },
+    "discoverable": {
+      "present": false,
+      "signals": []
+    },
+    "reachable": {
+      "present": false,
+      "signals": []
+    },
+    "boundary": "Scores what the repo makes agent-reachable; cannot observe the agent's live environment."
+  },
+  "coverage_report": {
+    "available": true,
+    "source": "coverage/lcov.info",
+    "format": "lcov",
+    "parsed": true
+  },
+  "test_pressure": {
+    "mutation_config_present": true,
+    "mutation_tools_detected": [
+      "stryker"
+    ],
+    "ci_integrated": false,
+    "mutation_run": false,
+    "mutation_scope": [],
+    "per_file": [],
+    "survivor_density": {
+      "overall": null,
+      "total_survived": 0,
+      "total_mutants": null,
+      "by_file": {}
+    },
+    "survivor_clusters": [],
+    "gap_signal": "not assessed",
+    "cheap_heuristics": {
+      "assertion_on_internal": [],
+      "untested_boundaries": [],
+      "duplicate_truth": [],
+      "confidence_note": "candidate signals for human judgement, never verdicts"
+    },
+    "mutation_note": "opt-in required: mutation testing mutates and runs code"
+  },
+  "mutation_not_run_cap": {
+    "applies": true,
+    "mutation_run": false,
+    "max_layer6_band": "Partial",
+    "annotation": "truth-pressure unproven (mutation not run)"
+  },
+  "test_focus": {
+    "available": true,
+    "coverage_present": true,
+    "entries": [
+      {
+        "path": "src/elements.ts",
+        "risk_band": "high",
+        "test_signal": "no_covering_test",
+        "hollow_heuristic_kinds": [],
+        "suggested_action": "add_tests"
+      },
+      {
+        "path": "src/room.ts",
+        "risk_band": "high",
+        "test_signal": "no_covering_test",
+        "hollow_heuristic_kinds": [],
+        "suggested_action": "add_tests"
+      },
+      {
+        "path": "src/index.ts",
+        "risk_band": "high",
+        "test_signal": "no_covering_test",
+        "hollow_heuristic_kinds": [],
+        "suggested_action": "add_tests"
+      },
+      {
+        "path": "src/elements.test.ts",
+        "risk_band": "medium",
+        "test_signal": "no_covering_test",
+        "hollow_heuristic_kinds": [],
+        "suggested_action": "add_tests"
+      },
+      {
+        "path": "src/reconcile.ts",
+        "risk_band": "medium",
+        "test_signal": "no_covering_test",
+        "hollow_heuristic_kinds": [],
+        "suggested_action": "add_tests"
+      },
+      {
+        "path": "src/firebase.ts",
+        "risk_band": "medium",
+        "test_signal": "no_covering_test",
+        "hollow_heuristic_kinds": [],
+        "suggested_action": "add_tests"
+      },
+      {
+        "path": "src/e2e.ts",
+        "risk_band": "medium",
+        "test_signal": "no_covering_test",
+        "hollow_heuristic_kinds": [],
+        "suggested_action": "add_tests"
+      },
+      {
+        "path": "src/firebase.test.ts",
+        "risk_band": "low",
+        "test_signal": "no_covering_test",
+        "hollow_heuristic_kinds": [],
+        "suggested_action": "add_tests"
+      },
+      {
+        "path": "src/crypto.ts",
+        "risk_band": "low",
+        "test_signal": "no_covering_test",
+        "hollow_heuristic_kinds": [],
+        "suggested_action": "add_tests"
+      },
+      {
+        "path": "src/reconcile.test.ts",
+        "risk_band": "low",
+        "test_signal": "no_covering_test",
+        "hollow_heuristic_kinds": [],
+        "suggested_action": "add_tests"
+      }
+    ],
+    "total_focus_targets": 10
+  },
+  "promissory_markers": {
+    "available": true,
+    "reason": "",
+    "aging_reliable": false,
+    "stale_touches_threshold": 5,
+    "families": {},
+    "todo_bare": 0,
+    "todo_linked": 0,
+    "total_markers": 0,
+    "total_stale": 0,
+    "stale_agent_introduced": 0,
+    "stale_by_file": {},
+    "top_offenders": []
+  },
+  "agent_ops": {
+    "available": true,
+    "settings": [
+      {
+        "path": ".claude/settings.json",
+        "tracked": true,
+        "parse_ok": true,
+        "allow_count": 20,
+        "deny_count": 2,
+        "ask_count": 0,
+        "hook_events": 0,
+        "sandbox_configured": false
+      }
+    ],
+    "hooks_dir": {
+      "path": ".claude/hooks",
+      "present": false,
+      "file_count": 0,
+      "tracked_count": 0
+    },
+    "routine_dirs": [
+      {
+        "path": ".claude/workflows",
+        "present": false,
+        "file_count": 0,
+        "tracked_count": 0
+      },
+      {
+        "path": ".claude/routines",
+        "present": false,
+        "file_count": 0,
+        "tracked_count": 0
+      }
+    ],
+    "summary": {
+      "permissions_encoded": true,
+      "hooks_present": false,
+      "routines_present": false
+    }
+  },
+  "accretion_ratchet": {
+    "available": true,
+    "reason": "",
+    "reliable": false,
+    "deletion_fraction_threshold": 0.15,
+    "files": [],
+    "total_in_band": 0
+  },
+  "structure": {
+    "available": true,
+    "reason": "no importable Python packages found",
+    "keyhole_budget": 2000,
+    "footprints": [],
+    "sccs": [],
+    "modularity_q": 0.0,
+    "front_door_ratio": 1.0,
+    "internal_burrow_edges": [],
+    "breakup_candidates": [],
+    "module_count": 0,
+    "edge_count": 0
+  },
+  "behaviour": {
+    "available": true,
+    "containment_by_dir": {},
+    "change_coupling_pairs": [],
+    "static_history_disagreement": [],
+    "hidden_coupling_findings": [],
+    "refactor_boundaries": [],
+    "static_modularity_projection": "repo-level (coarse)"
+  },
+  "documentation": {
+    "available": true,
+    "high_ccn_threshold": 91.5,
+    "freshness_by_doc": {
+      "README.md": -1.0,
+      "CLAUDE.md": -1.0
+    },
+    "complexity_coverage": {
+      "README.md": {
+        "complexity_summarised": 141.0,
+        "subject_code_count": 11,
+        "doc_value": -141.0
+      },
+      "CLAUDE.md": {
+        "complexity_summarised": 0.0,
+        "subject_code_count": 0,
+        "doc_value": -0.0
+      }
+    },
+    "stale_doc_on_complexity": [],
+    "unexplained_complexity": [],
+    "good_contracts": []
+  },
+  "understanding": {
+    "available": true,
+    "high_ccn_threshold": 91.5,
+    "human_anchor_by_path": {
+      "README.md": true,
+      "src/crypto.ts": true,
+      "src/e2e.ts": true,
+      "src/elements.test.ts": true,
+      "src/elements.ts": true,
+      "src/firebase.test.ts": false,
+      "src/firebase.ts": true,
+      "src/index.ts": true,
+      "src/reconcile.test.ts": true,
+      "src/reconcile.ts": true,
+      "src/room.ts": true
+    },
+    "intent_source_by_path": {
+      "README.md": true,
+      "src/crypto.ts": true,
+      "src/e2e.ts": true,
+      "src/elements.test.ts": true,
+      "src/elements.ts": true,
+      "src/firebase.test.ts": true,
+      "src/firebase.ts": true,
+      "src/index.ts": true,
+      "src/reconcile.test.ts": true,
+      "src/reconcile.ts": true,
+      "src/room.ts": true
+    },
+    "authorship_class_by_path": {
+      "README.md": "human",
+      "src/crypto.ts": "human",
+      "src/e2e.ts": "human",
+      "src/elements.test.ts": "human",
+      "src/elements.ts": "human",
+      "src/firebase.test.ts": "unknown",
+      "src/firebase.ts": "human",
+      "src/index.ts": "human",
+      "src/reconcile.test.ts": "human",
+      "src/reconcile.ts": "human",
+      "src/room.ts": "human"
+    },
+    "orphaned_understanding": [],
+    "modules": [
+      {
+        "path": "README.md",
+        "human_anchor": true,
+        "intent_source": true,
+        "authorship_class": "human",
+        "days_since_comprehension_event": 0,
+        "finding": null,
+        "recommendation": null
+      },
+      {
+        "path": "src/crypto.ts",
+        "human_anchor": true,
+        "intent_source": true,
+        "authorship_class": "human",
+        "days_since_comprehension_event": 0,
+        "finding": null,
+        "recommendation": null
+      },
+      {
+        "path": "src/e2e.ts",
+        "human_anchor": true,
+        "intent_source": true,
+        "authorship_class": "human",
+        "days_since_comprehension_event": 0,
+        "finding": null,
+        "recommendation": null
+      },
+      {
+        "path": "src/elements.test.ts",
+        "human_anchor": true,
+        "intent_source": true,
+        "authorship_class": "human",
+        "days_since_comprehension_event": 0,
+        "finding": null,
+        "recommendation": null
+      },
+      {
+        "path": "src/elements.ts",
+        "human_anchor": true,
+        "intent_source": true,
+        "authorship_class": "human",
+        "days_since_comprehension_event": 0,
+        "finding": null,
+        "recommendation": null
+      },
+      {
+        "path": "src/firebase.test.ts",
+        "human_anchor": false,
+        "intent_source": true,
+        "authorship_class": "unknown",
+        "days_since_comprehension_event": null,
+        "finding": null,
+        "recommendation": null
+      },
+      {
+        "path": "src/firebase.ts",
+        "human_anchor": true,
+        "intent_source": true,
+        "authorship_class": "human",
+        "days_since_comprehension_event": 0,
+        "finding": null,
+        "recommendation": null
+      },
+      {
+        "path": "src/index.ts",
+        "human_anchor": true,
+        "intent_source": true,
+        "authorship_class": "human",
+        "days_since_comprehension_event": 0,
+        "finding": null,
+        "recommendation": null
+      },
+      {
+        "path": "src/reconcile.test.ts",
+        "human_anchor": true,
+        "intent_source": true,
+        "authorship_class": "human",
+        "days_since_comprehension_event": 0,
+        "finding": null,
+        "recommendation": null
+      },
+      {
+        "path": "src/reconcile.ts",
+        "human_anchor": true,
+        "intent_source": true,
+        "authorship_class": "human",
+        "days_since_comprehension_event": 0,
+        "finding": null,
+        "recommendation": null
+      },
+      {
+        "path": "src/room.ts",
+        "human_anchor": true,
+        "intent_source": true,
+        "authorship_class": "human",
+        "days_since_comprehension_event": 0,
+        "finding": null,
+        "recommendation": null
+      }
+    ]
+  },
+  "runtime": {
+    "available": true,
+    "static_reachability": {
+      "available": true,
+      "candidate_count": 0,
+      "candidates": [],
+      "tools": [
+        {
+          "language": "typescript",
+          "tool": "ts-prune",
+          "status": "ran",
+          "reason": "0 candidate(s)"
+        }
+      ],
+      "caveat": "Static reachability proves nothing in THIS repo references the symbol; it cannot prove no external consumer (a mobile app, another service) calls it. Cross-boundary liveness needs telemetry or a named human."
+    },
+    "observability_rung": 0,
+    "runtime_evidence_available": false
+  },
+  "derived_findings": [
+    {
+      "name": "hidden_coupling",
+      "paths": [],
+      "action": "investigate the seam"
+    },
+    {
+      "name": "lying_map",
+      "paths": [],
+      "action": "fix or delete the doc"
+    },
+    {
+      "name": "unexplained_complexity",
+      "paths": [],
+      "action": "write the missing contract (do NOT auto-generate)"
+    },
+    {
+      "name": "untrusted_hotspot",
+      "paths": [],
+      "action": "strengthen tests to pin observable behaviour (not internal state)"
+    },
+    {
+      "name": "self_referential_tests",
+      "paths": [
+        "src/crypto.ts",
+        "src/elements.ts",
+        "src/reconcile.ts"
+      ],
+      "action": "request human review - tests verify internal consistency, not truth"
+    },
+    {
+      "name": "unactioned_intent",
+      "paths": [],
+      "action": "action the promise: fix it, ticket it, or delete the marker/skip"
+    },
+    {
+      "name": "accretion_ratchet",
+      "paths": [],
+      "action": "refactor down: extract, delete dead code, or split the file"
+    },
+    {
+      "name": "orphaned_understanding",
+      "paths": [],
+      "action": "assign a human anchor before further change"
+    },
+    {
+      "name": "candidate_dead_weight",
+      "paths": [],
+      "action": "verify liveness, then delete if dead"
+    },
+    {
+      "name": "override_contradicts_signals",
+      "paths": [],
+      "action": "Review archetype marker - deterministic signals suggest a different classification"
+    },
+    {
+      "name": "refactor_boundary",
+      "paths": [],
+      "action": "safe to hand an agent in isolation"
+    }
+  ],
+  "attention": [
+    {
+      "path": "src/crypto.ts",
+      "findings": [
+        "self_referential_tests"
+      ],
+      "score": 1
+    },
+    {
+      "path": "src/elements.ts",
+      "findings": [
+        "self_referential_tests"
+      ],
+      "score": 1
+    },
+    {
+      "path": "src/reconcile.ts",
+      "findings": [
+        "self_referential_tests"
+      ],
+      "score": 1
+    }
+  ],
+  "findings_markdown": "## Cross-Layer Findings (Keyhole Readiness)\n\n### self_referential_tests\n\nAction: request human review - tests verify internal consistency, not truth\n\nPaths:\n- src/crypto.ts\n- src/elements.ts\n- src/reconcile.ts\n\n### Attention List (Priority Order)\n\n- src/crypto.ts (score 1): self_referential_tests\n- src/elements.ts (score 1): self_referential_tests\n- src/reconcile.ts (score 1): self_referential_tests\n",
+  "keyhole_summary": {
+    "concerns": [
+      {
+        "name": "self_referential_tests",
+        "count": 3
+      }
+    ],
+    "safe_zones": 0,
+    "total_concerns": 3,
+    "summary_text": "3 structural concerns (3 self-referential tests), 0 safe zones."
+  },
+  "prescribed_actions": [
+    {
+      "path": "src/crypto.ts",
+      "action": "request human review - tests verify internal consistency, not truth",
+      "findings": [
+        "self_referential_tests"
+      ],
+      "rank": 1
+    },
+    {
+      "path": "src/elements.ts",
+      "action": "request human review - tests verify internal consistency, not truth",
+      "findings": [
+        "self_referential_tests"
+      ],
+      "rank": 2
+    },
+    {
+      "path": "src/reconcile.ts",
+      "action": "request human review - tests verify internal consistency, not truth",
+      "findings": [
+        "self_referential_tests"
+      ],
+      "rank": 3
+    }
+  ],
+  "excluded_by_config": {
+    "dirs": [],
+    "patterns": [],
+    "affected_finding_paths": [],
+    "count": 0
+  },
+  "plugin_version": "1.56.1",
+  "decline_markers": [],
+  "reoffer_mutation": false,
+  "decline_disclosures": [],
+  "interactive": true,
+  "offers": [],
+  "uninstall_instructions_path": "references/uninstall.md",
+  "anomalies": []
+}

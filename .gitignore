@@ -1,5 +1,10 @@
 node_modules/
 dist/
+coverage/
+reports/
+.stryker-tmp/
 .DS_Store
 *.log
 .env
+.assess/complexity-stats.prior.json
+.assess/.cache/

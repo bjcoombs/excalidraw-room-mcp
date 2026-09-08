@@ -1,0 +1,13 @@
+{
+  "src/elements.ts": "2026-09-08",
+  "src/room.ts": "2026-09-08",
+  "src/index.ts": "2026-09-08",
+  "src/elements.test.ts": "2026-09-08",
+  "src/reconcile.ts": "2026-09-08",
+  "src/firebase.ts": "2026-09-08",
+  "src/e2e.ts": "2026-09-08",
+  "src/crypto.ts": "2026-09-08",
+  "src/reconcile.test.ts": "2026-09-08",
+  "src/crypto.test.ts": "2026-09-08",
+  "src/firebase.test.ts": "2026-09-08"
+}
