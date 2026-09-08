@@ -10,11 +10,14 @@ npm test            # tsc build, then node --test over dist/*.test.js
 npm run test:coverage   # same, plus lcov at coverage/lcov.info
 npm run mutate      # stryker over crypto/reconcile/elements (slow, minutes)
 npm run e2e -- "<collab link>" [seconds]   # manual: joins a real room, needs a browser peer
+npm run e2e:show-room -- "<collab link>"   # manual: joins, prints the show_room payload, exits
+npm run build:view  # just the in-chat view: view/ -> dist/view/canvas.html
 EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js  # run the server with diagnostics on stderr
 ```
 
 ## Layout
 
+- `view/` is a separate Vite build (React + `@excalidraw/excalidraw`) producing the single file `dist/view/canvas.html`, the MCP Apps resource the chat host renders. Its dependencies live in the root `package.json`; there is no nested lockfile. `src/view.ts` builds the `show_room` payload and serves that file.
 - `src/room.ts` socket + scene state + `waitForMention`; `src/crypto.ts` AES-GCM; `src/reconcile.ts` merge rule; `src/elements.ts` builders + summariser; `src/mentions.ts` `@claude` detection and neighbourhood; `src/firebase.ts` persistence; `src/index.ts` MCP tool surface; `src/e2e.ts` manual driver.
 - Tests live beside the source as `*.test.ts` and run from `dist/`, so a test needs a build first. `npm test` does that.
 - Protocol facts (events, payload shapes, where they came from upstream) are in the header comment of `src/room.ts`. Read it before touching the socket code.
@@ -23,7 +26,7 @@ EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js  # run the server with diagnostics on
 
 - **stdout is the MCP transport.** Never `console.log` in server code; use `console.error`, gated by `EXCALIDRAW_ROOM_DEBUG`.
 - **The public relay needs `Origin: https://excalidraw.com`.** Without it the handshake fails (400 websocket, 403 polling). Keep the `extraHeaders` in `RoomClient.join`.
-- **Do not import `@excalidraw/excalidraw` in Node.** It assumes a DOM. The crypto and reconcile logic here are ports of the upstream functions; change them only alongside the upstream source they cite.
+- **Do not import `@excalidraw/excalidraw` in Node.** It assumes a DOM. `view/` is the exception: that code runs in the host's iframe, and eslint lifts the ban there only. The crypto and reconcile logic here are ports of the upstream functions; change them only alongside the upstream source they cite.
 - **Peers broadcast every keystroke.** A text element arrives as a stream of version bumps while someone types. Anything that reacts to text content must wait for it to settle (`waitForMention` does, 1.5s); acting on the first "@claude" would fire before the instruction exists.
 - **Handled mentions are keyed by (id, version)**, held in memory in `src/index.ts` and reset on join. Acknowledging bumps the version, so record the post-bump version or the acknowledgement itself reads as a new mention.
 - **Every local mutation must bump `version` and refresh `versionNonce`** (use `bump()` in `src/elements.ts`), or peers discard the change.

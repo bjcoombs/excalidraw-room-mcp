@@ -2,6 +2,7 @@
 # manifest.json, README.md and LICENSE. Everything below is source, tooling or
 # generated reports that a client does not need to run the server.
 src/
+view/
 tests/
 .github/
 .assess/

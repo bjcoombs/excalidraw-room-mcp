@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 reports/
+.preflight/
 .stryker-tmp/
 .DS_Store
 *.log
