@@ -1,0 +1,239 @@
+#!/usr/bin/env node
+/**
+ * MCP server exposing a live Excalidraw collaboration room over stdio.
+ * Nothing is written to stdout except protocol frames; diagnostics go to
+ * stderr when EXCALIDRAW_ROOM_DEBUG is set.
+ */
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { buildElements, bump, measureText, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
+import { RoomClient } from "./room.js";
+
+const room = new RoomClient();
+
+const point = z.tuple([z.number(), z.number()]);
+
+const elementSpec = z
+  .object({
+    type: z.enum(["rectangle", "ellipse", "diamond", "text", "arrow", "line", "freedraw"]),
+    id: z.string().optional().describe("Optional id. Random if omitted. Use to reference the element from a later spec."),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    width: z.number().optional(),
+    height: z.number().optional(),
+    text: z.string().optional().describe("Content of a text element."),
+    label: z.string().optional().describe("Text bound inside a shape or on an arrow."),
+    fontSize: z.number().optional(),
+    points: z.array(point).optional().describe("Absolute [x,y] points for arrow, line or freedraw."),
+    start: z.string().optional().describe("Id of the element an arrow or line starts at."),
+    end: z.string().optional().describe("Id of the element an arrow or line ends at."),
+    strokeColor: z.string().optional(),
+    backgroundColor: z.string().optional(),
+    strokeWidth: z.number().optional(),
+    strokeStyle: z.enum(["solid", "dashed", "dotted"]).optional(),
+    fillStyle: z.enum(["solid", "hachure", "cross-hatch", "zigzag"]).optional(),
+    rounded: z.boolean().optional(),
+    startArrowhead: z.string().nullable().optional(),
+    endArrowhead: z.string().nullable().optional(),
+    roughness: z.number().optional(),
+    opacity: z.number().optional(),
+  })
+  .strict();
+
+function text(s: string) {
+  return { content: [{ type: "text" as const, text: s }] };
+}
+
+function statusText(): string {
+  const s = room.status();
+  const peers = s.peers.length
+    ? s.peers.map((p) => p.username ?? p.socketId).join(", ")
+    : "none";
+  return [
+    `connected: ${s.connected}`,
+    `room: ${s.link ?? "-"}`,
+    `peers: ${peers}`,
+    `elements: ${s.elementCount} (${s.deletedCount} deleted)`,
+    `sceneVersion: ${s.sceneVersion}`,
+    `initial scene from: ${s.source ?? "-"}`,
+    `last remote update: ${s.lastRemoteUpdate ?? "-"}`,
+  ].join("\n");
+}
+
+const server = new McpServer({ name: "excalidraw-room-mcp", version: "0.1.0" });
+
+server.registerTool(
+  "create_room",
+  {
+    description:
+      "Create a new empty live-collaboration room, join it, and return the excalidraw.com link for a person to open. The link contains the encryption key; share it only with people who should see the drawing.",
+    inputSchema: {},
+  },
+  async () => {
+    const link = await RoomClient.createLink();
+    await room.join(link, { initTimeoutMs: 1500 });
+    return text(`${link}\n\n${statusText()}`);
+  },
+);
+
+server.registerTool(
+  "join_room",
+  {
+    description:
+      "Join an existing excalidraw.com live-collaboration room from its link (the URL with #room=<id>,<key>). Loads the current scene from a connected peer, or from the room's persisted copy if nobody else is present.",
+    inputSchema: {
+      link: z.string().describe("Collaboration link, e.g. https://excalidraw.com/#room=abc...,key..."),
+      serverUrl: z.string().optional().describe("Relay URL. Defaults to excalidraw.com's public relay."),
+      origin: z.string().optional().describe("Origin header to present to the relay. Defaults to https://excalidraw.com, which the public relay requires."),
+    },
+  },
+  async ({ link, serverUrl, origin }) => {
+    await room.join(link, { serverUrl, origin });
+    return text(statusText());
+  },
+);
+
+server.registerTool(
+  "room_status",
+  { description: "Connection state, peers, and scene counters for the current room.", inputSchema: {} },
+  async () => text(statusText()),
+);
+
+server.registerTool(
+  "read_scene",
+  {
+    description:
+      "Read the current drawing. 'summary' gives one line per element with position, size, text, and a sampled path for freehand strokes. 'json' returns the full Excalidraw element array.",
+    inputSchema: {
+      format: z.enum(["summary", "json"]).default("summary"),
+      includeDeleted: z.boolean().default(false),
+    },
+  },
+  async ({ format, includeDeleted }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const elements = room.getElements(includeDeleted);
+    if (format === "json") return text(JSON.stringify(elements, null, 2));
+    return text(elements.length ? summarise(elements) : "(empty scene)");
+  },
+);
+
+server.registerTool(
+  "add_elements",
+  {
+    description:
+      "Add elements to the drawing from compact specs. Shapes take x, y, width, height and an optional label. Arrows take start/end element ids (edges are computed) or absolute points. Later specs may reference ids of earlier specs in the same call.",
+    inputSchema: { elements: z.array(elementSpec).min(1) },
+  },
+  async ({ elements }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const existing = new Map(room.getElements(true).map((e) => [e.id, e]));
+    const { created, updated } = buildElements(elements as ElementSpec[], {
+      existing,
+      lastIndex: room.lastIndex(),
+    });
+    const result = await room.commit([...created, ...updated]);
+    const ids = created.map((e) => `${e.id} ${e.type}`).join("\n");
+    return text(`added ${created.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}\n${ids}`);
+  },
+);
+
+server.registerTool(
+  "add_raw_elements",
+  {
+    description:
+      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent.",
+    inputSchema: { elements: z.array(z.record(z.unknown())).min(1) },
+  },
+  async ({ elements }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const { generateKeyBetween } = await import("fractional-indexing");
+    let last = room.lastIndex();
+    const prepared: ExcalidrawElement[] = [];
+    for (const raw of elements as Record<string, unknown>[]) {
+      const el = {
+        version: 1,
+        versionNonce: Math.floor(Math.random() * 2 ** 31),
+        isDeleted: false,
+        updated: Date.now(),
+        boundElements: null,
+        ...raw,
+      } as unknown as ExcalidrawElement;
+      if (!el.id) el.id = crypto.randomUUID().replace(/-/g, "").slice(0, 20);
+      if (!el.index) {
+        last = generateKeyBetween(last, null);
+        el.index = last;
+      }
+      prepared.push(el);
+    }
+    const result = await room.commit(prepared);
+    return text(`added ${prepared.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}\n${prepared.map((e) => `${e.id} ${e.type}`).join("\n")}`);
+  },
+);
+
+server.registerTool(
+  "update_elements",
+  {
+    description:
+      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given.",
+    inputSchema: {
+      updates: z.array(z.object({ id: z.string(), set: z.record(z.unknown()) })).min(1),
+    },
+  },
+  async ({ updates }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const changed: ExcalidrawElement[] = [];
+    const missing: string[] = [];
+    for (const { id, set } of updates) {
+      const current = room.getElement(id);
+      if (!current) {
+        missing.push(id);
+        continue;
+      }
+      let next = { ...current, ...set } as ExcalidrawElement;
+      if (next.type === "text" && ("text" in set || "fontSize" in set) && !("width" in set) && !("height" in set)) {
+        const m = measureText(String(next.text ?? ""), Number(next.fontSize ?? 20));
+        next = { ...next, width: m.width, height: m.height, originalText: next.text };
+      }
+      changed.push(bump(next));
+    }
+    if (!changed.length) return text(`no elements updated; unknown ids: ${missing.join(", ")}`);
+    const result = await room.commit(changed);
+    const note = missing.length ? `\nunknown ids: ${missing.join(", ")}` : "";
+    return text(`updated ${changed.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}${note}`);
+  },
+);
+
+server.registerTool(
+  "delete_elements",
+  {
+    description: "Soft-delete elements by id (Excalidraw keeps tombstones so peers converge).",
+    inputSchema: { ids: z.array(z.string()).min(1) },
+  },
+  async ({ ids }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const changed: ExcalidrawElement[] = [];
+    const missing: string[] = [];
+    for (const id of ids) {
+      const current = room.getElement(id);
+      if (!current) missing.push(id);
+      else if (!current.isDeleted) changed.push(bump({ ...current, isDeleted: true }));
+    }
+    if (!changed.length) return text(`nothing deleted; unknown ids: ${missing.join(", ")}`);
+    const result = await room.commit(changed);
+    const note = missing.length ? `\nunknown ids: ${missing.join(", ")}` : "";
+    return text(`deleted ${changed.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}${note}`);
+  },
+);
+
+server.registerTool(
+  "leave_room",
+  { description: "Disconnect from the current room.", inputSchema: {} },
+  async () => {
+    room.leave();
+    return text("left room");
+  },
+);
+
+const transport = new StdioServerTransport();
+await server.connect(transport);
