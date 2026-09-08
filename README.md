@@ -68,7 +68,7 @@ A loop that keeps an agent listening is just: `wait_for_mention` (up to 10 minut
 | `show_room` | The room as JSON (link, connection state, peers, elements, pending mentions) and, in a host that supports MCP Apps, the canvas rendered in the chat. |
 | `room_status` | Connection state, peers, element counts. |
 | `read_scene` | The drawing as one line per element (default), or the full element JSON. Freehand strokes come back as a sampled path so a scribble is legible. |
-| `add_elements` | Add shapes, text, arrows, lines and freehand strokes from compact specs. Arrows bind to element ids; edge points are computed. |
+| `add_elements` | Add shapes, text, arrows, lines and freehand strokes from compact specs. Arrows bind to element ids; edge points are computed. Any spec takes an optional `link` (a URL) to make the element clickable. |
 | `add_raw_elements` | Add complete Excalidraw elements verbatim, for example from an `.excalidraw` file. |
 | `update_elements` | Patch elements by id. Versions are bumped so peers accept the change. |
 | `delete_elements` | Soft-delete by id. |
@@ -84,6 +84,7 @@ add_elements:
   - {type: rectangle, id: api, x: 0,   y: 0, width: 160, height: 80, label: "API"}
   - {type: ellipse,   id: db,  x: 320, y: 0, width: 160, height: 80, label: "Postgres"}
   - {type: arrow, start: api, end: db, label: "query"}
+  - {type: text, x: 0, y: 120, text: "docs", link: "https://example.com/docs"}
 ```
 
 `read_scene` afterwards:
