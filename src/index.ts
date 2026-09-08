@@ -8,9 +8,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { buildElements, bump, measureText, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
+import { DEFAULT_TAG, findMentions, formatMention, nearbyElements, type HandledVersions } from "./mentions.js";
 import { RoomClient } from "./room.js";
 
 const room = new RoomClient();
+/** Mentions already acted on, by element id -> version. Reset on join. */
+let handledMentions: HandledVersions = new Map();
+room.on("joined", () => {
+  handledMentions = new Map();
+});
 
 const point = z.tuple([z.number(), z.number()]);
 
@@ -61,7 +67,7 @@ function statusText(): string {
   ].join("\n");
 }
 
-const server = new McpServer({ name: "excalidraw-room-mcp", version: "0.1.0" });
+const server = new McpServer({ name: "excalidraw-room-mcp", version: "0.2.0" });
 
 server.registerTool(
   "create_room",
@@ -223,6 +229,75 @@ server.registerTool(
     const result = await room.commit(changed);
     const note = missing.length ? `\nunknown ids: ${missing.join(", ")}` : "";
     return text(`deleted ${changed.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}${note}`);
+  },
+);
+
+server.registerTool(
+  "wait_for_mention",
+  {
+    description:
+      "Block until someone writes a text element containing the tag (default '@claude') on the canvas, then return it with the elements around it. Returns 'no mention' after timeoutSeconds so the caller can loop. A mention is reported once it has stopped changing for about 1.5s; acknowledge it with acknowledge_mention when done, or it will be returned again.",
+    inputSchema: {
+      tag: z.string().default(DEFAULT_TAG),
+      timeoutSeconds: z.number().min(1).max(600).default(60),
+      radius: z.number().min(0).default(250).describe("How far around the mention to look for related elements, in canvas px."),
+    },
+  },
+  async ({ tag, timeoutSeconds, radius }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const mention = await room.waitForMention(tag, handledMentions, { timeoutMs: timeoutSeconds * 1000 });
+    if (!mention) return text(`no mention of ${tag} within ${timeoutSeconds}s`);
+    return text(formatMention(mention, nearbyElements(room.getElements(), mention, radius)));
+  },
+);
+
+server.registerTool(
+  "list_mentions",
+  {
+    description: "List every pending (unacknowledged) mention of the tag on the canvas right now, each with its nearby elements.",
+    inputSchema: {
+      tag: z.string().default(DEFAULT_TAG),
+      radius: z.number().min(0).default(250),
+    },
+  },
+  async ({ tag, radius }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const all = room.getElements();
+    const pending = findMentions(all, tag, handledMentions);
+    if (!pending.length) return text(`no pending mentions of ${tag}`);
+    return text(pending.map((m) => formatMention(m, nearbyElements(all, m, radius))).join("\n\n---\n\n"));
+  },
+);
+
+server.registerTool(
+  "acknowledge_mention",
+  {
+    description:
+      "Mark a mention as handled so it is not returned again, and show that on the canvas: the text turns grey and gets a check mark appended (or a note of your choosing, e.g. why it was declined). If the person edits the text again it becomes pending again.",
+    inputSchema: {
+      id: z.string().describe("The mention's element id from wait_for_mention or list_mentions."),
+      note: z.string().optional().describe("Appended to the text instead of the default check mark."),
+      keepText: z.boolean().default(false).describe("Only recolour; leave the text unchanged."),
+    },
+  },
+  async ({ id, note, keepText }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const current = room.getElement(id);
+    if (!current || current.type !== "text") return text(`no text element with id ${id}`);
+    const suffix = keepText ? "" : ` ${note ?? "✓"}`;
+    const nextText = `${current.text ?? ""}${suffix}`;
+    const m = measureText(nextText, Number(current.fontSize ?? 20));
+    const updated = bump({
+      ...current,
+      text: nextText,
+      originalText: nextText,
+      width: current.autoResize === false ? current.width : m.width,
+      height: m.height,
+      strokeColor: "#868e96",
+    } as ExcalidrawElement);
+    const result = await room.commit([updated]);
+    handledMentions.set(id, updated.version);
+    return text(`acknowledged ${id}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
   },
 );
 

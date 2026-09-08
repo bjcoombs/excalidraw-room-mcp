@@ -18,6 +18,7 @@ import { io, type Socket } from "socket.io-client";
 import { decryptJson, encryptJson, generateRoomId, generateRoomKey } from "./crypto.js";
 import type { ExcalidrawElement } from "./elements.js";
 import { loadScene, saveScene, SceneConflictError } from "./firebase.js";
+import { findMentions, isMentionText, type HandledVersions, type Mention } from "./mentions.js";
 import { orderByIndex, reconcile, sceneVersion } from "./reconcile.js";
 
 export const DEFAULT_SERVER_URL = "https://oss-collab.excalidraw.com";
@@ -212,6 +213,7 @@ export class RoomClient extends EventEmitter {
     });
 
     await initialised;
+    this.emit("joined", this.status());
     return this.status();
   }
 
@@ -249,6 +251,65 @@ export class RoomClient extends EventEmitter {
         log("persist conflict, reloading and retrying");
         await this.loadFromFirestore();
       }
+    }
+  }
+
+  /**
+   * Apply elements as if a peer had broadcast them. This is the same path the
+   * socket uses; exposed so tests and embedders can drive the client without a
+   * relay.
+   */
+  ingestRemote(incoming: ExcalidrawElement[]): void {
+    this.mergeRemote(incoming);
+  }
+
+  /**
+   * Resolve with the first pending mention of `tag`, or null after `timeoutMs`.
+   * A mention counts once it has been quiet for `settleMs` (Excalidraw
+   * broadcasts every keystroke, so "@claude" alone would otherwise fire before
+   * the instruction is typed).
+   */
+  async waitForMention(
+    tag: string,
+    handled: HandledVersions,
+    opts: { timeoutMs?: number; settleMs?: number } = {},
+  ): Promise<Mention | null> {
+    const timeoutMs = opts.timeoutMs ?? 60_000;
+    const settleMs = opts.settleMs ?? 1500;
+    const deadline = Date.now() + timeoutMs;
+
+    const settled = async (candidate: Mention): Promise<Mention | null> => {
+      // Wait until the element stops changing, then re-read it.
+      for (;;) {
+        await new Promise((r) => setTimeout(r, settleMs));
+        const now = this.elements.get(candidate.id);
+        if (!now || now.isDeleted || !isMentionText(now.text, tag)) return null;
+        if (now.version === candidate.version) return candidate;
+        candidate = findMentions([now], tag, handled)[0] ?? candidate;
+        if (Date.now() > deadline) return candidate;
+      }
+    };
+
+    for (;;) {
+      const pending = findMentions(this.getElements(), tag, handled);
+      if (pending.length) {
+        const ready = await settled(pending[0]);
+        if (ready) return ready;
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return null;
+      const changed = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => {
+          this.off("scene", onScene);
+          resolve(false);
+        }, remaining);
+        const onScene = () => {
+          clearTimeout(timer);
+          resolve(true);
+        };
+        this.once("scene", onScene);
+      });
+      if (!changed) return null;
     }
   }
 
