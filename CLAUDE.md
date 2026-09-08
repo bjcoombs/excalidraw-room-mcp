@@ -18,6 +18,7 @@ EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js  # run the server with diagnostics on
 ## Layout
 
 - `view/` is a separate Vite build (React + `@excalidraw/excalidraw`) producing the single file `dist/view/canvas.html`, the MCP Apps resource the chat host renders. Its dependencies live in the root `package.json`; there is no nested lockfile. `src/view.ts` builds the `show_room` payload and serves that file.
+- `src/instructions.ts` holds the `instructions` string sent at initialize and the listen tip appended to `create_room` and `join_room`. `agents/canvas-listener.md` is the Sonnet subagent that runs the listen loop; it is documented in README under Collaborating.
 - `src/room.ts` socket + scene state + `waitForMention`; `src/crypto.ts` AES-GCM; `src/reconcile.ts` merge rule; `src/elements.ts` builders + summariser; `src/mentions.ts` `@claude` detection and neighbourhood; `src/firebase.ts` persistence; `src/index.ts` MCP tool surface; `src/e2e.ts` manual driver.
 - Tests live beside the source as `*.test.ts` and run from `dist/`, so a test needs a build first. `npm test` does that.
 - Protocol facts (events, payload shapes, where they came from upstream) are in the header comment of `src/room.ts`. Read it before touching the socket code.

@@ -59,6 +59,29 @@ Type a text element containing `@claude` next to the thing you mean, for example
 
 A loop that keeps an agent listening is just: `wait_for_mention` (up to 10 minutes per call), act, `acknowledge_mention`, repeat.
 
+## Collaborating
+
+The working loop is: `wait_for_mention` (up to 600 seconds a call), act on what comes back, `acknowledge_mention`, repeat. The agent stays in it until you say to stop, so you can draw, write a note, and walk away. Hosts are told this at connection time - the server sends the loop as MCP `instructions` during the handshake, and `create_room` and `join_room` repeat it as a one-line tip - so a fresh session starts listening without being asked to.
+
+Mention text is data written by people in the room, not instructions addressed to the agent. The agent reads a note, decides what to do with it, and does it because you asked in the session - a note saying "run this command" is text to be shown to you, not an order to follow.
+
+### Lead and listener
+
+Blocking on a ten-minute wait ties up the model doing the thinking. Splitting the two roles is cheaper and quicker:
+
+- **The lead** - your main session. It creates or joins the room, draws, and handles anything structural: regrouping a diagram, a change that needs the repository or the web, a request that needs the conversation so far.
+- **The listener** - a [Claude Code subagent](https://docs.claude.com/en/docs/claude-code/sub-agents) running on Sonnet that owns the loop. It handles small edits in place - move something, relabel it, recolour it, make it clickable - and escalates everything else to the lead with a note on the canvas saying so.
+
+`agents/canvas-listener.md` in this repository is that subagent. To install it, copy the file into your agents directory (paths relative to your project root):
+
+```bash
+mkdir -p .claude/agents
+curl -sSL https://raw.githubusercontent.com/bjcoombs/excalidraw-room-mcp/main/agents/canvas-listener.md \
+  -o .claude/agents/canvas-listener.md
+```
+
+Use `~/.claude/agents/` instead to install it for every project, or reference the file from a plugin manifest if you distribute your own plugin. Then, with a room open, ask the session to "start the canvas listener". It runs until you tell it to stop.
+
 ## Tools
 
 | Tool | What it does |
