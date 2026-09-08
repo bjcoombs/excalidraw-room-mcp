@@ -1,0 +1,361 @@
+{
+  "artifact_schema_version": "1.0.0",
+  "run_id": "20260908144725-3a2a39d2",
+  "plugin_version": "1.56.1",
+  "schema_version": 1,
+  "lizard_version": "1.23.0",
+  "scc_version": "3.7.0",
+  "files_scored": 19,
+  "scoring_coverage": {
+    "lizard": 12,
+    "scc": 7
+  },
+  "churn_window": "commits (all-time)",
+  "churn_degenerate": true,
+  "loc": {
+    "p50": 55.0,
+    "p95": 263.99999999999966,
+    "max": 408.0,
+    "total": 1650
+  },
+  "est_tokens": {
+    "p50": 583.0,
+    "p95": 2918.4999999999973,
+    "max": 4111.0,
+    "total": 19059,
+    "budget": {
+      "total": 19059,
+      "budget": 200000,
+      "budget_basis": "estimate (~4 chars/token, documented default)",
+      "chars_per_token": 4,
+      "files_over_budget": 0,
+      "subtrees_over_budget": 0,
+      "over_budget_subtrees": []
+    }
+  },
+  "ccn": {
+    "basis": "file-aggregate",
+    "p50": 8.0,
+    "p95": 91.49999999999989,
+    "max": 141.0
+  },
+  "fn_ccn": {
+    "basis": "per-function",
+    "source": "lizard-only",
+    "function_count": 142,
+    "p50": 1.0,
+    "p95": 7.899999999999977,
+    "max": 67.0
+  },
+  "churn": {
+    "p50": 1.0,
+    "p95": 1.0,
+    "max": 1.0
+  },
+  "top_hotspots": [
+    {
+      "path": "src/elements.ts",
+      "loc": 408,
+      "est_tokens": 4111,
+      "ccn": 141.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 67.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/room.ts",
+      "loc": 248,
+      "est_tokens": 2786,
+      "ccn": 86.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 13.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/index.ts",
+      "loc": 218,
+      "est_tokens": 2473,
+      "ccn": 21.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 6.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/elements.test.ts",
+      "loc": 120,
+      "est_tokens": 1439,
+      "ccn": 33.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 5.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/reconcile.ts",
+      "loc": 55,
+      "est_tokens": 506,
+      "ccn": 17.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 9.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/firebase.ts",
+      "loc": 74,
+      "est_tokens": 983,
+      "ccn": 10.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 3.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/e2e.ts",
+      "loc": 60,
+      "est_tokens": 715,
+      "ccn": 9.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 3.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/firebase.test.ts",
+      "loc": 83,
+      "est_tokens": 1035,
+      "ccn": 17.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 3.0,
+      "commits": 0,
+      "source": "lizard"
+    },
+    {
+      "path": "src/crypto.ts",
+      "loc": 57,
+      "est_tokens": 583,
+      "ccn": 8.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 2.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/reconcile.test.ts",
+      "loc": 34,
+      "est_tokens": 377,
+      "ccn": 8.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 1.0,
+      "commits": 1,
+      "source": "lizard"
+    }
+  ],
+  "top_complex": [
+    {
+      "path": "src/elements.ts",
+      "loc": 408,
+      "est_tokens": 4111,
+      "ccn": 141.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 67.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/room.ts",
+      "loc": 248,
+      "est_tokens": 2786,
+      "ccn": 86.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 13.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/elements.test.ts",
+      "loc": 120,
+      "est_tokens": 1439,
+      "ccn": 33.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 5.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/index.ts",
+      "loc": 218,
+      "est_tokens": 2473,
+      "ccn": 21.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 6.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/reconcile.ts",
+      "loc": 55,
+      "est_tokens": 506,
+      "ccn": 17.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 9.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/firebase.test.ts",
+      "loc": 83,
+      "est_tokens": 1035,
+      "ccn": 17.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 3.0,
+      "commits": 0,
+      "source": "lizard"
+    },
+    {
+      "path": "src/firebase.ts",
+      "loc": 74,
+      "est_tokens": 983,
+      "ccn": 10.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 3.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/e2e.ts",
+      "loc": 60,
+      "est_tokens": 715,
+      "ccn": 9.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 3.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/crypto.ts",
+      "loc": 57,
+      "est_tokens": 583,
+      "ccn": 8.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 2.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/reconcile.test.ts",
+      "loc": 34,
+      "est_tokens": 377,
+      "ccn": 8.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 1.0,
+      "commits": 1,
+      "source": "lizard"
+    }
+  ],
+  "top_large": [
+    {
+      "path": "src/elements.ts",
+      "loc": 408,
+      "est_tokens": 4111,
+      "ccn": 141.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 67.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/room.ts",
+      "loc": 248,
+      "est_tokens": 2786,
+      "ccn": 86.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 13.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/index.ts",
+      "loc": 218,
+      "est_tokens": 2473,
+      "ccn": 21.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 6.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/elements.test.ts",
+      "loc": 120,
+      "est_tokens": 1439,
+      "ccn": 33.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 5.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/firebase.test.ts",
+      "loc": 83,
+      "est_tokens": 1035,
+      "ccn": 17.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 3.0,
+      "commits": 0,
+      "source": "lizard"
+    },
+    {
+      "path": "src/firebase.ts",
+      "loc": 74,
+      "est_tokens": 983,
+      "ccn": 10.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 3.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "README.md",
+      "loc": 69,
+      "est_tokens": 1377,
+      "ccn": 0.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": null,
+      "commits": 1,
+      "source": "scc"
+    },
+    {
+      "path": "src/e2e.ts",
+      "loc": 60,
+      "est_tokens": 715,
+      "ccn": 9.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 3.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/crypto.ts",
+      "loc": 57,
+      "est_tokens": 583,
+      "ccn": 8.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 2.0,
+      "commits": 1,
+      "source": "lizard"
+    },
+    {
+      "path": "src/reconcile.ts",
+      "loc": 55,
+      "est_tokens": 506,
+      "ccn": 17.0,
+      "ccn_basis": "file-aggregate",
+      "max_fn_ccn": 9.0,
+      "commits": 1,
+      "source": "lizard"
+    }
+  ]
+}

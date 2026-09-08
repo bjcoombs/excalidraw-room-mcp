@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" width="1600" height="1000" preserveAspectRatio="xMidYMid meet" role="img">
+<title>Complexity Hotspot Heatmap</title>
+<desc>Treemap showing code complexity by file size, hue indicates cyclomatic complexity, saturation indicates git churn</desc>
+<style>
+  rect:hover { stroke: #000; stroke-width: 1.5; }
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; pointer-events: none; text-anchor: middle; dominant-baseline: middle; }
+</style>
+<rect x="0.00" y="0.00" width="579.00" height="596.06" fill="#7f0000" stroke="white" stroke-width="0.5"><title>src/elements.ts
+4,111 est. tokens · 408 loc · ccn 141 · commits (all-time) 0</title></rect>
+<rect x="0.00" y="596.06" width="579.00" height="403.94" fill="#e8563c" stroke="white" stroke-width="0.5"><title>src/room.ts
+2,786 est. tokens · 248 loc · ccn 86 · commits (all-time) 0</title></rect>
+<rect x="579.00" y="0.00" width="470.36" height="441.39" fill="#fdd39d" stroke="white" stroke-width="0.5"><title>src/index.ts
+2,473 est. tokens · 218 loc · ccn 21 · commits (all-time) 0</title></rect>
+<rect x="1049.36" y="0.00" width="273.69" height="441.39" fill="#fdc48e" stroke="white" stroke-width="0.5"><title>src/elements.test.ts
+1,439 est. tokens · 120 loc · ccn 33 · commits (all-time) 0</title></rect>
+<rect x="579.00" y="441.39" width="303.27" height="286.50" fill="#fdd8a6" stroke="white" stroke-width="0.5"><title>src/firebase.test.ts
+1,035 est. tokens · 83 loc · ccn 17 · commits (all-time) 0</title></rect>
+<rect x="579.00" y="727.89" width="303.27" height="272.11" fill="#fddfb5" stroke="white" stroke-width="0.5"><title>src/firebase.ts
+983 est. tokens · 74 loc · ccn 10 · commits (all-time) 0</title></rect>
+<rect x="882.27" y="441.39" width="242.80" height="247.21" fill="#fddfb6" stroke="white" stroke-width="0.5"><title>src/e2e.ts
+715 est. tokens · 60 loc · ccn 9 · commits (all-time) 0</title></rect>
+<rect x="1125.07" y="441.39" width="197.98" height="247.21" fill="#fde1b9" stroke="white" stroke-width="0.5"><title>src/crypto.ts
+583 est. tokens · 57 loc · ccn 8 · commits (all-time) 0</title></rect>
+<rect x="882.27" y="688.60" width="249.37" height="170.34" fill="#fdd8a6" stroke="white" stroke-width="0.5"><title>src/reconcile.ts
+506 est. tokens · 55 loc · ccn 17 · commits (all-time) 0</title></rect>
+<rect x="882.27" y="858.94" width="249.37" height="141.06" fill="#fde2bb" stroke="white" stroke-width="0.5"><title>src/room.test.ts
+419 est. tokens · 33 loc · ccn 7 · commits (all-time) 0</title></rect>
+<rect x="1131.64" y="688.60" width="191.41" height="165.35" fill="#fde1b9" stroke="white" stroke-width="0.5"><title>src/reconcile.test.ts
+377 est. tokens · 34 loc · ccn 8 · commits (all-time) 0</title></rect>
+<rect x="1131.64" y="853.95" width="191.41" height="146.05" fill="#fde4c1" stroke="white" stroke-width="0.5"><title>src/crypto.test.ts
+333 est. tokens · 26 loc · ccn 4 · commits (all-time) 0</title></rect>
+<rect x="1323.05" y="0.00" width="276.95" height="417.40" fill="#fee8ca" stroke="white" stroke-width="0.5"><title>README.md
+1,377 est. tokens · 69 loc · ccn 0 · commits (all-time) 0</title></rect>
+<rect x="1323.05" y="417.40" width="276.95" height="222.79" fill="#fee8ca" stroke="white" stroke-width="0.5"><title>CLAUDE.md
+735 est. tokens · 28 loc · ccn 0 · commits (all-time) 0</title></rect>
+<rect x="1323.05" y="640.19" width="151.31" height="215.82" fill="#fee8ca" stroke="white" stroke-width="0.5"><title>.github/workflows/ci.yml
+389 est. tokens · 51 loc · ccn 0 · commits (all-time) 0</title></rect>
+<rect x="1474.36" y="640.19" width="125.64" height="215.82" fill="#fee8ca" stroke="white" stroke-width="0.5"><title>package.json
+323 est. tokens · 41 loc · ccn 0 · commits (all-time) 0</title></rect>
+<rect x="1323.05" y="856.02" width="155.68" height="143.98" fill="#fee8ca" stroke="white" stroke-width="0.5"><title>LICENSE
+267 est. tokens · 17 loc · ccn 0 · commits (all-time) 0</title></rect>
+<rect x="1478.72" y="856.02" width="121.28" height="85.84" fill="#fee8ca" stroke="white" stroke-width="0.5"><title>stryker.config.json
+124 est. tokens · 12 loc · ccn 0 · commits (all-time) 0</title></rect>
+<rect x="1478.72" y="941.85" width="121.28" height="58.15" fill="#fee8ca" stroke="white" stroke-width="0.5"><title>tsconfig.json
+84 est. tokens · 16 loc · ccn 0 · commits (all-time) 0</title></rect>
+</svg>
