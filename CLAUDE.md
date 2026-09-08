@@ -5,6 +5,7 @@ MCP server (stdio) that joins an excalidraw.com live-collaboration room as a hea
 ## Commands
 
 ```bash
+npm run lint        # eslint flat config: the CLAUDE.md contracts, enforced
 npm test            # tsc build, then node --test over dist/*.test.js
 npm run test:coverage   # same, plus lcov at coverage/lcov.info
 npm run mutate      # stryker over crypto/reconcile/elements (slow, minutes)

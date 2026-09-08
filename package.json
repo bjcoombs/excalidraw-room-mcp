@@ -23,6 +23,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test dist/*.test.js",
     "test:coverage": "npm run build && mkdir -p coverage && node --test --experimental-test-coverage --test-coverage-exclude=\"dist/*.test.js\" --test-coverage-exclude=\"dist/e2e.js\" --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info dist/*.test.js",
+    "lint": "eslint .",
     "mutate": "stryker run",
     "start": "node dist/index.js",
     "e2e": "node dist/e2e.js"
@@ -36,6 +37,8 @@
   "devDependencies": {
     "@stryker-mutator/core": "^10.0.0",
     "@types/node": "22.15.3",
-    "typescript": "5.9.3"
+    "eslint": "9.39.5",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.70.0"
   }
 }
