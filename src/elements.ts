@@ -206,6 +206,8 @@ export interface BuildResult {
  * Build complete elements from specs. Specs are processed in order so an arrow
  * may reference a shape created earlier in the same batch.
  */
+// Characterization tests pin this function first: https://github.com/bjcoombs/excalidraw-room-mcp/issues/4
+// eslint-disable-next-line complexity
 export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildResult {
   const created: ExcalidrawElement[] = [];
   const touched = new Map<string, ExcalidrawElement>();
