@@ -9,6 +9,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { buildElements, bump, measureText, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
+import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import { DEFAULT_NEARBY_RADIUS, DEFAULT_TAG, findMentions, formatMention, nearbyElements, type HandledVersions } from "./mentions.js";
 import { RoomClient } from "./room.js";
 import { buildShowRoomPayload, CANVAS_RESOURCE_URI, NOT_IN_ROOM_TEXT, canvasHtmlUrl, registerCanvasResource } from "./view.js";
@@ -77,7 +78,10 @@ function statusText(): string {
   ].join("\n");
 }
 
-const server = new McpServer({ name: "excalidraw-room-mcp", version: "0.2.0" });
+const server = new McpServer(
+  { name: "excalidraw-room-mcp", version: "0.2.0" },
+  { instructions: SERVER_INSTRUCTIONS },
+);
 
 registerAppTool(
   server,
@@ -91,7 +95,7 @@ registerAppTool(
   async () => {
     const link = await RoomClient.createLink();
     await room.join(link, { initTimeoutMs: 1500 });
-    return text(`${link}\n\n${statusText()}`);
+    return text(`${link}\n\n${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
 
@@ -110,7 +114,7 @@ registerAppTool(
   },
   async ({ link, serverUrl, origin }) => {
     await room.join(link, { serverUrl, origin });
-    return text(statusText());
+    return text(`${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
 

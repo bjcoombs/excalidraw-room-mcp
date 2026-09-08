@@ -14,6 +14,7 @@
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -31,6 +32,11 @@ const transport = new StdioClientTransport({
 });
 const client = new Client({ name: "e2e", version: "0" });
 await client.connect(transport);
+
+// What the host is handed at initialize. Printed so a run shows the guidance a
+// model actually receives, whichever transport the host uses.
+console.log("--- instructions");
+console.log(client.getInstructions() ?? SERVER_INSTRUCTIONS);
 
 const call = async (name: string, args: Record<string, unknown> = {}) => {
   const res = await client.callTool({ name, arguments: args });
