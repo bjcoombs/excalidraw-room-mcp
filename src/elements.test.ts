@@ -84,6 +84,28 @@ test("re-using an existing id is rejected", () => {
   );
 });
 
+test("repeating an id within one batch is rejected, and empty ids are rejected", () => {
+  assert.throws(
+    () => buildElements([{ type: "rectangle", id: "x" }, { type: "ellipse", id: "x" }], ctx()),
+    /repeated within the batch: x/,
+  );
+  assert.throws(() => buildElements([{ type: "rectangle", id: "" }], ctx()), /must not be empty/);
+});
+
+test("arrow between two shapes with the same centre has finite points", () => {
+  const { created } = buildElements(
+    [
+      { type: "rectangle", id: "a", x: 0, y: 0, width: 100, height: 100 },
+      { type: "rectangle", id: "b", x: 25, y: 25, width: 50, height: 50 },
+      { type: "arrow", id: "ab", start: "a", end: "b" },
+    ],
+    ctx(),
+  );
+  const arrow = created.find((e) => e.id === "ab")!;
+  assert.ok(Number.isFinite(arrow.x) && Number.isFinite(arrow.y));
+  for (const [px, py] of arrow.points!) assert.ok(Number.isFinite(px) && Number.isFinite(py), `${px},${py}`);
+});
+
 test("unknown binding target throws", () => {
   assert.throws(() => buildElements([{ type: "arrow", start: "nope", end: "nope2" }], ctx()), /not found/);
 });

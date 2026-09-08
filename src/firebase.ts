@@ -4,6 +4,10 @@
  * public project and API key the web app ships in its bundle; the key only
  * identifies the project, it grants nothing. Without the room key the document
  * is ciphertext.
+ *
+ * Writes are conditional on the document's update time (or on it not existing
+ * yet), so a stale client cannot overwrite a newer scene. On a conflict the
+ * caller reloads, reconciles, and retries; see RoomClient.persist.
  */
 import { decryptJson, encryptJson } from "./crypto.js";
 import type { ExcalidrawElement } from "./elements.js";
@@ -11,8 +15,9 @@ import type { ExcalidrawElement } from "./elements.js";
 const PROJECT = "excalidraw-room-persistence";
 const API_KEY = "AIzaSyAd15pYlMci_xIp9ko6wkEsDzAAA0Dn0RU";
 
-function docUrl(roomId: string): string {
-  return `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/scenes/${roomId}?key=${API_KEY}`;
+function docUrl(roomId: string, params: Record<string, string> = {}): string {
+  const qs = new URLSearchParams({ key: API_KEY, ...params });
+  return `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/scenes/${roomId}?${qs}`;
 }
 
 function toBase64(buf: ArrayBuffer | Uint8Array): string {
@@ -22,36 +27,50 @@ function toBase64(buf: ArrayBuffer | Uint8Array): string {
 export interface StoredScene {
   sceneVersion: number;
   elements: ExcalidrawElement[];
+  /** Firestore document update time; pass back to saveScene as the precondition. */
+  updateTime: string;
+}
+
+export class SceneConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SceneConflictError";
+  }
+}
+
+interface SceneDocument {
+  updateTime: string;
+  fields: {
+    sceneVersion: { integerValue: string };
+    ciphertext: { bytesValue: string };
+    iv: { bytesValue: string };
+  };
 }
 
 export async function loadScene(roomId: string, roomKey: string): Promise<StoredScene | null> {
   const res = await fetch(docUrl(roomId));
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`firestore read failed: ${res.status} ${await res.text()}`);
-  const doc = (await res.json()) as {
-    fields: {
-      sceneVersion: { integerValue: string };
-      ciphertext: { bytesValue: string };
-      iv: { bytesValue: string };
-    };
-  };
+  const doc = (await res.json()) as SceneDocument;
   const ciphertext = Buffer.from(doc.fields.ciphertext.bytesValue, "base64");
   const iv = Buffer.from(doc.fields.iv.bytesValue, "base64");
   const elements = await decryptJson<ExcalidrawElement[]>(roomKey, iv, ciphertext);
-  return { sceneVersion: Number(doc.fields.sceneVersion.integerValue), elements };
+  return { sceneVersion: Number(doc.fields.sceneVersion.integerValue), elements, updateTime: doc.updateTime };
 }
 
 /**
- * Best-effort save. The web app does this inside a transaction that only
- * writes when its version is newer; we do a plain overwrite, so only call it
- * when this client holds the reconciled scene.
+ * Write the scene, guarded by a precondition: `expectedUpdateTime` must match
+ * the stored document's update time, or, when null, the document must not
+ * exist. Returns the new update time. Throws SceneConflictError when the
+ * precondition fails.
  */
 export async function saveScene(
   roomId: string,
   roomKey: string,
   elements: readonly ExcalidrawElement[],
   sceneVersion: number,
-): Promise<void> {
+  expectedUpdateTime: string | null,
+): Promise<string> {
   const { ciphertext, iv } = await encryptJson(roomKey, elements);
   const body = {
     fields: {
@@ -60,10 +79,22 @@ export async function saveScene(
       iv: { bytesValue: toBase64(iv) },
     },
   };
-  const res = await fetch(docUrl(roomId), {
+  const precondition: Record<string, string> =
+    expectedUpdateTime === null
+      ? { "currentDocument.exists": "false" }
+      : { "currentDocument.updateTime": expectedUpdateTime };
+  const res = await fetch(docUrl(roomId, precondition), {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`firestore write failed: ${res.status} ${await res.text()}`);
+  if (res.ok) {
+    const doc = (await res.json()) as SceneDocument;
+    return doc.updateTime;
+  }
+  const detail = await res.text();
+  if (res.status === 412 || res.status === 409 || detail.includes("FAILED_PRECONDITION") || detail.includes("ALREADY_EXISTS")) {
+    throw new SceneConflictError(`scene changed underneath us: ${res.status} ${detail.slice(0, 200)}`);
+  }
+  throw new Error(`firestore write failed: ${res.status} ${detail.slice(0, 200)}`);
 }

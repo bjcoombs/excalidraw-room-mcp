@@ -17,7 +17,7 @@ import { EventEmitter } from "node:events";
 import { io, type Socket } from "socket.io-client";
 import { decryptJson, encryptJson, generateRoomId, generateRoomKey } from "./crypto.js";
 import type { ExcalidrawElement } from "./elements.js";
-import { loadScene, saveScene } from "./firebase.js";
+import { loadScene, saveScene, SceneConflictError } from "./firebase.js";
 import { orderByIndex, reconcile, sceneVersion } from "./reconcile.js";
 
 export const DEFAULT_SERVER_URL = "https://oss-collab.excalidraw.com";
@@ -56,6 +56,8 @@ export class RoomClient extends EventEmitter {
   private lastRemoteUpdate: number | null = null;
   private source: RoomStatus["source"] = null;
   private serverUrl = DEFAULT_SERVER_URL;
+  /** Update time of the Firestore document we last read or wrote; null if unknown or absent. */
+  private storedUpdateTime: string | null = null;
 
   static parseLink(link: string): { roomId: string; roomKey: string } {
     const trimmed = link.trim();
@@ -119,6 +121,7 @@ export class RoomClient extends EventEmitter {
     this.elements.clear();
     this.peers.clear();
     this.source = null;
+    this.storedUpdateTime = null;
 
     // The public relay rejects handshakes without a browser Origin (400 on
     // websocket, 403 on polling), so present the app's origin.
@@ -217,8 +220,35 @@ export class RoomClient extends EventEmitter {
     const stored = await loadScene(this.roomId, this.roomKey);
     if (stored) {
       this.mergeRemote(stored.elements);
-      this.source = "firestore";
+      this.storedUpdateTime = stored.updateTime;
+      if (this.source === null) this.source = "firestore";
       log("loaded", stored.elements.length, "elements from firestore");
+    } else {
+      this.storedUpdateTime = null;
+    }
+  }
+
+  /**
+   * Conditional save. If another client wrote since we last read (or the
+   * document appeared), reload it, reconcile into our scene, and retry once.
+   */
+  private async persist(): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const all = this.getElements(true);
+      try {
+        this.storedUpdateTime = await saveScene(
+          this.roomId!,
+          this.roomKey!,
+          all,
+          sceneVersion(all),
+          this.storedUpdateTime,
+        );
+        return;
+      } catch (err) {
+        if (!(err instanceof SceneConflictError) || attempt === 1) throw err;
+        log("persist conflict, reloading and retrying");
+        await this.loadFromFirestore();
+      }
     }
   }
 
@@ -241,11 +271,16 @@ export class RoomClient extends EventEmitter {
    */
   async commit(changed: ExcalidrawElement[]): Promise<{ persisted: boolean; error?: string }> {
     if (!this.isConnected) throw new Error("not in a room; call join_room first");
+    const ids = new Set<string>();
+    for (const el of changed) {
+      if (!el.id) throw new Error("element without an id in commit");
+      if (ids.has(el.id)) throw new Error(`duplicate element id in commit: ${el.id}`);
+      ids.add(el.id);
+    }
     for (const el of changed) this.elements.set(el.id, el);
     await this.broadcast("SCENE_UPDATE", changed);
     try {
-      const all = this.getElements(true);
-      await saveScene(this.roomId!, this.roomKey!, all, sceneVersion(all));
+      await this.persist();
       return { persisted: true };
     } catch (err) {
       log("persist failed", err);

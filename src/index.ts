@@ -190,7 +190,7 @@ server.registerTool(
         missing.push(id);
         continue;
       }
-      let next = { ...current, ...set } as ExcalidrawElement;
+      let next = { ...current, ...set, id: current.id } as ExcalidrawElement;
       if (next.type === "text" && ("text" in set || "fontSize" in set) && !("width" in set) && !("height" in set)) {
         const m = measureText(String(next.text ?? ""), Number(next.fontSize ?? 20));
         next = { ...next, width: m.width, height: m.height, originalText: next.text };

@@ -165,9 +165,15 @@ function centre(el: ExcalidrawElement): [number, number] {
 /** Point just outside the bounding box of `el`, `gap` px beyond where a line from its centre towards `target` exits. */
 function edgePoint(el: ExcalidrawElement, target: [number, number], gap: number): [number, number] {
   const [cx, cy] = centre(el);
-  const dx = target[0] - cx;
-  const dy = target[1] - cy;
-  const len = Math.hypot(dx, dy) || 1;
+  let dx = target[0] - cx;
+  let dy = target[1] - cy;
+  if (dx === 0 && dy === 0) {
+    // Target sits on our centre (for example two shapes stacked exactly).
+    // Pick a fixed direction rather than dividing by zero.
+    dx = 1;
+    dy = 0;
+  }
+  const len = Math.hypot(dx, dy);
   const tx = dx !== 0 ? el.width / 2 / Math.abs(dx) : Infinity;
   const ty = dy !== 0 ? el.height / 2 / Math.abs(dy) : Infinity;
   const t = Math.min(tx, ty);
@@ -211,9 +217,21 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
     else touched.set(el.id, el);
   };
 
-  const conflicts = specs.map((s) => s.id).filter((id): id is string => !!id && ctx.existing.has(id));
+  const seen = new Set<string>();
+  const conflicts: string[] = [];
+  const repeated: string[] = [];
+  for (const spec of specs) {
+    if (spec.id === undefined) continue;
+    if (spec.id === "") throw new Error("element id must not be empty");
+    if (ctx.existing.has(spec.id)) conflicts.push(spec.id);
+    if (seen.has(spec.id)) repeated.push(spec.id);
+    seen.add(spec.id);
+  }
   if (conflicts.length) {
     throw new Error(`element id(s) already in the scene: ${conflicts.join(", ")}. Use update_elements to change them.`);
+  }
+  if (repeated.length) {
+    throw new Error(`element id(s) repeated within the batch: ${repeated.join(", ")}`);
   }
 
   for (const spec of specs) {

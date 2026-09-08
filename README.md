@@ -74,7 +74,7 @@ Kp3... arrow 2 pts: (156,40) -> (324,40) from api to db "query"
 - **Encryption**: AES-128-GCM with the key from the link, matching `packages/excalidraw/data/encryption.ts` upstream. Implemented on Node's WebCrypto so the server does not depend on the browser-oriented `@excalidraw/excalidraw` package.
 - **Merging**: Excalidraw's reconcile rule, per element id: higher `version` wins, ties go to the lower `versionNonce`. Local edits bump both, exactly as the web app does, so peers accept them.
 - **Z-order**: fractional indices via the same `fractional-indexing` library upstream uses. New elements go on top.
-- **Persistence**: excalidraw.com keeps each room's encrypted scene in a public Firestore document. On joining an empty room the server reads it. After every write it attempts a best-effort overwrite of that document. If the write is refused, the change still reaches connected peers and their browsers persist it on their normal schedule.
+- **Persistence**: excalidraw.com keeps each room's encrypted scene in a public Firestore document. On joining an empty room the server reads it. After every write it saves the reconciled scene back, conditional on the document's update time, so a stale copy never overwrites a newer one. On a conflict it reloads, reconciles, and retries once. If the save still fails, the change has already reached connected peers and their browsers persist it on their normal schedule.
 
 ## Limits
 
