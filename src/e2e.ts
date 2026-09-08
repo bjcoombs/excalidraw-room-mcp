@@ -14,9 +14,9 @@
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { SERVER_INSTRUCTIONS } from "./instructions.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
