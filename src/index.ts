@@ -33,6 +33,7 @@ const elementSpec = z
     height: z.number().optional(),
     text: z.string().optional().describe("Content of a text element."),
     label: z.string().optional().describe("Text bound inside a shape or on an arrow."),
+    link: z.string().optional().describe("URL the element links to. Excalidraw shows a link icon on it; defaults to no link."),
     fontSize: z.number().optional(),
     points: z.array(point).optional().describe("Absolute [x,y] points for arrow, line or freedraw."),
     start: z.string().optional().describe("Id of the element an arrow or line starts at."),
@@ -168,7 +169,7 @@ server.registerTool(
   "add_elements",
   {
     description:
-      "Add elements to the drawing from compact specs. Shapes take x, y, width, height and an optional label. Arrows take start/end element ids (edges are computed) or absolute points. Later specs may reference ids of earlier specs in the same call.",
+      "Add elements to the drawing from compact specs. Shapes take x, y, width, height and an optional label. Arrows take start/end element ids (edges are computed) or absolute points. Any element may take a link (a URL), which makes it clickable on the canvas. Later specs may reference ids of earlier specs in the same call.",
     inputSchema: { elements: z.array(elementSpec).min(1) },
   },
   async ({ elements }) => {
@@ -221,7 +222,7 @@ server.registerTool(
   "update_elements",
   {
     description:
-      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given.",
+      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. 'set' accepts any element field, including link (a URL, or null to remove it). Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given.",
     inputSchema: {
       updates: z.array(z.object({ id: z.string(), set: z.record(z.unknown()) })).min(1),
     },
