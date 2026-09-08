@@ -6,6 +6,11 @@
  *   npm run build && node dist/e2e.js [link] [seconds]
  *
  * With a link it joins that room instead of creating one.
+ *
+ * With --show-room it joins, waits for the scene to settle, prints the
+ * show_room payload the in-chat view renders, and exits:
+ *
+ *   npm run e2e:show-room -- "<collab link>" [seconds]
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -16,6 +21,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const link = args.find((a) => a.includes("#room="));
 const seconds = Number(args.find((a) => /^\d+$/.test(a)) ?? 120);
+const showRoomOnly = args.includes("--show-room");
 
 const transport = new StdioClientTransport({
   command: process.execPath,
@@ -31,6 +37,17 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
   const content = (res.content as { type: string; text?: string }[]) ?? [];
   return content.map((c) => c.text ?? "").join("\n");
 };
+
+if (showRoomOnly) {
+  // The scene arrives from a peer or from Firestore shortly after the join;
+  // give it a moment so the payload is not an empty canvas.
+  if (link) await call("join_room", { link });
+  else await call("create_room");
+  await new Promise((r) => setTimeout(r, Math.min(seconds, 10) * 1000));
+  console.log(await call("show_room"));
+  await client.close();
+  process.exit(0);
+}
 
 console.log("tools:", (await client.listTools()).tools.map((t) => t.name).join(", "));
 if (link) {

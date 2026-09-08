@@ -20,25 +20,37 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build:server && npm run build:view",
+    "build:server": "tsc -p tsconfig.json",
+    "build:view": "vite build --config view/vite.config.ts",
     "test": "npm run build && node --test dist/*.test.js",
     "test:coverage": "npm run build && mkdir -p coverage && node --test --experimental-test-coverage --test-coverage-exclude=\"dist/*.test.js\" --test-coverage-exclude=\"dist/e2e.js\" --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info dist/*.test.js",
     "lint": "eslint .",
     "mutate": "stryker run",
     "start": "node dist/index.js",
-    "e2e": "node dist/e2e.js"
+    "e2e": "node dist/e2e.js",
+    "e2e:show-room": "node dist/e2e.js --show-room"
   },
   "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "1.30.0",
     "fractional-indexing": "4.0.0",
     "socket.io-client": "4.8.3",
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@excalidraw/excalidraw": "^0.18.1",
     "@stryker-mutator/core": "^10.0.0",
     "@types/node": "22.15.3",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^6.1.1",
     "eslint": "9.39.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.70.0"
+    "typescript-eslint": "8.70.0",
+    "vite": "^8.2.2",
+    "vite-plugin-singlefile": "^2.3.3"
   }
 }

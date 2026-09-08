@@ -45,6 +45,23 @@ export default tseslint.config(
     },
   },
   {
+    // The view is browser code, built separately by Vite: the DOM the Node
+    // rules guard against is exactly what it runs in. @excalidraw/excalidraw
+    // renders the canvas there, and console is a browser console, not the MCP
+    // transport. Every other rule still applies, and src/ keeps both bans.
+    files: ["view/**/*.ts", "view/**/*.tsx"],
+    languageOptions: {
+      parser: tseslint.parser,
+      ecmaVersion: 2023,
+      sourceType: "module",
+    },
+    rules: {
+      complexity: ["error", { max: 15 }],
+      "no-console": "off",
+      "no-restricted-imports": "off",
+    },
+  },
+  {
     // The manual e2e driver is a CLI, not the MCP server: its stdout is a human
     // transcript, so console.log is the correct output channel there.
     files: ["src/e2e.ts"],

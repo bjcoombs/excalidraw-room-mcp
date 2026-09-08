@@ -1,0 +1,105 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+.room {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 420px;
+}
+
+.room-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+}
+
+.room-header .sep {
+  opacity: 0.5;
+}
+
+.room-header .open-link {
+  margin-left: auto;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot-on {
+  background: #2f9e44;
+}
+
+.dot-off {
+  background: #e03131;
+}
+
+.room-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.room-canvas {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+.room-mentions {
+  width: 220px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  font-size: 12px;
+  border-left: 1px solid rgba(128, 128, 128, 0.3);
+}
+
+.room-mentions h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  margin: 0 0 6px;
+}
+
+.room-mentions ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.room-mentions li {
+  border-left: 3px solid #e03131;
+  padding: 4px 0 4px 8px;
+  margin-bottom: 8px;
+}
+
+.mention-text {
+  margin: 0;
+}
+
+.mention-meta,
+.empty,
+.read-only {
+  opacity: 0.6;
+  margin: 2px 0 0;
+}
+
+.read-only {
+  margin-top: 12px;
+}

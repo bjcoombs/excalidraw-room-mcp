@@ -4,12 +4,14 @@
  * Nothing is written to stdout except protocol frames; diagnostics go to
  * stderr when EXCALIDRAW_ROOM_DEBUG is set.
  */
+import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { buildElements, bump, measureText, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
-import { DEFAULT_TAG, findMentions, formatMention, nearbyElements, type HandledVersions } from "./mentions.js";
+import { DEFAULT_NEARBY_RADIUS, DEFAULT_TAG, findMentions, formatMention, nearbyElements, type HandledVersions } from "./mentions.js";
 import { RoomClient } from "./room.js";
+import { buildShowRoomPayload, CANVAS_RESOURCE_URI, NOT_IN_ROOM_TEXT, canvasHtmlUrl, registerCanvasResource } from "./view.js";
 
 const room = new RoomClient();
 /** Mentions already acted on, by element id -> version. Reset on join. */
@@ -51,6 +53,14 @@ function text(s: string) {
   return { content: [{ type: "text" as const, text: s }] };
 }
 
+/** A refusal the host can show as-is; hosts render isError results as text. */
+function errorText(s: string) {
+  return { ...text(s), isError: true };
+}
+
+/** Binds a tool to the in-chat canvas. Hosts without MCP Apps ignore it. */
+const CANVAS_META = { ui: { resourceUri: CANVAS_RESOURCE_URI } } as const;
+
 function statusText(): string {
   const s = room.status();
   const peers = s.peers.length
@@ -69,9 +79,11 @@ function statusText(): string {
 
 const server = new McpServer({ name: "excalidraw-room-mcp", version: "0.2.0" });
 
-server.registerTool(
+registerAppTool(
+  server,
   "create_room",
   {
+    _meta: CANVAS_META,
     description:
       "Create a new empty live-collaboration room, join it, and return the excalidraw.com link for a person to open. The link contains the encryption key; share it only with people who should see the drawing.",
     inputSchema: {},
@@ -83,9 +95,11 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerAppTool(
+  server,
   "join_room",
   {
+    _meta: CANVAS_META,
     description:
       "Join an existing excalidraw.com live-collaboration room from its link (the URL with #room=<id>,<key>). Loads the current scene from a connected peer, or from the room's persisted copy if nobody else is present.",
     inputSchema: {
@@ -99,6 +113,28 @@ server.registerTool(
     return text(statusText());
   },
 );
+
+registerAppTool(
+  server,
+  "show_room",
+  {
+    _meta: CANVAS_META,
+    description:
+      "Render the current room as a canvas in the chat, and return it as JSON: the room link, connection state, peers, the full element array, and the pending @claude mentions with the ids of the elements around each. Call it any time to bring the view back without rejoining.",
+    inputSchema: {
+      tag: z.string().default(DEFAULT_TAG),
+      radius: z.number().min(0).default(DEFAULT_NEARBY_RADIUS).describe("How far around each mention to look for related elements, in canvas px."),
+    },
+  },
+  async ({ tag, radius }) => {
+    if (!room.isConnected) return errorText(NOT_IN_ROOM_TEXT);
+    const elements = room.getElements();
+    const pending = findMentions(elements, tag, handledMentions);
+    return text(JSON.stringify(buildShowRoomPayload(room.status(), elements, pending, radius)));
+  },
+);
+
+registerCanvasResource(server, canvasHtmlUrl());
 
 server.registerTool(
   "room_status",
