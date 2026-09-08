@@ -1,0 +1,38 @@
+{
+  "name": "excalidraw-room-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that joins a live Excalidraw collaboration room so an AI agent can read and write the drawing",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bjcoombs/excalidraw-room-mcp.git"
+  },
+  "type": "module",
+  "bin": {
+    "excalidraw-room-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/*.test.js",
+    "start": "node dist/index.js",
+    "e2e": "node dist/e2e.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "fractional-indexing": "4.0.0",
+    "socket.io-client": "4.8.3",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "typescript": "5.9.3"
+  }
+}
