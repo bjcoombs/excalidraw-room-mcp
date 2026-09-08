@@ -11,6 +11,7 @@ import { z } from "zod";
 import { buildElements, bump, measureText, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
 import { DEFAULT_NEARBY_RADIUS, DEFAULT_TAG, findMentions, formatMention, nearbyElements, type HandledVersions } from "./mentions.js";
 import { RoomClient } from "./room.js";
+import { selectElements, unknownIdsText } from "./scene.js";
 import { buildShowRoomPayload, CANVAS_RESOURCE_URI, NOT_IN_ROOM_TEXT, canvasHtmlUrl, registerCanvasResource } from "./view.js";
 
 const room = new RoomClient();
@@ -147,17 +148,33 @@ server.registerTool(
   "read_scene",
   {
     description:
-      "Read the current drawing. 'summary' gives one line per element with position, size, text, and a sampled path for freehand strokes. 'json' returns the full Excalidraw element array.",
+      "Read the current drawing. 'summary' gives one line per element with position, size, text, and a sampled path for freehand strokes. 'json' returns the full Excalidraw element array as compact JSON. Filter to keep the response small: 'ids' returns just those elements (unknown ids are named back), and 'near' returns one element plus everything within a radius of it.",
     inputSchema: {
       format: z.enum(["summary", "json"]).default("summary"),
       includeDeleted: z.boolean().default(false),
+      ids: z.array(z.string()).min(1).optional().describe("Return only the elements with these ids."),
+      near: z
+        .object({
+          id: z.string().describe("Element the neighbourhood is centred on."),
+          radius: z.number().describe("How far beyond that element's bounding box to reach."),
+        })
+        .optional()
+        .describe("Return the named element and everything within the radius of it."),
     },
   },
-  async ({ format, includeDeleted }) => {
+  async ({ format, includeDeleted, ids, near }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
-    const elements = room.getElements(includeDeleted);
-    if (format === "json") return text(JSON.stringify(elements, null, 2));
-    return text(elements.length ? summarise(elements) : "(empty scene)");
+    const { elements, unknownIds } = selectElements(room.getElements(includeDeleted), { ids, near });
+    const body =
+      format === "json"
+        ? JSON.stringify(elements)
+        : elements.length
+          ? summarise(elements)
+          : ids || near
+            ? "(no matching elements)"
+            : "(empty scene)";
+    if (!unknownIds.length) return text(body);
+    return { content: [...text(body).content, ...text(unknownIdsText(unknownIds)).content] };
   },
 );
 
