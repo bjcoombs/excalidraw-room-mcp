@@ -14,7 +14,7 @@ EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js  # run the server with diagnostics on
 
 ## Layout
 
-- `src/room.ts` socket + scene state; `src/crypto.ts` AES-GCM; `src/reconcile.ts` merge rule; `src/elements.ts` builders + summariser; `src/firebase.ts` persistence; `src/index.ts` MCP tool surface; `src/e2e.ts` manual driver.
+- `src/room.ts` socket + scene state + `waitForMention`; `src/crypto.ts` AES-GCM; `src/reconcile.ts` merge rule; `src/elements.ts` builders + summariser; `src/mentions.ts` `@claude` detection and neighbourhood; `src/firebase.ts` persistence; `src/index.ts` MCP tool surface; `src/e2e.ts` manual driver.
 - Tests live beside the source as `*.test.ts` and run from `dist/`, so a test needs a build first. `npm test` does that.
 - Protocol facts (events, payload shapes, where they came from upstream) are in the header comment of `src/room.ts`. Read it before touching the socket code.
 
@@ -23,6 +23,8 @@ EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js  # run the server with diagnostics on
 - **stdout is the MCP transport.** Never `console.log` in server code; use `console.error`, gated by `EXCALIDRAW_ROOM_DEBUG`.
 - **The public relay needs `Origin: https://excalidraw.com`.** Without it the handshake fails (400 websocket, 403 polling). Keep the `extraHeaders` in `RoomClient.join`.
 - **Do not import `@excalidraw/excalidraw` in Node.** It assumes a DOM. The crypto and reconcile logic here are ports of the upstream functions; change them only alongside the upstream source they cite.
+- **Peers broadcast every keystroke.** A text element arrives as a stream of version bumps while someone types. Anything that reacts to text content must wait for it to settle (`waitForMention` does, 1.5s); acting on the first "@claude" would fire before the instruction exists.
+- **Handled mentions are keyed by (id, version)**, held in memory in `src/index.ts` and reset on join. Acknowledging bumps the version, so record the post-bump version or the acknowledgement itself reads as a new mention.
 - **Every local mutation must bump `version` and refresh `versionNonce`** (use `bump()` in `src/elements.ts`), or peers discard the change.
 - **Firestore writes are conditional** on the document update time. Keep `persist()`'s reload-reconcile-retry; an unconditional PATCH silently drops a peer's edit.
 - **ESM imports need the `.js` suffix** even in `.ts` files (`moduleResolution: NodeNext`).

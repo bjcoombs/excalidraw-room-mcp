@@ -37,6 +37,12 @@ Or with any other MCP client that speaks stdio, using the same command.
 
 Or the other way round: ask the agent to create a room, and open the link it gives you.
 
+### Talk to it on the canvas
+
+Type a text element containing `@claude` next to the thing you mean, for example `@claude add a cache between these`. The agent calls `wait_for_mention`, which blocks until such a text appears and has stopped changing, then returns the instruction together with the elements around it. When it has acted, `acknowledge_mention` turns the text grey and appends a check mark (or a short note, such as why it declined), so you can see on the canvas what has been dealt with. Edit the text again and it becomes pending again.
+
+A loop that keeps an agent listening is just: `wait_for_mention` (up to 10 minutes per call), act, `acknowledge_mention`, repeat.
+
 ## Tools
 
 | Tool | What it does |
@@ -49,6 +55,9 @@ Or the other way round: ask the agent to create a room, and open the link it giv
 | `add_raw_elements` | Add complete Excalidraw elements verbatim, for example from an `.excalidraw` file. |
 | `update_elements` | Patch elements by id. Versions are bumped so peers accept the change. |
 | `delete_elements` | Soft-delete by id. |
+| `wait_for_mention` | Block until a text element containing the tag (default `@claude`) appears and settles; return it with its nearby elements. Returns "no mention" after the timeout so the caller can loop. |
+| `list_mentions` | Every pending mention right now, with nearby elements. |
+| `acknowledge_mention` | Mark a mention handled: grey it out and append a check mark or a note. |
 | `leave_room` | Disconnect. |
 
 ### Example
