@@ -1,7 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildElements, bump, type ExcalidrawElement } from "./elements.js";
-import { findMentions, formatMention, nearbyElements } from "./mentions.js";
+import {
+  ACKNOWLEDGED_MARK,
+  ACKNOWLEDGED_STROKE,
+  acknowledgedText,
+  findMentions,
+  formatMention,
+  hasSeenMarker,
+  markAcknowledged,
+  markSeen,
+  nearbyElements,
+  SEEN_MARKER,
+  SEEN_STROKE,
+  stripSeenMarker,
+  seenText,
+  type HandledVersions,
+} from "./mentions.js";
 import { RoomClient } from "./room.js";
 
 const ctx = () => ({ existing: new Map<string, ExcalidrawElement>(), lastIndex: null });
@@ -81,4 +96,90 @@ test("waitForMention resolves when a mention arrives from a peer and settles, an
   handled.set("m", got!.version);
   const again = await room.waitForMention("@claude", handled, { timeoutMs: 50, settleMs: 5 });
   assert.equal(again, null);
+});
+
+test("markSeen appends one marker and the amber stroke, and is a no-op once applied", () => {
+  const els = scene();
+  const note = els.find((e) => e.id === "note")!;
+  const seen = markSeen(note)!;
+  assert.equal(seen.text, `${note.text}${SEEN_MARKER}`);
+  assert.equal(seen.strokeColor, SEEN_STROKE);
+  assert.equal(seen.originalText, seen.text);
+  assert.ok(seen.version > note.version, "the seen edit bumps the version so peers accept it");
+  assert.ok(seen.versionNonce !== note.versionNonce);
+  assert.equal(markSeen(seen), null, "already seen, so nothing to commit and no version bump");
+
+  // A single marker, however many passes run over the text.
+  const twice = markSeen({ ...seen, strokeColor: "#1e1e1e" })!;
+  assert.equal(twice.text!.split(SEEN_MARKER).length - 1, 1);
+});
+
+test("seen then acknowledged leaves exactly one status suffix", () => {
+  const els = scene();
+  const note = els.find((e) => e.id === "note")!;
+  const original = note.text!;
+  const seen = markSeen(note)!;
+  const done = markAcknowledged(seen);
+
+  assert.equal(done.text, `${original} ${ACKNOWLEDGED_MARK}`);
+  assert.equal(done.strokeColor, ACKNOWLEDGED_STROKE);
+  assert.ok(!hasSeenMarker(done.text), "the seen marker is gone, not followed by the tick");
+  assert.equal(done.text!.split(ACKNOWLEDGED_MARK).length - 1, 1, "one check mark, not two");
+  assert.ok(done.version > seen.version);
+
+  const noted = markAcknowledged(seen, { note: "declined: ambiguous" });
+  assert.equal(noted.text, `${original} declined: ambiguous`);
+  assert.ok(!hasSeenMarker(noted.text));
+
+  const kept = markAcknowledged(seen, { keepText: true });
+  assert.equal(kept.text, original, "keepText drops the server's marker but adds no suffix");
+  assert.equal(kept.strokeColor, ACKNOWLEDGED_STROKE);
+});
+
+test("the server's own seen edit does not re-pend, but a later human edit does and the marker is rewritten", () => {
+  const els = scene();
+  const note = els.find((e) => e.id === "note")!;
+  const seen = markSeen(note)!;
+
+  // What index.ts records after committing: the post-bump version.
+  const handled: HandledVersions = new Map([[note.id, seen.version]]);
+  const after = els.map((e) => (e.id === note.id ? seen : e));
+  assert.deepEqual(
+    findMentions(after, "@claude", handled).map((m) => m.id),
+    ["far"],
+    "our own bump is not a new mention",
+  );
+
+  // The person edits the note; the marker rides along in the text they edited.
+  const edited = bump({ ...seen, text: `${seen.text} and a queue` });
+  const rePended = els.map((e) => (e.id === note.id ? edited : e));
+  assert.deepEqual(
+    findMentions(rePended, "@claude", handled).map((m) => m.id).sort(),
+    ["far", "note"],
+    "a human edit re-pends the mention",
+  );
+  const reSeen = markSeen(edited)!;
+  assert.equal(reSeen.text, `${note.text} and a queue${SEEN_MARKER}`, "the stale marker is cleared and one is appended");
+  assert.equal(reSeen.text!.split(SEEN_MARKER).length - 1, 1);
+});
+
+test("autoSeen false is the opt-out: nothing is computed, so the element is untouched", () => {
+  // wait_for_mention/list_mentions skip commitSeen entirely when autoSeen is
+  // false; the element the caller sees is the one findMentions read.
+  const els = scene();
+  const note = els.find((e) => e.id === "note")!;
+  const found = findMentions(els).find((m) => m.id === "note")!;
+  assert.equal(found.text, note.text, "text unchanged");
+  assert.equal(note.strokeColor, "#1e1e1e", "stroke unchanged");
+  assert.equal(found.version, note.version);
+  assert.ok(!hasSeenMarker(note.text));
+});
+
+test("stripSeenMarker and seenText are pure text helpers acknowledge can rely on", () => {
+  assert.equal(stripSeenMarker(`a${SEEN_MARKER}b${SEEN_MARKER}`), "ab");
+  assert.equal(seenText("@claude go"), `@claude go${SEEN_MARKER}`);
+  assert.equal(seenText(`@claude go${SEEN_MARKER}`), `@claude go${SEEN_MARKER}`);
+  assert.equal(acknowledgedText(`@claude go${SEEN_MARKER}`, " ✓"), "@claude go ✓");
+  assert.equal(hasSeenMarker("plain"), false);
+  assert.equal(hasSeenMarker(undefined), false);
 });

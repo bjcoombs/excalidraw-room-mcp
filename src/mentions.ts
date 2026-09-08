@@ -5,10 +5,79 @@
  * the text plus what sits around it. Pure functions here; the waiting and the
  * handled-set live in RoomClient.
  */
-import { summarise, type ExcalidrawElement } from "./elements.js";
+import { bump, measureText, summarise, type ExcalidrawElement } from "./elements.js";
 
 export const DEFAULT_TAG = "@claude";
 export const DEFAULT_NEARBY_RADIUS = 250;
+
+/**
+ * The two states the server paints onto a mention's text. Both are appended to
+ * the note and both recolour the stroke, so they must be stripped before the
+ * next one is written or the text collects suffixes. Keep the marker a distinct
+ * string that nobody types by accident.
+ */
+export const SEEN_MARKER = " \u23f3";
+export const SEEN_STROKE = "#e8590c";
+export const ACKNOWLEDGED_MARK = "\u2713";
+export const ACKNOWLEDGED_STROKE = "#868e96";
+
+/** Remove every seen marker, wherever a later edit left it. */
+export function stripSeenMarker(text: string): string {
+  return text.split(SEEN_MARKER).join("");
+}
+
+export function hasSeenMarker(text: string | undefined): boolean {
+  return !!text && text.includes(SEEN_MARKER);
+}
+
+/** The note with exactly one seen marker, whatever it carried before. */
+export function seenText(text: string): string {
+  return `${stripSeenMarker(text)}${SEEN_MARKER}`;
+}
+
+/** The note with the seen marker replaced by the final suffix, not appended after it. */
+export function acknowledgedText(text: string, suffix: string): string {
+  return `${stripSeenMarker(text)}${suffix}`;
+}
+
+/** Retext a text element, keeping its box in step with the new content. */
+function retext(el: ExcalidrawElement, nextText: string): ExcalidrawElement {
+  const m = measureText(nextText, Number(el.fontSize ?? 20));
+  return {
+    ...el,
+    text: nextText,
+    originalText: nextText,
+    width: el.autoResize === false ? el.width : m.width,
+    height: m.height,
+  };
+}
+
+/**
+ * The element as it should look once the server has shown the mention was
+ * seen: amber stroke plus one marker. Null when it already looks that way, so
+ * the caller commits nothing and does not bump the version for nothing.
+ */
+export function markSeen(el: ExcalidrawElement): ExcalidrawElement | null {
+  const current = el.text ?? "";
+  const next = seenText(current);
+  if (next === current && el.strokeColor === SEEN_STROKE) return null;
+  return bump({ ...retext(el, next), strokeColor: SEEN_STROKE });
+}
+
+/**
+ * The element as it should look once the agent is done: grey stroke and one
+ * status suffix, replacing the seen marker rather than following it.
+ */
+export function markAcknowledged(
+  el: ExcalidrawElement,
+  opts: { note?: string; keepText?: boolean } = {},
+): ExcalidrawElement {
+  const current = el.text ?? "";
+  const next = opts.keepText
+    ? stripSeenMarker(current)
+    : acknowledgedText(current, ` ${opts.note ?? ACKNOWLEDGED_MARK}`);
+  return bump({ ...retext(el, next), strokeColor: ACKNOWLEDGED_STROKE });
+}
 
 export interface Mention {
   id: string;
