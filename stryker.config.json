@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-js/master/packages/core/schema/stryker-schema.json",
+  "testRunner": "command",
+  "commandRunner": { "command": "npm test" },
+  "mutate": ["src/crypto.ts", "src/reconcile.ts", "src/elements.ts"],
+  "reporters": ["json", "progress", "clear-text"],
+  "jsonReporter": { "fileName": "reports/mutation/mutation.json" },
+  "tempDirName": ".stryker-tmp",
+  "concurrency": 4,
+  "timeoutMS": 60000,
+  "disableTypeChecks": true
+}

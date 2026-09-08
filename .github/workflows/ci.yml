@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -15,4 +19,39 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm test
+      - name: Unit tests with coverage
+        run: npm run test:coverage
+      - name: Coverage summary
+        if: always()
+        run: |
+          {
+            echo '## Line coverage (files loaded by the unit tests)'
+            echo '```'
+            awk '/^SF:/{f=substr($0,4)} /^LF:/{lf=substr($0,4)} /^LH:/{lh=substr($0,4)} /^end_of_record/{printf "%-24s %3d%% (%s/%s)\n", f, (lf>0?100*lh/lf:0), lh, lf}' coverage/lcov.info
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/lcov.info
+
+  mutation:
+    # Slower than the unit run, so it is not a PR gate: runs on main and on demand
+    # (gh workflow run ci.yml).
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run mutate
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report
+          path: reports/mutation/mutation.json
