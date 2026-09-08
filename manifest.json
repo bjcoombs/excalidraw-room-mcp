@@ -1,0 +1,33 @@
+{
+  "manifest_version": "0.2",
+  "name": "excalidraw-room-mcp",
+  "display_name": "Excalidraw Room",
+  "version": "0.3.0",
+  "description": "Joins a live Excalidraw collaboration room so an AI agent can read and write the drawing",
+  "author": {
+    "name": "bjcoombs",
+    "url": "https://github.com/bjcoombs"
+  },
+  "homepage": "https://github.com/bjcoombs/excalidraw-room-mcp",
+  "documentation": "https://github.com/bjcoombs/excalidraw-room-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bjcoombs/excalidraw-room-mcp"
+  },
+  "license": "MIT",
+  "keywords": ["mcp", "excalidraw", "diagram", "collaboration", "whiteboard"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"]
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=22"
+    }
+  }
+}

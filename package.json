@@ -1,6 +1,6 @@
 {
   "name": "excalidraw-room-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server that joins a live Excalidraw collaboration room so an AI agent can read and write the drawing",
   "license": "MIT",
   "repository": {
@@ -23,6 +23,7 @@
     "build": "npm run build:server && npm run build:view",
     "build:server": "tsc -p tsconfig.json",
     "build:view": "tsc -p view/tsconfig.json && vite build --config view/vite.config.ts",
+    "prepublishOnly": "npm run build",
     "test": "npm run build && node --test dist/*.test.js",
     "test:coverage": "npm run build && mkdir -p coverage && node --test --experimental-test-coverage --test-coverage-exclude=\"dist/*.test.js\" --test-coverage-exclude=\"dist/e2e.js\" --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info dist/*.test.js",
     "lint": "eslint .",

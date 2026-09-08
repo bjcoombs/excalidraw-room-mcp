@@ -1,0 +1,21 @@
+# The bundle ships the built server only: dist/, production node_modules,
+# manifest.json, README.md and LICENSE. Everything below is source, tooling or
+# generated reports that a client does not need to run the server.
+src/
+view/
+tests/
+.github/
+.assess/
+.claude/
+coverage/
+reports/
+.stryker-tmp/
+tsconfig.json
+eslint.config.js
+stryker.config.json
+CLAUDE.md
+.gitignore
+.git/
+*.mcpb
+dist/*.test.js
+dist/e2e.js
