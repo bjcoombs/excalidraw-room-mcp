@@ -12,22 +12,32 @@ It works because Excalidraw's collaboration protocol is open. The relay server (
 
 ## Install
 
-Requires Node 22 or newer.
+Requires Node 22 or newer. Nothing to clone or build.
+
+**Claude Code**
 
 ```bash
-git clone https://github.com/bjcoombs/excalidraw-room-mcp.git
-cd excalidraw-room-mcp
-npm install
-npm run build
+claude mcp add excalidraw-room -- npx -y excalidraw-room-mcp
 ```
 
-Register with Claude Code:
+**Claude Desktop**
 
-```bash
-claude mcp add excalidraw-room -- node /absolute/path/to/excalidraw-room-mcp/dist/index.js
+Download `excalidraw-room-mcp.mcpb` from the [latest release](https://github.com/bjcoombs/excalidraw-room-mcp/releases/latest) and open it; Claude Desktop installs the bundled server. Or add the server to `claude_desktop_config.json` by hand:
+
+```json
+{
+  "mcpServers": {
+    "excalidraw-room": {
+      "command": "npx",
+      "args": ["-y", "excalidraw-room-mcp"]
+    }
+  }
+}
 ```
 
-Or with any other MCP client that speaks stdio, using the same command.
+**Any other stdio client**
+
+Run the same command, `npx -y excalidraw-room-mcp`, as the server command.
 
 ## Use
 
@@ -99,9 +109,16 @@ The room key is the only secret, and it is in the link. The server uses it local
 ## Development
 
 ```bash
+git clone https://github.com/bjcoombs/excalidraw-room-mcp.git
+cd excalidraw-room-mcp
+npm install
 npm test          # build + unit tests
 EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js   # run with diagnostics on stderr
 ```
+
+Register the local build with a client by pointing it at `dist/index.js` in the clone, for example `claude mcp add excalidraw-room-dev -- node "$PWD/dist/index.js"`.
+
+Releases are tag-driven: pushing a `v*` tag runs `.github/workflows/release.yml`, which publishes to npm with a provenance attestation and attaches `excalidraw-room-mcp.mcpb` to the GitHub release.
 
 ## License
 

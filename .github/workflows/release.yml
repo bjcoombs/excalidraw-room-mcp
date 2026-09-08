@@ -1,0 +1,38 @@
+name: release
+
+# Publishing is tag-driven: pushing v<semver> publishes that commit to npm and
+# attaches the MCP Bundle to the matching GitHub release. There is no NPM_TOKEN
+# secret; npm trusted publishing (OIDC) authenticates the run, which is why the
+# job needs id-token: write and npm publish carries --provenance.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - name: Unit tests
+        run: npm test
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+      - name: Build the MCP Bundle
+        # npm test has already built dist/. Dropping the dev dependencies keeps
+        # the bundle to what the server needs at runtime.
+        run: |
+          npm prune --omit=dev
+          npx -y @anthropic-ai/mcpb pack . excalidraw-room-mcp.mcpb
+      - name: Create the GitHub release with the bundle attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" excalidraw-room-mcp.mcpb --generate-notes
