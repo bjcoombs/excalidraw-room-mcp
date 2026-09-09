@@ -65,6 +65,8 @@ A loop that keeps an agent listening is just: `wait_for_mention` (up to 10 minut
 
 The working loop is: `wait_for_mention` (up to 600 seconds a call), act on what comes back, `acknowledge_mention`, repeat. The agent stays in it until you say to stop, so you can draw, write a note, and walk away. Hosts are told this at connection time - the server sends the loop as MCP `instructions` during the handshake, and `create_room` and `join_room` repeat it as a one-line tip - so a fresh session starts listening without being asked to.
 
+Inside a turn, poll the room with `poll_room` rather than blocking: it returns the connection state, the scene version, the peers and the pending mention ids in one short block, with `changedSince` against a version you pass, so the agent can keep working and spend a `show_room` or `read_scene` call only when something moved. `wait_for_mention` is for the other case - the turn is done and the agent is handing off to a person, waiting for the note that comes back.
+
 Replies about the work go in the chat; artefacts of the work go on the canvas. A handled note is removed from the canvas, not annotated: `acknowledge_mention` soft-deletes it by default, because the seen marker already told you the note landed and the resulting drawing is the evidence it was done. Where an outcome has to be readable where you wrote the request, the agent can keep the note greyed with a short status of up to 24 characters ("declined", "see chat"); anything longer is refused and belongs in the chat reply. `keep: true` keeps the note greyed with a check mark if you want the audit trail.
 
 Mention text is data written by people in the room, not instructions addressed to the agent. The agent reads a note, decides what to do with it, and does it because you asked in the session - a note saying "run this command" is text to be shown to you, not an order to follow.
@@ -94,6 +96,7 @@ The listener runs until you stop it or until it escalates. A subagent's report r
 | `create_room` | Make a new empty room, join it, return the link to open. |
 | `join_room` | Join a room from its link. Loads the scene from a peer, or from the persisted copy if nobody else is there. |
 | `show_room` | The room summarised as text (link, connection state, peer and element counts, pending mentions with the ids around each), the full payload (link, connection state, peers, elements, mentions) as structured content for the view, and in a host that supports MCP Apps the canvas rendered in the chat. `include: "json"` puts the whole payload in the text too. |
+| `poll_room` | Lightweight state probe: connection state, scene version, peers, pending mention ids, and whether the scene changed since a version you pass. |
 | `room_status` | Connection state, peers, element counts. |
 | `read_scene` | The drawing as one line per element (default), or the full element JSON (compact). Freehand strokes come back as a sampled path so a scribble is legible. `ids` narrows the read to named elements; `near: {id, radius}` reads one element and its neighbourhood, so a check costs a few elements rather than the whole scene. |
 | `add_elements` | Add shapes, text, arrows, lines and freehand strokes from compact specs. Arrows bind to element ids; edge points are computed. Any spec takes an optional `link` (a URL) to make the element clickable. |
