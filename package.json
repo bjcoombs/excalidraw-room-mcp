@@ -30,7 +30,7 @@
     "test:coverage": "npm run build && npm run build:view-test && mkdir -p coverage && node --test --experimental-test-coverage --test-coverage-exclude=\"dist/*.test.js\" --test-coverage-exclude=\"dist/view-test/*.test.js\" --test-coverage-exclude=\"dist/e2e.js\" --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info dist/*.test.js dist/view-test/*.test.js",
     "lint": "eslint .",
     "check:bundle": "bash scripts/check-bundle.sh",
-    "mutate": "stryker run",
+    "mutate": "npm run build && stryker run",
     "start": "node dist/index.js",
     "e2e": "node dist/e2e.js",
     "e2e:show-room": "node dist/e2e.js --show-room"
