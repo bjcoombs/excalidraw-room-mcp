@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Mutation testing only: Mondays at 06:00 UTC.
+    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -11,6 +14,7 @@ permissions:
 
 jobs:
   test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,9 +47,10 @@ jobs:
           path: coverage/lcov.info
 
   mutation:
-    # Slower than the unit run, so it is not a PR gate: runs on main and on demand
-    # (gh workflow run ci.yml).
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    # Minutes rather than seconds, so it is kept off the push path entirely:
+    # weekly on a schedule and on demand (gh workflow run ci.yml). `npm run
+    # mutate` builds once itself, then recompiles only the server per mutant.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
