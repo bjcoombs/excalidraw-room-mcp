@@ -26,7 +26,7 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { boundsChanged, FIT_PADDING, sceneBounds, type SceneBounds } from "./bounds.js";
 import { highlightElements } from "./highlights.js";
-import { parsePayload, roomLink, sceneSignature, type ShowRoomPayload } from "./payload.js";
+import { envelopeShape, parseResult, resultText, roomLink, sceneSignature, type ShowRoomPayload } from "./payload.js";
 
 /** How often the view asks the server for the room again, in milliseconds. */
 const POLL_INTERVAL_MS = 2000;
@@ -45,6 +45,12 @@ interface Diagnostics {
   applies: number;
   /** Results that were not a payload: the pre-join refusal, or an envelope this view cannot read. */
   parseNulls: number;
+  /** The envelope keys of the most recent unreadable result, so the next failure names its shape. */
+  lastUnreadableShape: string | null;
+  /** Payloads read from structured content. */
+  structuredParses: number;
+  /** Payloads read from a JSON text item, which is what include: "json" delivers. */
+  textParses: number;
   /** updateScene calls that reached the canvas. */
   updates: number;
   /** Scenes held because the canvas was not ready yet. */
@@ -57,7 +63,20 @@ interface Diagnostics {
 }
 
 function emptyDiagnostics(): Diagnostics {
-  return { polls: 0, applies: 0, parseNulls: 0, updates: 0, deferred: 0, stale: 0, fits: 0, lastRefreshAt: null, lastError: null };
+  return {
+    polls: 0,
+    applies: 0,
+    parseNulls: 0,
+    lastUnreadableShape: null,
+    structuredParses: 0,
+    textParses: 0,
+    updates: 0,
+    deferred: 0,
+    stale: 0,
+    fits: 0,
+    lastRefreshAt: null,
+    lastError: null,
+  };
 }
 
 export function RoomView({ app }: { app: App }) {
@@ -153,6 +172,28 @@ export function RoomView({ app }: { app: App }) {
     [flush],
   );
 
+  /**
+   * Read one tool result and count which channel carried it. An unreadable
+   * result records the envelope's shape rather than only incrementing a
+   * counter: the shape is what tells the next operator which host wrapper the
+   * parser is missing.
+   */
+  const record = useCallback(
+    (result: unknown) => {
+      const { payload: next, source } = parseResult(result);
+      if (next) {
+        if (source === "structured") diagnostics.current.structuredParses += 1;
+        else diagnostics.current.textParses += 1;
+        apply(next);
+        return;
+      }
+      diagnostics.current.parseNulls += 1;
+      diagnostics.current.lastUnreadableShape = envelopeShape(result);
+      setNote(resultText(result) ?? "The server is not in a room.");
+    },
+    [apply],
+  );
+
   const refresh = useCallback(async () => {
     diagnostics.current.polls += 1;
     // The poll does not await the previous call, so two can be in flight at
@@ -162,19 +203,18 @@ export function RoomView({ app }: { app: App }) {
     // still the newest one dispatched.
     const generation = (lastGeneration.current += 1);
     try {
-      const result = await app.callServerTool({ name: "show_room", arguments: {} });
+      // include: "json" puts the whole payload in the text content as well as
+      // in structured content, so the view still renders on a host that does
+      // not forward the structured channel to the iframe. A callServerTool
+      // result never enters the transcript, so the longer text costs no tokens.
+      const result = await app.callServerTool({ name: "show_room", arguments: { include: "json" } });
       if (generation !== lastGeneration.current) {
         diagnostics.current.stale += 1;
         return;
       }
       diagnostics.current.lastRefreshAt = Date.now();
       diagnostics.current.lastError = null;
-      const next = parsePayload(result as never);
-      if (next) apply(next);
-      else {
-        diagnostics.current.parseNulls += 1;
-        setNote(textOf(result as never) ?? "The server is not in a room.");
-      }
+      record(result);
     } catch (err) {
       // A poll that throws is reported and retried. Stopping here is what turns
       // one bad call into a permanently still frame.
@@ -183,16 +223,11 @@ export function RoomView({ app }: { app: App }) {
     } finally {
       show();
     }
-  }, [app, apply, show]);
+  }, [app, record, show]);
 
   useEffect(() => {
     app.ontoolresult = (params) => {
-      const seed = parsePayload(params as never);
-      if (seed) apply(seed);
-      else {
-        diagnostics.current.parseNulls += 1;
-        setNote(textOf(params as never) ?? "The server is not in a room.");
-      }
+      record(params);
       show();
     };
     void app.connect().then(
@@ -217,7 +252,7 @@ export function RoomView({ app }: { app: App }) {
         show();
       },
     );
-  }, [app, apply, refresh, show]);
+  }, [app, record, refresh, show]);
 
   // A hidden document is a document nobody is watching: polling it burns the
   // server's socket and the host's budget for nothing. Visibility is the only
@@ -306,10 +341,16 @@ function StatusLine({
       <span>
         {diagnostics.updates} repaints{diagnostics.fits ? `, ${diagnostics.fits} fits` : ""}
       </span>
+      <span className="sep">·</span>
+      <span>
+        {diagnostics.structuredParses} structured, {diagnostics.textParses} text
+      </span>
       {diagnostics.parseNulls ? (
         <>
           <span className="sep">·</span>
-          <span>{diagnostics.parseNulls} unreadable</span>
+          <span>
+            {diagnostics.parseNulls} unreadable{diagnostics.lastUnreadableShape ? ` ${diagnostics.lastUnreadableShape}` : ""}
+          </span>
         </>
       ) : null}
       {diagnostics.deferred ? (
@@ -379,8 +420,4 @@ function MentionStrip({ payload }: { payload: ShowRoomPayload | null }) {
       <p className="read-only">Read-only view. Draw on excalidraw.com.</p>
     </aside>
   );
-}
-
-function textOf(result: { content?: { type?: string; text?: string }[] } | undefined): string | null {
-  return result?.content?.find((c) => c.type === "text")?.text ?? null;
 }
