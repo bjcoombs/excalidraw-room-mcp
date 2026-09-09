@@ -14,6 +14,7 @@ import {
   SEEN_MARKER,
   SEEN_STROKE,
   stripSeenMarker,
+  stripStatus,
   seenText,
   type HandledVersions,
 } from "./mentions.js";
@@ -182,4 +183,27 @@ test("stripSeenMarker and seenText are pure text helpers acknowledge can rely on
   assert.equal(acknowledgedText(`@claude go${SEEN_MARKER}`, " ✓"), "@claude go ✓");
   assert.equal(hasSeenMarker("plain"), false);
   assert.equal(hasSeenMarker(undefined), false);
+});
+
+test("a repeated status is replaced, not stacked: one suffix however many transitions run", () => {
+  const els = scene();
+  const note = els.find((e) => e.id === "note")!;
+  const original = note.text!;
+
+  // Acknowledging twice leaves one check mark, not two.
+  const once = markAcknowledged(markSeen(note)!);
+  const twice = markAcknowledged(once);
+  assert.equal(twice.text, `${original} ${ACKNOWLEDGED_MARK}`);
+  assert.equal(twice.text!.split(ACKNOWLEDGED_MARK).length - 1, 1);
+
+  // A human edit that re-pends the note: the trailing tick is replaced by the
+  // marker rather than joined by it.
+  const rePended = bump({ ...once, text: `${original} and a queue ${ACKNOWLEDGED_MARK}` });
+  const reSeen = markSeen(rePended)!;
+  assert.equal(reSeen.text, `${original} and a queue${SEEN_MARKER}`);
+  assert.ok(!reSeen.text!.includes(ACKNOWLEDGED_MARK), "the stale tick is gone");
+
+  assert.equal(stripStatus(`a ${ACKNOWLEDGED_MARK}${SEEN_MARKER}`), "a");
+  assert.equal(stripStatus(`a ${ACKNOWLEDGED_MARK} ${ACKNOWLEDGED_MARK}`), "a");
+  assert.equal(stripStatus("a ✓ b"), "a ✓ b", "only a trailing status is stripped");
 });

@@ -26,18 +26,30 @@ export function stripSeenMarker(text: string): string {
   return text.split(SEEN_MARKER).join("");
 }
 
+/**
+ * Remove whatever status the server last wrote: seen markers anywhere, and a
+ * trailing run of default check marks. Both transitions run this first, so a
+ * repeated acknowledgement, or a human edit that kept the tick before
+ * re-pending, still ends with exactly one suffix. A custom `note` is not
+ * recognised here: it is free text, indistinguishable from what the person
+ * wrote, so acknowledging twice with a note leaves both notes.
+ */
+export function stripStatus(text: string): string {
+  return stripSeenMarker(text).replace(new RegExp(`(?:\\s*${ACKNOWLEDGED_MARK})+$`, "u"), "");
+}
+
 export function hasSeenMarker(text: string | undefined): boolean {
   return !!text && text.includes(SEEN_MARKER);
 }
 
 /** The note with exactly one seen marker, whatever it carried before. */
 export function seenText(text: string): string {
-  return `${stripSeenMarker(text)}${SEEN_MARKER}`;
+  return `${stripStatus(text)}${SEEN_MARKER}`;
 }
 
 /** The note with the seen marker replaced by the final suffix, not appended after it. */
 export function acknowledgedText(text: string, suffix: string): string {
-  return `${stripSeenMarker(text)}${suffix}`;
+  return `${stripStatus(text)}${suffix}`;
 }
 
 /** Retext a text element, keeping its box in step with the new content. */
@@ -73,9 +85,7 @@ export function markAcknowledged(
   opts: { note?: string; keepText?: boolean } = {},
 ): ExcalidrawElement {
   const current = el.text ?? "";
-  const next = opts.keepText
-    ? stripSeenMarker(current)
-    : acknowledgedText(current, ` ${opts.note ?? ACKNOWLEDGED_MARK}`);
+  const next = opts.keepText ? stripStatus(current) : acknowledgedText(current, ` ${opts.note ?? ACKNOWLEDGED_MARK}`);
   return bump({ ...retext(el, next), strokeColor: ACKNOWLEDGED_STROKE });
 }
 

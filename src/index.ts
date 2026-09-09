@@ -36,10 +36,16 @@ room.on("joined", () => {
  * The post-bump version goes into handledMentions: our own edit must not read
  * back as a new mention, while a later human edit (a higher version still)
  * re-pends it and the next seen pass rewrites the marker.
+ *
+ * Only the exact version the tool returned is marked. list_mentions commits
+ * one mention at a time, so a person can edit a later one while an earlier
+ * commit is in flight; marking that newer text would record a version the
+ * caller never saw and swallow the edit. Leave it pending instead.
  */
 async function commitSeen(mention: Mention): Promise<void> {
   const current = room.getElement(mention.id);
   if (!current || current.type !== "text") return;
+  if (current.version !== mention.version) return;
   const updated = markSeen(current);
   if (!updated) return;
   await room.commit([updated]);
