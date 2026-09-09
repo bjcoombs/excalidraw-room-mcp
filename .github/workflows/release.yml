@@ -105,4 +105,9 @@ jobs:
         # token (id-token: write) is matched against the trusted publisher
         # configured on npmjs.com for this repository and workflow file. No
         # registry token is stored anywhere.
+        env:
+          # Verbose so the log shows npm's OIDC token exchange with the registry
+          # and the registry's reason when it refuses; at the default level a
+          # refused exchange surfaces only as ENEEDAUTH.
+          NPM_CONFIG_LOGLEVEL: verbose
         run: npm publish --provenance --access public
