@@ -140,7 +140,7 @@ Kp3... arrow 2 pts: (156,40) -> (324,40) from api to db "query"
 
 The room key is the only secret, and it is in the link. The server uses it locally to encrypt and decrypt; it is never sent anywhere. Treat collaboration links as you would a password to that drawing.
 
-The Firebase project id and web API key in `src/firebase.ts` are excalidraw.com's own public client configuration, copied from [`.env.production`](https://github.com/excalidraw/excalidraw/blob/main/.env.production) upstream; a Firebase web API key names the project a request goes to rather than authorising it, and the stored scene is ciphertext without the room key. A self-hosted deployment points at its own Firestore project by setting `EXCALIDRAW_FIREBASE_PROJECT` and `EXCALIDRAW_FIREBASE_API_KEY`, with no source edit.
+The Firebase project id and web API key in `src/firebase.ts` are excalidraw.com's own public client configuration, copied from [`.env.production`](https://github.com/excalidraw/excalidraw/blob/master/.env.production) upstream; a Firebase web API key names the project a request goes to rather than authorising it, and the stored scene is ciphertext without the room key. A self-hosted deployment points at its own Firestore project by setting `EXCALIDRAW_FIREBASE_PROJECT` and `EXCALIDRAW_FIREBASE_API_KEY`, with no source edit.
 
 ## Development
 
