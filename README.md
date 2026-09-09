@@ -131,6 +131,21 @@ Kp3... arrow 2 pts: (156,40) -> (324,40) from api to db "query"
 
 ## Limits
 
+### Tool-argument size
+
+The host, not this server, caps how large a tool call may be. An over-limit `add_raw_elements` call is cut and rejected before the server sees it, so the server cannot chunk around it; the caller has to split the work.
+
+| Host | Date measured | Observation | Recommended batch |
+|---|---|---|---|
+| Claude Code (2.0) | 2026-09-09 | `add_raw_elements` arguments of 5,838, 13,032 and 19,886 bytes all arrived whole, each carrying a distinct trailing sentinel id that reached the scene. No cut seen at or below 20 KB. | 16 KB |
+| Claude Desktop 1.49585.0 | 2026-09-09 | One sample: a 5,716-byte call was rejected host-side, the input cut mid-object (`__unparsedToolInput`). Where the ceiling sits is not known from a single sample. | 4 KB |
+
+The Claude Desktop figure is a single observation, so the 4 KB recommendation is deliberately conservative until more samples exist. Both recommendations are for the JSON arguments of one call, measured in bytes.
+
+Prefer `add_elements` compact specs over `add_raw_elements` for bulk creation: a spec is a fraction of the size of the equivalent raw element, so far more of a diagram fits in one call. Where raw elements are unavoidable, split them into batches under the host's limit; ids are assigned as each batch is accepted, so a later batch may reference ids from an earlier one.
+
+### Other
+
 - Images and other file attachments are out of scope. They travel by a separate path and are not needed for diagrams.
 - Text is measured by approximation, not a real font. Labels may be slightly wider or narrower than the web app would make them; the app re-measures on the next edit.
 - The public relay is not a documented API for third parties. The protocol is open source and stable in practice, but nobody has promised to keep it that way.
