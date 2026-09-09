@@ -57,6 +57,8 @@ The view is read-only: it never writes to the room. Editing happens on excalidra
 
 Type a text element containing `@claude` next to the thing you mean, for example `@claude add a cache between these`. The agent calls `wait_for_mention`, which blocks until such a text appears and has stopped changing, then returns the instruction together with the elements around it. When it has acted, `acknowledge_mention` turns the text grey and appends a check mark (or a short note, such as why it declined), so you can see on the canvas what has been dealt with. Edit the text again and it becomes pending again.
 
+The moment a mention is returned the server marks it seen on the canvas itself - amber stroke and an hourglass - so you get an immediate "the note landed" without waiting for the agent to finish, and `acknowledge_mention` then replaces that marker with the check mark rather than adding a second suffix. Pass `autoSeen: false` to `wait_for_mention` or `list_mentions` to poll without touching the drawing.
+
 A loop that keeps an agent listening is just: `wait_for_mention` (up to 10 minutes per call), act, `acknowledge_mention`, repeat.
 
 ## Collaborating
@@ -96,8 +98,8 @@ The listener runs until you stop it or until it escalates. A subagent's report r
 | `add_raw_elements` | Add complete Excalidraw elements verbatim, for example from an `.excalidraw` file. |
 | `update_elements` | Patch elements by id. Versions are bumped so peers accept the change. |
 | `delete_elements` | Soft-delete by id. |
-| `wait_for_mention` | Block until a text element containing the tag (default `@claude`) appears and settles; return it with its nearby elements. Returns "no mention" after the timeout so the caller can loop. |
-| `list_mentions` | Every pending mention right now, with nearby elements. |
+| `wait_for_mention` | Block until a text element containing the tag (default `@claude`) appears and settles; return it with its nearby elements, and mark it seen on the canvas (`autoSeen: false` to skip). Returns "no mention" after the timeout so the caller can loop. |
+| `list_mentions` | Every pending mention right now, with nearby elements, marked seen as above (`autoSeen: false` to skip). |
 | `acknowledge_mention` | Mark a mention handled: grey it out and append a check mark or a note. |
 | `leave_room` | Disconnect. |
 
