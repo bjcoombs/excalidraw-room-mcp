@@ -158,7 +158,7 @@ Register the local build with a client by pointing it at `dist/index.js` in the 
 
 The in-chat view is a separate Vite build under `view/` (paths relative to the repo root). It bundles `@excalidraw/excalidraw` into the single file `dist/view/canvas.html`, which `src/view.ts` serves as the MCP Apps resource. The Node server itself never imports that package.
 
-Releases are tag-driven: pushing a `v*` tag runs `.github/workflows/release.yml`, which publishes to npm with a provenance attestation and attaches `excalidraw-room-mcp.mcpb` to the GitHub release.
+Releases are tag-driven: pushing a `v*` tag runs `.github/workflows/release.yml`, which publishes to npm with a provenance attestation and attaches `excalidraw-room-mcp.mcpb` to the GitHub release. If the npm publish fails, re-run it for an existing tag with `gh workflow run release.yml -f ref=v0.4.0`, which skips the release job and publishes that tag from the current workflow file. The first publish authenticates with the `NPM_TOKEN` repository secret, because npm trusted publishing can only be attached to a package that already exists; once the trusted publisher is configured on npmjs.com the secret and its `env:` line can be removed and the job falls back to OIDC.
 
 ## License
 
