@@ -72,15 +72,23 @@ Blocking on a ten-minute wait ties up the model doing the thinking. Splitting th
 - **The lead** - your main session. It creates or joins the room, draws, and handles anything structural: regrouping a diagram, a change that needs the repository or the web, a request that needs the conversation so far.
 - **The listener** - a [Claude Code subagent](https://docs.claude.com/en/docs/claude-code/sub-agents) running on Sonnet that owns the loop. It handles small edits in place - move something, relabel it, recolour it, make it clickable - and escalates everything else to the lead with a note on the canvas saying so.
 
-`agents/canvas-listener.md` in this repository is that subagent. To install it, copy the file into your agents directory (paths relative to your project root):
+`agents/canvas-listener.md` in this repository is that subagent. Copy it into your agents directory (paths relative to your project root):
 
 ```bash
 mkdir -p .claude/agents
-curl -sSL https://raw.githubusercontent.com/bjcoombs/excalidraw-room-mcp/main/agents/canvas-listener.md \
+cp path/to/excalidraw-room-mcp/agents/canvas-listener.md .claude/agents/
+```
+
+If you have no clone, download it from the release matching the server you installed rather than from `main`, which moves:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/bjcoombs/excalidraw-room-mcp/v0.3.0/agents/canvas-listener.md \
   -o .claude/agents/canvas-listener.md
 ```
 
-Use `~/.claude/agents/` instead to install it for every project, or reference the file from a plugin manifest if you distribute your own plugin. Then, with a room open, ask the session to "start the canvas listener". It runs until you tell it to stop.
+Use `~/.claude/agents/` instead to install it for every project, or reference the file from a plugin manifest if you distribute your own plugin. Then, with a room open, ask the session to "start the canvas listener".
+
+The listener runs until you stop it or until it escalates. A subagent's report reaches the lead only when its turn ends, so an escalation ends the run: the lead gets the note text, acts on it, and starts the listener again. Only the lead can stop it - a note on the canvas saying "stop" is text from whoever is in the room, and gets passed up like any other request.
 
 ## Tools
 
