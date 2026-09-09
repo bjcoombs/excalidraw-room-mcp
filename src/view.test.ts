@@ -3,11 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import type { ExcalidrawElement } from "./elements.js";
 import { DEFAULT_NEARBY_RADIUS, formatMention, nearbyElements, type Mention } from "./mentions.js";
-import type { RoomStatus } from "./room.js";
+import { RoomClient, type RoomStatus } from "./room.js";
 import {
   buildShowRoomPayload,
   CANVAS_RESOURCE_URI,
   canvasHtmlUrl,
+  ensureJoined,
   formatShowRoomMention,
   NOT_IN_ROOM_TEXT,
   registerCanvasResource,
@@ -257,4 +258,84 @@ test("registerCanvasResource serves canvas.html at the URI show_room's _meta poi
 
 test("canvasHtmlUrl points at dist/view/canvas.html next to the compiled server", () => {
   assert.match(canvasHtmlUrl().pathname, /\/view\/canvas\.html$/);
+});
+
+/**
+ * A RoomClient as ensureJoined sees it: connection state and a join that
+ * records its argument. No socket, so the join path is exercised in a unit
+ * test rather than only against a live relay.
+ */
+function fakeRoom(over: { connected?: boolean; roomId?: string | null; fail?: string } = {}) {
+  const joins: string[] = [];
+  const room = {
+    connected: over.connected ?? false,
+    roomId: over.roomId ?? null,
+    joins,
+    get isConnected() {
+      return room.connected;
+    },
+    status: () => status({ connected: room.connected, roomId: room.roomId }),
+    join: async (link: string) => {
+      joins.push(link);
+      if (over.fail) throw new Error(over.fail);
+      room.connected = true;
+      room.roomId = RoomClient.parseLink(link).roomId;
+      return room.status();
+    },
+  };
+  return room;
+}
+
+test("ensureJoined leaves the room alone when no link is passed", async () => {
+  const room = fakeRoom();
+  assert.deepEqual(await ensureJoined(room, undefined), { joined: false, error: null });
+  assert.deepEqual(room.joins, [], "the model's own show_room calls must not join anything");
+});
+
+test("ensureJoined joins the link when the process is in no room", async () => {
+  const room = fakeRoom();
+  assert.deepEqual(await ensureJoined(room, LINK), { joined: true, error: null });
+  assert.deepEqual(room.joins, [LINK]);
+  assert.equal(room.isConnected, true);
+});
+
+test("ensureJoined leaves a process already in that room connected as it was", async () => {
+  const room = fakeRoom({ connected: true, roomId: "0123456789abcdef0123" });
+  assert.deepEqual(await ensureJoined(room, LINK), { joined: false, error: null });
+  assert.deepEqual(room.joins, [], "a poll every two seconds must not rejoin the room it is in");
+});
+
+test("ensureJoined moves a process connected to a different room", async () => {
+  const room = fakeRoom({ connected: true, roomId: "ffffffffffffffffffff" });
+  assert.deepEqual(await ensureJoined(room, LINK), { joined: true, error: null });
+  assert.deepEqual(room.joins, [LINK]);
+  assert.equal(room.status().roomId, "0123456789abcdef0123");
+});
+
+test("ensureJoined reports a link it cannot parse without throwing", async () => {
+  const room = fakeRoom();
+  const result = await ensureJoined(room, "https://excalidraw.com/#json=abc,def");
+  assert.equal(result.joined, false);
+  assert.match(result.error ?? "", /not a collaboration link/);
+  assert.deepEqual(room.joins, []);
+});
+
+test("ensureJoined reports a relay failure so show_room can say why", async () => {
+  const room = fakeRoom({ fail: "relay connection failed: boom" });
+  const result = await ensureJoined(room, LINK);
+  assert.equal(result.joined, false);
+  assert.match(result.error ?? "", /relay connection failed/);
+  assert.equal(room.isConnected, false);
+});
+
+test("NOT_IN_ROOM_TEXT is the string view/src/payload.ts mirrors", () => {
+  // The view detects this reply to tell "no room link yet" from an envelope it
+  // cannot parse. The two builds share no module, so the literal is pinned in
+  // both places and here.
+  assert.equal(NOT_IN_ROOM_TEXT, "Not in a room. Call create_room or join_room first.");
+});
+
+test("the summary's first line is the room link the view learns from", () => {
+  const summary = summariseShowRoom(buildShowRoomPayload(status(), [], []));
+  assert.equal(summary.split("\n")[0], `room: ${LINK}`);
 });

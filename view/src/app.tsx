@@ -19,6 +19,15 @@
  *
  * Second, every stage of the apply path is counted and shown in a status line,
  * so the next operator sees which stage stopped without opening dev tools.
+ *
+ * A third thing exists because a host may not route the view to the same
+ * server process the model is talking to. Claude Desktop routes an iframe's
+ * callServerTool to a second process, and one room per process means that
+ * process has joined nothing, so every poll answers with the not-in-a-room
+ * refusal while the model reads the scene perfectly well. So the view learns
+ * the room link from the summary it is seeded with and passes it on every call:
+ * show_room joins that room first when it is in none, and the widget shows up
+ * in the room as an extra peer.
  */
 import { CaptureUpdateAction, Excalidraw } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
@@ -26,7 +35,7 @@ import type { App } from "@modelcontextprotocol/ext-apps";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { boundsChanged, FIT_PADDING, sceneBounds, type SceneBounds } from "./bounds.js";
 import { highlightElements } from "./highlights.js";
-import { envelopeShape, parseResult, resultText, roomLink, sceneSignature, type ShowRoomPayload } from "./payload.js";
+import { envelopeShape, isNotInRoom, linkFromSummary, parseResult, resultText, roomLink, sceneSignature, type ShowRoomPayload } from "./payload.js";
 
 /** How often the view asks the server for the room again, in milliseconds. */
 const POLL_INTERVAL_MS = 2000;
@@ -57,6 +66,8 @@ interface Diagnostics {
   deferred: number;
   /** Results dropped because a later poll had already answered. */
   stale: number;
+  /** Not-in-a-room replies received before any room link was known. Not a fault: there is nothing to join yet. */
+  awaitingLink: number;
   fits: number;
   lastRefreshAt: number | null;
   lastError: string | null;
@@ -73,6 +84,7 @@ function emptyDiagnostics(): Diagnostics {
     updates: 0,
     deferred: 0,
     stale: 0,
+    awaitingLink: 0,
     fits: 0,
     lastRefreshAt: null,
     lastError: null,
@@ -91,6 +103,11 @@ export function RoomView({ app }: { app: App }) {
   const lastBounds = useRef<SceneBounds | null>(null);
   /** The newest scene that has not reached the canvas, or null when the canvas is current. */
   const pending = useRef<ShowRoomPayload | null>(null);
+  /**
+   * The room link, once anything has named it. Sent on every call so a server
+   * process that has joined nothing joins this room rather than refusing.
+   */
+  const link = useRef<string | null>(null);
   const diagnostics = useRef<Diagnostics>(emptyDiagnostics());
   // Bumping this is how a ref write reaches the status line; the counters
   // themselves stay in a ref so a poll never races a render for them.
@@ -188,6 +205,12 @@ export function RoomView({ app }: { app: App }) {
   const record = useCallback(
     (result: unknown, seed = false) => {
       const { payload: next, source } = parseResult(result);
+      // Every result is read for the room link first, payload or not: the seed
+      // is a summary whose first line names the room, and it is often the only
+      // thing that does when the view's own calls land on a process that has
+      // joined nothing.
+      const named = roomLink(next?.link ?? null) ?? linkFromSummary(resultText(result));
+      if (named) link.current = named;
       if (next) {
         if (source === "structured") diagnostics.current.structuredParses += 1;
         else diagnostics.current.textParses += 1;
@@ -196,6 +219,14 @@ export function RoomView({ app }: { app: App }) {
       }
       if (seed) {
         setNote("Loading the room…");
+        return;
+      }
+      // A refusal from a server that has joined nothing, with no link yet to
+      // send it, is the expected state and not an unreadable envelope: the next
+      // seed or summary carrying a link is what ends it.
+      if (link.current === null && isNotInRoom(resultText(result))) {
+        diagnostics.current.awaitingLink += 1;
+        setNote("Waiting for a room link. Ask for show_room once the room is joined.");
         return;
       }
       diagnostics.current.parseNulls += 1;
@@ -218,7 +249,12 @@ export function RoomView({ app }: { app: App }) {
       // returns text only, and its default is the model's summary. A
       // callServerTool result is the view's own call and never enters the
       // conversation, so the full payload here costs the reader nothing.
-      const result = await app.callServerTool({ name: "show_room", arguments: { include: "json" } });
+      // link is what lets a second server process - the one some hosts route
+      // this iframe's calls to - join the room before answering. The process
+      // the model uses is already in it and ignores the argument.
+      const args: Record<string, unknown> = { include: "json" };
+      if (link.current) args.link = link.current;
+      const result = await app.callServerTool({ name: "show_room", arguments: args });
       if (generation !== lastGeneration.current) {
         diagnostics.current.stale += 1;
         return;
@@ -378,6 +414,12 @@ function StatusLine({
         <>
           <span className="sep">·</span>
           <span>{diagnostics.stale} stale</span>
+        </>
+      ) : null}
+      {diagnostics.awaitingLink ? (
+        <>
+          <span className="sep">·</span>
+          <span>{diagnostics.awaitingLink} awaiting link</span>
         </>
       ) : null}
       <span className="sep">·</span>

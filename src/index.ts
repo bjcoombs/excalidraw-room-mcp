@@ -32,6 +32,7 @@ import {
   CANVAS_RESOURCE_URI,
   NOT_IN_ROOM_TEXT,
   canvasHtmlUrl,
+  ensureJoined,
   registerCanvasResource,
   summariseShowRoom,
 } from "./view.js";
@@ -201,9 +202,15 @@ registerAppTool(
   {
     _meta: CANVAS_META,
     description:
-      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending @claude mentions with the ids of the elements around each. The canvas view fetches the elements for itself, so they never pass through this result unless you ask: pass include: \"json\" only if you need the element array in the text; read_scene with ids or near is the cheaper way to inspect elements.",
+      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending @claude mentions with the ids of the elements around each. The canvas view fetches the elements for itself, so they never pass through this result unless you ask: pass include: \"json\" only if you need the element array in the text; read_scene with ids or near is the cheaper way to inspect elements. Pass link only to point this server at a room it is not in; without it the current room is used, which is what you want.",
     inputSchema: {
       tag: z.string().default(DEFAULT_TAG),
+      link: z
+        .string()
+        .optional()
+        .describe(
+          "Collaboration link to join first if this server is in no room, or in a different one. The canvas view sends the link it was shown, because some hosts route the view's calls to a second server process that has joined nothing. Leave it unset: the model's own calls should use the room already joined.",
+        ),
       radius: z.number().min(0).default(DEFAULT_NEARBY_RADIUS).describe("How far around each mention to look for related elements, in canvas px."),
       include: z
         .enum(["summary", "json"])
@@ -211,8 +218,12 @@ registerAppTool(
         .describe("What the text content carries. 'summary' (default) is a few lines; 'json' is the whole payload, which for a 35-element scene is roughly 10k tokens. The canvas view asks for 'json' itself, so the default keeps the elements out of the conversation."),
     },
   },
-  async ({ tag, radius, include }) => {
-    if (!room.isConnected) return errorText(NOT_IN_ROOM_TEXT);
+  async ({ tag, radius, include, link }) => {
+    // A link joins this process to the room before anything is read, so a view
+    // whose calls the host routed to a second process is not stuck reporting
+    // NOT_IN_ROOM_TEXT forever. See ensureJoined in view.ts.
+    const { error } = await ensureJoined(room, link);
+    if (!room.isConnected) return errorText(error ? `${NOT_IN_ROOM_TEXT}\n${error}` : NOT_IN_ROOM_TEXT);
     const elements = room.getElements();
     const pending = findMentions(elements, tag, handledMentions);
     const payload = buildShowRoomPayload(room.status(), elements, pending, radius);

@@ -57,6 +57,8 @@ The viewport fits the drawing on the first paint and again whenever the scene's 
 
 A status line along the bottom carries a **Refresh** button and says when the last refresh landed, how many polls and repaints there have been, whether the window is visible, and the last error if there was one. Polls are not serialised, so an older call can answer after a newer one; a result a later poll has overtaken is dropped rather than painted, and counted as `stale` there. In a host that does not proxy server tools there is no polling and **Refresh** is the only way to update the view; the status line says so rather than leaving a still frame unexplained.
 
+Some hosts run the widget against their own copy of the server rather than the process the model is talking to - Claude Desktop routes the widget's tool calls to a second process - and one process holds one room, so that copy has joined nothing and every refresh would otherwise report "Not in a room". The widget therefore reads the room link out of the summary it was shown and passes it back with each call, and the server joins that room before answering. The room then has one more peer in it than there are people and agents; that peer is the widget.
+
 The view is read-only: it never writes to the room. Editing happens on excalidraw.com. The header shows the connection state, the peer count and the element count, and carries an **Open on excalidraw.com** link to the room. Hosts without MCP Apps support get the same text results as before.
 
 ### Talk to it on the canvas

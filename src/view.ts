@@ -22,7 +22,7 @@ import { registerAppResource, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/e
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ExcalidrawElement } from "./elements.js";
 import { DEFAULT_NEARBY_RADIUS, nearbyElements, type Mention } from "./mentions.js";
-import type { RoomStatus } from "./room.js";
+import { RoomClient, type RoomStatus } from "./room.js";
 
 /** The resource the host loads to render the canvas. Referenced by tool `_meta.ui.resourceUri`. */
 export const CANVAS_RESOURCE_URI = "ui://excalidraw-room/canvas.html";
@@ -33,6 +33,55 @@ export const CANVAS_RESOURCE_NAME = "Excalidraw room canvas";
  * the text verbatim tells the user what to do next.
  */
 export const NOT_IN_ROOM_TEXT = "Not in a room. Call create_room or join_room first.";
+
+/**
+ * The part of {@link RoomClient} the `show_room` join path uses. Narrowed to
+ * these three members so the path can be tested without a socket.
+ */
+export interface ShowRoomClient {
+  readonly isConnected: boolean;
+  status(): RoomStatus;
+  join(link: string): Promise<unknown>;
+}
+
+/** What {@link ensureJoined} did, for the caller to report. */
+export interface EnsureJoinedResult {
+  /** Whether this call joined a room. */
+  joined: boolean;
+  /** Why the link could not be joined, or null when there was nothing to do. */
+  error: string | null;
+}
+
+/**
+ * Join the room a `show_room` call names, if this process is not already in it.
+ *
+ * The canvas view calls `show_room` over the host's own connection, and some
+ * hosts - Claude Desktop among them - route an iframe's `callServerTool` to a
+ * second server process rather than the one the model is talking to. One room
+ * per process means that process is in no room, so every poll the view makes
+ * returns {@link NOT_IN_ROOM_TEXT} while the model sees the scene perfectly
+ * well. Passing the link the view was shown lets that process join for itself.
+ *
+ * Without a link nothing happens, which is the model's path unchanged. With
+ * one, a process already connected to that same room is left alone; a process
+ * in no room, or in a different one, joins.
+ */
+export async function ensureJoined(room: ShowRoomClient, link: string | undefined): Promise<EnsureJoinedResult> {
+  if (!link) return { joined: false, error: null };
+  let roomId: string;
+  try {
+    roomId = RoomClient.parseLink(link).roomId;
+  } catch (err) {
+    return { joined: false, error: `link not joined: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (room.isConnected && room.status().roomId === roomId) return { joined: false, error: null };
+  try {
+    await room.join(link);
+    return { joined: true, error: null };
+  } catch (err) {
+    return { joined: false, error: `link not joined: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
 
 /** A pending mention, plus the ids of the elements it sits among. */
 export interface ShowRoomMention {
