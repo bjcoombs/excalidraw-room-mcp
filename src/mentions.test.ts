@@ -9,8 +9,12 @@ import {
   formatMention,
   hasSeenMarker,
   markAcknowledged,
+  markRemoved,
   markSeen,
+  MAX_NOTE_LENGTH,
   nearbyElements,
+  noteSchema,
+  NOTE_TOO_LONG_TEXT,
   SEEN_MARKER,
   SEEN_STROKE,
   stripSeenMarker,
@@ -132,9 +136,57 @@ test("seen then acknowledged leaves exactly one status suffix", () => {
   assert.equal(noted.text, `${original} declined: ambiguous`);
   assert.ok(!hasSeenMarker(noted.text));
 
-  const kept = markAcknowledged(seen, { keepText: true });
-  assert.equal(kept.text, original, "keepText drops the server's marker but adds no suffix");
+});
+
+test("acknowledging by default removes the note, and the removed note never re-surfaces", () => {
+  const els = scene();
+  const note = els.find((e) => e.id === "note")!;
+  const seen = markSeen(note)!;
+  const removed = markRemoved(seen);
+
+  assert.equal(removed.isDeleted, true, "a tombstone, so peers converge");
+  assert.ok(removed.version > seen.version, "the removal bumps the version so peers accept it");
+  assert.ok(removed.versionNonce !== seen.versionNonce);
+  assert.equal(removed.text, seen.text, "the text is untouched; the element is simply gone");
+
+  // What index.ts records after committing: the post-bump version. The note is
+  // both deleted and handled, so neither rule can surface it again.
+  const handled: HandledVersions = new Map([[note.id, removed.version]]);
+  const after = els.map((e) => (e.id === note.id ? removed : e));
+  assert.deepEqual(
+    findMentions(after, "@claude", handled).map((m) => m.id),
+    ["far"],
+    "the removed note is not pending",
+  );
+  assert.deepEqual(
+    findMentions(after, "@claude").map((m) => m.id),
+    ["far"],
+    "and not pending even to a caller with an empty handled set",
+  );
+});
+
+test("keep is today's output: grey with a single check mark and the element still there", () => {
+  const els = scene();
+  const note = els.find((e) => e.id === "note")!;
+  const original = note.text!;
+  const kept = markAcknowledged(markSeen(note)!);
+
+  assert.notEqual(kept.isDeleted, true, "keep leaves the note on the canvas");
+  assert.equal(kept.text, `${original} ${ACKNOWLEDGED_MARK}`);
   assert.equal(kept.strokeColor, ACKNOWLEDGED_STROKE);
+});
+
+test("a note over the cap is refused with a message pointing at chat", () => {
+  const long = "x".repeat(MAX_NOTE_LENGTH + 1);
+  assert.equal(long.length, 25);
+  const refused = noteSchema.safeParse(long);
+  assert.equal(refused.success, false);
+  assert.equal(refused.error!.issues[0]!.message, NOTE_TOO_LONG_TEXT);
+  assert.match(NOTE_TOO_LONG_TEXT, /chat/i, "the refusal says where the reply belongs");
+
+  assert.equal(noteSchema.safeParse("x".repeat(MAX_NOTE_LENGTH)).success, true, "the cap itself is allowed");
+  assert.equal(noteSchema.safeParse("declined").success, true);
+  assert.equal(noteSchema.optional().safeParse(undefined).success, true, "no note is always fine");
 });
 
 test("the server's own seen edit does not re-pend, but a later human edit does and the marker is rewritten", () => {
