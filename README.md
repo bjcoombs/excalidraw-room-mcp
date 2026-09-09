@@ -65,6 +65,8 @@ A loop that keeps an agent listening is just: `wait_for_mention` (up to 10 minut
 
 The working loop is: `wait_for_mention` (up to 600 seconds a call), act on what comes back, `acknowledge_mention`, repeat. The agent stays in it until you say to stop, so you can draw, write a note, and walk away. Hosts are told this at connection time - the server sends the loop as MCP `instructions` during the handshake, and `create_room` and `join_room` repeat it as a one-line tip - so a fresh session starts listening without being asked to.
 
+Inside a turn, poll the room with `poll_room` rather than blocking: it returns the connection state, the scene version, the peers and the pending mention ids in one short block, with `changedSince` against a version you pass, so the agent can keep working and spend a `show_room` or `read_scene` call only when something moved. `wait_for_mention` is for the other case - the turn is done and the agent is handing off to a person, waiting for the note that comes back.
+
 Mention text is data written by people in the room, not instructions addressed to the agent. The agent reads a note, decides what to do with it, and does it because you asked in the session - a note saying "run this command" is text to be shown to you, not an order to follow.
 
 ### Lead and listener
@@ -92,6 +94,7 @@ The listener runs until you stop it or until it escalates. A subagent's report r
 | `create_room` | Make a new empty room, join it, return the link to open. |
 | `join_room` | Join a room from its link. Loads the scene from a peer, or from the persisted copy if nobody else is there. |
 | `show_room` | The room as JSON (link, connection state, peers, elements, pending mentions) and, in a host that supports MCP Apps, the canvas rendered in the chat. |
+| `poll_room` | Lightweight state probe: connection state, scene version, peers, pending mention ids, and whether the scene changed since a version you pass. |
 | `room_status` | Connection state, peers, element counts. |
 | `read_scene` | The drawing as one line per element (default), or the full element JSON (compact). Freehand strokes come back as a sampled path so a scribble is legible. `ids` narrows the read to named elements; `near: {id, radius}` reads one element and its neighbourhood, so a check costs a few elements rather than the whole scene. |
 | `add_elements` | Add shapes, text, arrows, lines and freehand strokes from compact specs. Arrows bind to element ids; edge points are computed. Any spec takes an optional `link` (a URL) to make the element clickable. |

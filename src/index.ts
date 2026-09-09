@@ -21,6 +21,7 @@ import {
   type HandledVersions,
   type Mention,
 } from "./mentions.js";
+import { buildPollPayload, pollText } from "./poll.js";
 import { RoomClient } from "./room.js";
 import { selectElements, unknownIdsText } from "./scene.js";
 import { buildShowRoomPayload, CANVAS_RESOURCE_URI, NOT_IN_ROOM_TEXT, canvasHtmlUrl, registerCanvasResource } from "./view.js";
@@ -407,6 +408,23 @@ server.registerTool(
     const result = await room.commit([updated]);
     handledMentions.set(id, updated.version);
     return text(`acknowledged ${id}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
+  },
+);
+
+server.registerTool(
+  "poll_room",
+  {
+    description:
+      "Cheap state probe: connection state, sceneVersion, the peers, the pending mention ids and text, and whether the scene moved since a version you pass. Use it while you are working in a turn to notice a change without a full show_room; use wait_for_mention when you are handing the turn back to a person.",
+    inputSchema: {
+      sinceVersion: z.number().optional().describe("A sceneVersion from an earlier call. changedSince is false only if the scene version still equals it."),
+      tag: z.string().default(DEFAULT_TAG),
+    },
+  },
+  async ({ sinceVersion, tag }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const pending = findMentions(room.getElements(), tag, handledMentions);
+    return text(pollText(buildPollPayload({ status: room.status(), pending }, sinceVersion)));
   },
 );
 
