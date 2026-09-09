@@ -35,6 +35,7 @@ import {
   registerCanvasResource,
   summariseShowRoom,
 } from "./view.js";
+import { PACKAGE_VERSION } from "./version.js";
 
 // The `install-agent` subcommand copies the bundled canvas-listener subagent
 // into a .claude/agents directory and exits. With no argv the MCP server starts
@@ -155,7 +156,7 @@ function statusText(): string {
 }
 
 const server = new McpServer(
-  { name: "excalidraw-room-mcp", version: "0.2.0" },
+  { name: "excalidraw-room-mcp", version: PACKAGE_VERSION },
   { instructions: SERVER_INSTRUCTIONS },
 );
 
