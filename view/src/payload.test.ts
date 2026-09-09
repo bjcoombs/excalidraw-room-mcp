@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { boundsChanged, sceneBounds } from "./bounds.js";
-import { parsePayload, roomLink, sceneSignature } from "./payload.js";
+import { envelopeShape, parsePayload, parseResult, resultText, roomLink, sceneSignature } from "./payload.js";
 
 const LINK = "https://excalidraw.com/#room=0123456789abcdef0123,AbCdEfGhIjKlMnOpQrStUv";
 
@@ -63,6 +63,81 @@ test("parsePayload returns null for the pre-join refusal and for anything that i
   );
   assert.equal(parsePayload({ structuredContent: { link: LINK } }), null, "no elements array is no payload");
   assert.equal(parsePayload({ structuredContent: "elements" }), null);
+});
+
+// Hosts differ in what a callServerTool result looks like by the time it
+// reaches the iframe. Each shape below is one of those envelopes; the seed path
+// (`ontoolresult`) delivers the first of them.
+const SUMMARY = "room: " + LINK + "\nconnected: true\npeers: 1\nelements: 1\npending mentions: 1";
+
+function summaryResult(over: Record<string, unknown> = {}) {
+  return { content: [{ type: "text", text: SUMMARY }], ...over };
+}
+
+test("parsePayload reads the payload out of every envelope a host may wrap it in", () => {
+  const structured = summaryResult({ structuredContent: payload() });
+  const shapes: Record<string, unknown> = {
+    "the result itself": structured,
+    "result.result": { result: structured },
+    "result.toolResult": { toolResult: structured },
+    "structuredContent one level up": { structuredContent: payload(), content: [{ type: "text", text: SUMMARY }] },
+    "result.result.structuredContent": { result: { structuredContent: payload() } },
+    "result.toolResult.structuredContent": { toolResult: { structuredContent: payload() } },
+    "a wrapper around result.toolResult": { result: { toolResult: structured } },
+    "the bare payload": payload(),
+    "a JSON text item": { content: [{ type: "text", text: JSON.stringify(payload()) }] },
+    "a JSON text item nested in result": { result: { content: [{ type: "text", text: JSON.stringify(payload()) }] } },
+    "a JSON string result": JSON.stringify(structured),
+    "a JSON string in result.result": { result: JSON.stringify(structured) },
+  };
+  for (const [name, result] of Object.entries(shapes)) {
+    const parsed = parsePayload(result);
+    assert.ok(parsed, name + " is a payload");
+    assert.equal(parsed!.link, LINK, name);
+    assert.equal(parsed!.elements.length, 1, name);
+    assert.equal(parsed!.elements[0].id, "rect-1", name);
+  }
+});
+
+test("parseResult names the channel the payload came from", () => {
+  assert.equal(parseResult(summaryResult({ structuredContent: payload() })).source, "structured");
+  assert.equal(parseResult({ result: { structuredContent: payload() } }).source, "structured");
+  assert.equal(parseResult(payload()).source, "structured", "a bare payload is not the text channel");
+  assert.equal(parseResult({ content: [{ type: "text", text: JSON.stringify(payload()) }] }).source, "text");
+  assert.equal(parseResult(summaryResult()).source, null);
+  assert.equal(parseResult(summaryResult()).payload, null);
+});
+
+test("parsePayload returns null for a summary-only result, at any nesting", () => {
+  assert.equal(parsePayload(summaryResult()), null, "the default summary text is not the payload");
+  assert.equal(parsePayload({ result: summaryResult() }), null);
+  assert.equal(parsePayload({ toolResult: summaryResult() }), null);
+  assert.equal(parsePayload("not json at all"), null);
+  assert.equal(parsePayload(JSON.stringify(summaryResult())), null);
+});
+
+test("parsePayload survives an envelope that points at itself", () => {
+  const loop: Record<string, unknown> = { content: [{ type: "text", text: SUMMARY }] };
+  loop.result = loop;
+  assert.equal(parsePayload(loop), null, "a cycle terminates rather than hanging");
+});
+
+test("envelopeShape names the keys of a result the parser could not read", () => {
+  assert.equal(envelopeShape(undefined), "undefined");
+  assert.equal(envelopeShape(null), "null");
+  assert.equal(envelopeShape("summary text"), "string");
+  assert.equal(envelopeShape(summaryResult()), "{content}");
+  assert.equal(envelopeShape({ result: summaryResult() }), "{result} result{content}");
+  assert.equal(envelopeShape({ toolResult: { content: [], isError: false } }), "{toolResult} toolResult{content,isError}");
+  assert.equal(envelopeShape({ result: "{}" }), "{result} result:string");
+});
+
+test("resultText finds the summary a host nested, for the note under the header", () => {
+  assert.equal(resultText(summaryResult()), SUMMARY);
+  assert.equal(resultText({ result: summaryResult() }), SUMMARY);
+  assert.equal(resultText({ content: [{ type: "text", text: "" }, { type: "text", text: SUMMARY }] }), SUMMARY, "an empty item is skipped, not the answer");
+  assert.equal(resultText({ content: [] }), null);
+  assert.equal(resultText(undefined), null);
 });
 
 test("parsePayload defaults the fields a host may have dropped, and keeps elements verbatim", () => {
