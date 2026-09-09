@@ -105,7 +105,8 @@ test("sceneBounds covers the reported case: a wide diagram with a note far below
 test("sceneBounds skips deleted elements and elements with unusable geometry", () => {
   assert.deepEqual(sceneBounds([el(), el({ id: "gone", x: 9000, y: 9000, isDeleted: true })]), { minX: 0, minY: 0, maxX: 100, maxY: 50 });
   assert.deepEqual(sceneBounds([el(), el({ id: "bad", x: Number.NaN, y: 0 })]), { minX: 0, minY: 0, maxX: 100, maxY: 50 });
-  assert.deepEqual(sceneBounds([el({ width: undefined, height: undefined })]), { minX: 0, minY: 0, maxX: 0, maxY: 0 }, "a point element is a zero-size box");
+  const point = sceneBounds([el({ width: undefined, height: undefined })]);
+  assert.deepEqual(point, { minX: 0, minY: 0, maxX: 0, maxY: 0 }, "a point element is a zero-size box");
   assert.equal(sceneBounds([el({ x: "0" })]), null, "a non-numeric coordinate is no element");
 });
 
@@ -128,4 +129,25 @@ test("boundsChanged is false for an edit inside the existing bounds", () => {
   assert.equal(boundsChanged(box, { ...box, maxX: 1200.4 }), false, "sub-pixel drift is not a refit");
   assert.equal(boundsChanged(box, { ...box, maxX: 1204 }), true);
   assert.equal(boundsChanged(box, { ...box, maxX: 1204 }, 10), false, "the tolerance is the caller's");
+});
+
+test("sceneBounds grows for a mention highlight at the edge of the scene", () => {
+  // highlights.ts draws a box HIGHLIGHT_PADDING outside the mention it wraps,
+  // so app.tsx measures the drawn list rather than the scene elements: a
+  // highlight on the outermost element is what decides the fitted viewport.
+  const HIGHLIGHT_PADDING = 8;
+  const note = el({ id: "note", x: 0, y: 900, width: 200, height: 25 });
+  const scene = [el({ id: "diagram", width: 1200, height: 700 }), note];
+  const highlight = el({
+    id: "mention-highlight-note",
+    x: note.x - HIGHLIGHT_PADDING,
+    y: note.y - HIGHLIGHT_PADDING,
+    width: note.width + HIGHLIGHT_PADDING * 2,
+    height: note.height + HIGHLIGHT_PADDING * 2,
+  });
+  const withoutHighlight = sceneBounds(scene);
+  const withHighlight = sceneBounds([...scene, highlight]);
+  assert.deepEqual(withoutHighlight, { minX: 0, minY: 0, maxX: 1200, maxY: 925 });
+  assert.deepEqual(withHighlight, { minX: -8, minY: 0, maxX: 1200, maxY: 933 }, "the highlight extends the box it is drawn around");
+  assert.equal(boundsChanged(withoutHighlight, withHighlight), true, "measuring the wrong list would skip this refit");
 });
