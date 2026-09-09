@@ -57,7 +57,7 @@ In a host that supports MCP Apps (Claude Desktop, claude.ai), joining or creatin
 
 The viewport fits the drawing on the first paint and again whenever the scene's extent moves, so an element added off to one side does not land out of view; a scene that only changes within its existing bounds is repainted where the reader left it.
 
-A status line along the bottom carries a **Refresh** button and says when the last refresh landed, how many polls and repaints there have been, whether the window is visible, and the last error if there was one. In a host that does not proxy server tools there is no polling and **Refresh** is the only way to update the view; the status line says so rather than leaving a still frame unexplained.
+A status line along the bottom carries a **Refresh** button and says when the last refresh landed, how many polls and repaints there have been, whether the window is visible, and the last error if there was one. Polls are not serialised, so an older call can answer after a newer one; a result a later poll has overtaken is dropped rather than painted, and counted as `stale` there. In a host that does not proxy server tools there is no polling and **Refresh** is the only way to update the view; the status line says so rather than leaving a still frame unexplained.
 
 The view is read-only: it never writes to the room. Editing happens on excalidraw.com. The header shows the connection state, the peer count and the element count, and carries an **Open on excalidraw.com** link to the room. Hosts without MCP Apps support get the same text results as before.
 
