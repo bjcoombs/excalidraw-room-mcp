@@ -76,7 +76,17 @@ const autoSeenSchema = z
   .default(true)
   .describe("Mark the mention seen on the canvas (amber stroke plus a marker) as soon as it is returned. Set false for silent polling.");
 
-const point = z.tuple([z.number(), z.number()]);
+/**
+ * An [x, y] pair. Deliberately an array-with-length rather than a zod tuple:
+ * a tuple emits draft-07 tuple-form `items` (an array of per-position
+ * schemas), which the Anthropic API rejects, taking the whole tool list with
+ * it. `.length(2)` still rejects anything but exactly two numbers at runtime.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/28
+ */
+const point = z
+  .array(z.number())
+  .length(2)
+  .describe("An [x, y] pair.");
 
 const elementSpec = z
   .object({
