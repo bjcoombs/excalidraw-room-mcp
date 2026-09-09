@@ -35,6 +35,8 @@ export function stripSeenMarker(text: string): string {
  * wrote, so acknowledging twice with a note leaves both notes.
  */
 export function stripStatus(text: string): string {
+  // ACKNOWLEDGED_MARK is a single non-metacharacter glyph, so it needs no
+  // escaping; keep it that way if the constant ever changes.
   return stripSeenMarker(text).replace(new RegExp(`(?:\\s*${ACKNOWLEDGED_MARK})+$`, "u"), "");
 }
 

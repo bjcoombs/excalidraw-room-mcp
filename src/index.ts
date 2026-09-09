@@ -42,6 +42,11 @@ room.on("joined", () => {
  * one mention at a time, so a person can edit a later one while an earlier
  * commit is in flight; marking that newer text would record a version the
  * caller never saw and swallow the edit. Leave it pending instead.
+ *
+ * The version is recorded either way. The broadcast has already gone out and
+ * the local element already carries the marker, so treating a failed persist
+ * as unhandled would return the same mention on every poll. A failure is
+ * reported on the debug channel instead; it is not the caller's to act on.
  */
 async function commitSeen(mention: Mention): Promise<void> {
   const current = room.getElement(mention.id);
@@ -49,8 +54,11 @@ async function commitSeen(mention: Mention): Promise<void> {
   if (current.version !== mention.version) return;
   const updated = markSeen(current);
   if (!updated) return;
-  await room.commit([updated]);
+  const result = await room.commit([updated]);
   handledMentions.set(mention.id, updated.version);
+  if (!result.persisted && process.env.EXCALIDRAW_ROOM_DEBUG) {
+    console.error("[mentions] seen state for", mention.id, "not persisted:", result.error);
+  }
 }
 
 const autoSeenSchema = z
