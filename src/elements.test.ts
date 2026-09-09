@@ -700,3 +700,45 @@ test("summary of a path at or below eight points is not resampled", () => {
   const s = summarise([raw({ id: "p", type: "arrow", x: 0, y: 0, points: [[0, 0], [10, 10], [20, 0]] })]);
   assert.equal(s, "p arrow 3 pts: (0,0) -> (10,10) -> (20,0)");
 });
+
+test("text spec carries link through", () => {
+  const { created } = buildElements(
+    [{ type: "text", id: "lk1", x: 0, y: 0, text: "repo", link: "https://example.com/repo" }],
+    ctx(),
+  );
+  assert.equal(created[0].link, "https://example.com/repo");
+});
+
+test("shape spec carries link through and its bound label does not", () => {
+  const { created } = buildElements(
+    [{ type: "rectangle", id: "box", x: 0, y: 0, width: 100, height: 50, label: "API", link: "https://example.com/api" }],
+    ctx(),
+  );
+  const [shape, label] = created;
+  assert.equal(shape.link, "https://example.com/api");
+  assert.equal(label.link, null);
+});
+
+test("arrow and freedraw specs carry link through", () => {
+  const { created } = buildElements(
+    [
+      { type: "arrow", id: "ar", points: [[0, 0], [50, 0]], link: "https://example.com/arrow" },
+      { type: "freedraw", id: "fd", points: [[0, 0], [5, 5]], link: "https://example.com/draw" },
+    ],
+    ctx(),
+  );
+  assert.equal(created[0].link, "https://example.com/arrow");
+  assert.equal(created[1].link, "https://example.com/draw");
+});
+
+test("link defaults to null when the spec omits it", () => {
+  const { created } = buildElements(
+    [
+      { type: "text", id: "t2", x: 0, y: 0, text: "plain" },
+      { type: "ellipse", id: "e2", x: 0, y: 0 },
+    ],
+    ctx(),
+  );
+  assert.equal(created[0].link, null);
+  assert.equal(created[1].link, null);
+});
