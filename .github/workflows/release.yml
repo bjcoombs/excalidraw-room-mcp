@@ -1,18 +1,57 @@
 name: release
 
-# Publishing is tag-driven: pushing v<semver> publishes that commit to npm and
-# attaches the MCP Bundle to the matching GitHub release. There is no NPM_TOKEN
-# secret; npm trusted publishing (OIDC) authenticates the run, which is why the
-# job needs id-token: write and npm publish carries --provenance.
+# Publishing is tag-driven: pushing v<semver> attaches the MCP Bundle to the
+# matching GitHub release and publishes that commit to npm. There is no
+# NPM_TOKEN secret; npm trusted publishing (OIDC) authenticates the run, which
+# is why the publish job needs id-token: write and npm publish carries
+# --provenance.
+#
+# The two jobs are deliberately separate. The release carries the bundle, which
+# is the only way a Claude Desktop user installs this server, so it must not
+# depend on npm accepting the publish - a first-publish or auth failure there
+# used to mean no release was created at all and the bundle never shipped.
 on:
   push:
     tags: ["v*"]
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Unit tests
+        run: npm test
+      - name: Build the MCP Bundle
+        # npm test has already built dist/. Dropping the dev dependencies keeps
+        # the bundle to what the server needs at runtime. This job never
+        # publishes, so it does not need them back afterwards.
+        run: |
+          npm prune --omit=dev
+          npx -y @anthropic-ai/mcpb pack . excalidraw-room-mcp.mcpb
+      - name: Verify the bundle contents
+        # Guards the .mcpbignore trap that shipped a v0.3.0 bundle with no
+        # dist/view/canvas.html. Checks the artifact about to be attached.
+        run: npm run check:bundle -- excalidraw-room-mcp.mcpb
+      - name: Create the GitHub release with the bundle attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" excalidraw-room-mcp.mcpb --generate-notes
+
+  publish:
+    # After the release, so a failing publish cannot withhold the bundle. Runs
+    # from a clean checkout: prepublishOnly rebuilds dist/ and needs the dev
+    # dependencies the release job pruned.
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -26,13 +65,3 @@ jobs:
         run: npm test
       - name: Publish to npm
         run: npm publish --provenance --access public
-      - name: Build the MCP Bundle
-        # npm test has already built dist/. Dropping the dev dependencies keeps
-        # the bundle to what the server needs at runtime.
-        run: |
-          npm prune --omit=dev
-          npx -y @anthropic-ai/mcpb pack . excalidraw-room-mcp.mcpb
-      - name: Create the GitHub release with the bundle attached
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" excalidraw-room-mcp.mcpb --generate-notes

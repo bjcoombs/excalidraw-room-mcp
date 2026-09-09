@@ -28,6 +28,7 @@
     "test": "npm run build && node --test dist/*.test.js",
     "test:coverage": "npm run build && mkdir -p coverage && node --test --experimental-test-coverage --test-coverage-exclude=\"dist/*.test.js\" --test-coverage-exclude=\"dist/e2e.js\" --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info dist/*.test.js",
     "lint": "eslint .",
+    "check:bundle": "bash scripts/check-bundle.sh",
     "mutate": "stryker run",
     "start": "node dist/index.js",
     "e2e": "node dist/e2e.js",
