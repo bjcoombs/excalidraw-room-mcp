@@ -26,7 +26,14 @@ import {
 } from "./mentions.js";
 import { RoomClient } from "./room.js";
 import { selectElements, unknownIdsText } from "./scene.js";
-import { buildShowRoomPayload, CANVAS_RESOURCE_URI, NOT_IN_ROOM_TEXT, canvasHtmlUrl, registerCanvasResource } from "./view.js";
+import {
+  buildShowRoomPayload,
+  CANVAS_RESOURCE_URI,
+  NOT_IN_ROOM_TEXT,
+  canvasHtmlUrl,
+  registerCanvasResource,
+  summariseShowRoom,
+} from "./view.js";
 
 // The `install-agent` subcommand copies the bundled canvas-listener subagent
 // into a .claude/agents directory and exits. With no argv the MCP server starts
@@ -78,7 +85,17 @@ const autoSeenSchema = z
   .default(true)
   .describe("Mark the mention seen on the canvas (amber stroke plus a marker) as soon as it is returned. Set false for silent polling.");
 
-const point = z.tuple([z.number(), z.number()]);
+/**
+ * An [x, y] pair. Deliberately an array-with-length rather than a zod tuple:
+ * a tuple emits draft-07 tuple-form `items` (an array of per-position
+ * schemas), which the Anthropic API rejects, taking the whole tool list with
+ * it. `.length(2)` still rejects anything but exactly two numbers at runtime.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/28
+ */
+const point = z
+  .array(z.number())
+  .length(2)
+  .describe("An [x, y] pair.");
 
 const elementSpec = z
   .object({
@@ -182,17 +199,26 @@ registerAppTool(
   {
     _meta: CANVAS_META,
     description:
-      "Render the current room as a canvas in the chat, and return it as JSON: the room link, connection state, peers, the full element array, and the pending @claude mentions with the ids of the elements around each. Call it any time to bring the view back without rejoining.",
+      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending @claude mentions with the ids of the elements around each - and the full payload (link, connected, peers, elements, mentions) as structured content, which the canvas view reads. Call it any time to bring the view back without rejoining. Pass include: \"json\" only if you need the element array as text; read_scene with ids or near is the cheaper way to inspect elements.",
     inputSchema: {
       tag: z.string().default(DEFAULT_TAG),
       radius: z.number().min(0).default(DEFAULT_NEARBY_RADIUS).describe("How far around each mention to look for related elements, in canvas px."),
+      include: z
+        .enum(["summary", "json"])
+        .default("summary")
+        .describe("What the text content carries. 'summary' (default) is a few lines; 'json' is the whole payload, which for a 35-element scene is roughly 10k tokens. Either way the full payload is in the result's structured content."),
     },
   },
-  async ({ tag, radius }) => {
+  async ({ tag, radius, include }) => {
     if (!room.isConnected) return errorText(NOT_IN_ROOM_TEXT);
     const elements = room.getElements();
     const pending = findMentions(elements, tag, handledMentions);
-    return text(JSON.stringify(buildShowRoomPayload(room.status(), elements, pending, radius)));
+    const payload = buildShowRoomPayload(room.status(), elements, pending, radius);
+    return {
+      ...text(include === "json" ? JSON.stringify(payload) : summariseShowRoom(payload)),
+      // The view reads this channel; `content` above is what the model pays for.
+      structuredContent: payload as unknown as Record<string, unknown>,
+    };
   },
 );
 
@@ -262,7 +288,7 @@ server.registerTool(
   "add_raw_elements",
   {
     description:
-      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent.",
+      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent. Hosts cap tool-argument size, so keep each call's arguments under the limit in README Limits (4 KB on Claude Desktop, 16 KB on Claude Code) and send a large scene as several batches; a later batch may reference ids from an earlier one.",
     inputSchema: { elements: z.array(z.record(z.unknown())).min(1) },
   },
   async ({ elements }) => {

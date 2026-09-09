@@ -168,13 +168,48 @@ export function findMentions(
   return out;
 }
 
-function intersects(a: ExcalidrawElement, b: { x: number; y: number; width: number; height: number }): boolean {
-  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+/** A bounding box in canvas coordinates. Both element and mention shapes fit it. */
+export interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /**
- * Elements around a mention: anything whose bounding box overlaps the mention's
- * box grown by `radius`, plus the container the text is bound to. The mention
+ * The box with a non-negative width and height. Excalidraw stores a shape
+ * dragged up or to the left with a negative dimension, and an unnormalised box
+ * reads as lying entirely on the wrong side of itself.
+ */
+function normalise(b: Box): Box {
+  return {
+    x: Math.min(b.x, b.x + b.width),
+    y: Math.min(b.y, b.y + b.height),
+    width: Math.abs(b.width),
+    height: Math.abs(b.height),
+  };
+}
+
+/**
+ * Distance between two bounding boxes: zero when they overlap or touch,
+ * otherwise the length of the shortest line joining them.
+ *
+ * Box to box, not centre to centre. A 800x300 diagram with a note 160 px below
+ * it has its centre 440 px from the note's centre, so a centre measure calls it
+ * far away at the 250 px default and the agent loses the context the note was
+ * written next to. https://github.com/bjcoombs/excalidraw-room-mcp/issues/34
+ */
+export function boxDistance(first: Box, second: Box): number {
+  const a = normalise(first);
+  const b = normalise(second);
+  const dx = Math.max(0, a.x - (b.x + b.width), b.x - (a.x + a.width));
+  const dy = Math.max(0, a.y - (b.y + b.height), b.y - (a.y + a.height));
+  return Math.hypot(dx, dy);
+}
+
+/**
+ * Elements around a mention: anything whose bounding box is within `radius` of
+ * the mention's box, plus the container the text is bound to. The mention
  * itself is excluded.
  */
 export function nearbyElements(
@@ -182,16 +217,10 @@ export function nearbyElements(
   mention: Mention,
   radius: number = DEFAULT_NEARBY_RADIUS,
 ): ExcalidrawElement[] {
-  const box = {
-    x: mention.x - radius,
-    y: mention.y - radius,
-    width: mention.width + radius * 2,
-    height: mention.height + radius * 2,
-  };
   const picked = new Map<string, ExcalidrawElement>();
   for (const el of elements) {
     if (el.isDeleted || el.id === mention.id) continue;
-    if (el.id === mention.containerId || intersects(el, box)) picked.set(el.id, el);
+    if (el.id === mention.containerId || boxDistance(el, mention) <= radius) picked.set(el.id, el);
   }
   // Bound labels of picked shapes travel with them so the summary reads whole.
   for (const el of elements) {

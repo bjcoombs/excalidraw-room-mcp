@@ -5,6 +5,8 @@ import {
   ACKNOWLEDGED_MARK,
   ACKNOWLEDGED_STROKE,
   acknowledgedText,
+  boxDistance,
+  DEFAULT_NEARBY_RADIUS,
   findMentions,
   formatMention,
   hasSeenMarker,
@@ -68,6 +70,38 @@ test("nearbyElements returns what sits around the mention, with bound labels, no
   assert.ok(!ids.includes("note"), "the mention itself is excluded");
   const apiLabel = els.find((e) => e.type === "text" && e.containerId === "api")!;
   assert.ok(ids.includes(apiLabel.id), "bound label of a nearby shape travels with it");
+});
+
+test("boxDistance measures box to box: zero when the boxes meet, the gap when they do not", () => {
+  const box = { x: 0, y: 0, width: 100, height: 100 };
+  assert.equal(boxDistance(box, box), 0, "a box overlaps itself");
+  assert.equal(boxDistance(box, { x: 50, y: 50, width: 100, height: 100 }), 0, "overlapping");
+  assert.equal(boxDistance(box, { x: 100, y: 0, width: 10, height: 10 }), 0, "touching edges");
+  assert.equal(boxDistance(box, { x: 130, y: 0, width: 10, height: 10 }), 30, "a gap on one axis is that gap");
+  assert.equal(boxDistance(box, { x: 0, y: 180, width: 10, height: 10 }), 80);
+  assert.equal(boxDistance(box, { x: 130, y: 140, width: 10, height: 10 }), 50, "a diagonal gap is the hypotenuse, 3-4-5");
+  assert.equal(boxDistance({ x: 0, y: 0, width: 100, height: 100 }, { x: 240, y: 100, width: -100, height: -100 }), 40, "a box stored with negative dimensions is normalised");
+});
+
+test("a wide shape with the note below it is nearby, though its centre is not", () => {
+  // The layout issue #34 reported. Centre to centre these are 440 px apart, so
+  // a centre measure returns nothing at the 250 px default; box to box the gap
+  // is 160 px. https://github.com/bjcoombs/excalidraw-room-mcp/issues/34
+  const diagram = buildElements([{ type: "rectangle", id: "diagram", x: 0, y: 0, width: 800, height: 300 }], ctx()).created[0];
+  const noteEl = buildElements([{ type: "text", id: "note", x: 0, y: 460, text: "@claude add a cache here" }], ctx()).created[0];
+  const els = [diagram, noteEl];
+  const note = findMentions(els).find((m) => m.id === "note")!;
+
+  assert.ok(diagram.width >= 600, "wide enough for the two measures to disagree");
+  const centres = Math.hypot(diagram.x + diagram.width / 2 - (note.x + note.width / 2), diagram.y + diagram.height / 2 - (note.y + note.height / 2));
+  assert.ok(centres > DEFAULT_NEARBY_RADIUS, `centres ${Math.round(centres)} px apart, beyond the radius`);
+  assert.equal(boxDistance(diagram, note), 160);
+  assert.ok(boxDistance(diagram, note) < DEFAULT_NEARBY_RADIUS, "but the boxes are within it");
+
+  assert.deepEqual(nearbyElements(els, note).map((e) => e.id), ["diagram"]);
+  // The radius is a radius: just inside includes it, just outside does not.
+  assert.deepEqual(nearbyElements(els, note, 160).map((e) => e.id), ["diagram"]);
+  assert.deepEqual(nearbyElements(els, note, 159).map((e) => e.id), []);
 });
 
 test("formatMention renders the text, where it is, and a summary of neighbours", () => {

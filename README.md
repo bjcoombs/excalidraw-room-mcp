@@ -93,7 +93,7 @@ The listener runs until you stop it or until it escalates. A subagent's report r
 |---|---|
 | `create_room` | Make a new empty room, join it, return the link to open. |
 | `join_room` | Join a room from its link. Loads the scene from a peer, or from the persisted copy if nobody else is there. |
-| `show_room` | The room as JSON (link, connection state, peers, elements, pending mentions) and, in a host that supports MCP Apps, the canvas rendered in the chat. |
+| `show_room` | The room summarised as text (link, connection state, peer and element counts, pending mentions with the ids around each), the full payload (link, connection state, peers, elements, mentions) as structured content for the view, and in a host that supports MCP Apps the canvas rendered in the chat. `include: "json"` puts the whole payload in the text too. |
 | `room_status` | Connection state, peers, element counts. |
 | `read_scene` | The drawing as one line per element (default), or the full element JSON (compact). Freehand strokes come back as a sampled path so a scribble is legible. `ids` narrows the read to named elements; `near: {id, radius}` reads one element and its neighbourhood, so a check costs a few elements rather than the whole scene. |
 | `add_elements` | Add shapes, text, arrows, lines and freehand strokes from compact specs. Arrows bind to element ids; edge points are computed. Any spec takes an optional `link` (a URL) to make the element clickable. |
@@ -132,6 +132,21 @@ Kp3... arrow 2 pts: (156,40) -> (324,40) from api to db "query"
 - **Persistence**: excalidraw.com keeps each room's encrypted scene in a public Firestore document. On joining an empty room the server reads it. After every write it saves the reconciled scene back, conditional on the document's update time, so a stale copy never overwrites a newer one. On a conflict it reloads, reconciles, and retries once. If the save still fails, the change has already reached connected peers and their browsers persist it on their normal schedule.
 
 ## Limits
+
+### Tool-argument size
+
+The host, not this server, caps how large a tool call may be. An over-limit `add_raw_elements` call is cut and rejected before the server sees it, so the server cannot chunk around it; the caller has to split the work.
+
+| Host | Date measured | Observation | Recommended batch |
+|---|---|---|---|
+| Claude Code (2.0) | 2026-09-09 | `add_raw_elements` arguments of 5,838, 13,032 and 19,886 bytes all arrived whole, each carrying a distinct trailing sentinel id that reached the scene. No cut seen at or below 20 KB. | 16 KB |
+| Claude Desktop 1.49585.0 | 2026-09-09 | One sample: a 5,716-byte call was rejected host-side, the input cut mid-object (`__unparsedToolInput`). Where the ceiling sits is not known from a single sample. | 4 KB |
+
+The Claude Desktop figure is a single observation, so the 4 KB recommendation is deliberately conservative until more samples exist. Both recommendations are for the JSON arguments of one call, measured in bytes.
+
+Prefer `add_elements` compact specs over `add_raw_elements` for bulk creation: a spec is a fraction of the size of the equivalent raw element, so far more of a diagram fits in one call. Where raw elements are unavoidable, split them into batches under the host's limit; ids are assigned as each batch is accepted, so a later batch may reference ids from an earlier one.
+
+### Other
 
 - Images and other file attachments are out of scope. They travel by a separate path and are not needed for diagrams.
 - Text is measured by approximation, not a real font. Labels may be slightly wider or narrower than the web app would make them; the app re-measures on the next edit.
