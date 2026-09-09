@@ -1,10 +1,14 @@
 name: release
 
 # Publishing is tag-driven: pushing v<semver> attaches the MCP Bundle to the
-# matching GitHub release and publishes that commit to npm. There is no
-# NPM_TOKEN secret; npm trusted publishing (OIDC) authenticates the run, which
-# is why the publish job needs id-token: write and npm publish carries
-# --provenance.
+# matching GitHub release and publishes that commit to npm. The publish job
+# carries id-token: write so npm trusted publishing (OIDC) can authenticate the
+# run and npm publish can carry --provenance.
+#
+# workflow_dispatch exists because a failed publish cannot be retried by
+# re-running the tag's workflow: that would re-run the workflow file as it was
+# at the tag. Dispatching from main runs the current file against an existing
+# tag, skipping the release job.
 #
 # The two jobs are deliberately separate. The release carries the bundle, which
 # is the only way a Claude Desktop user installs this server, so it must not
@@ -13,9 +17,17 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Existing tag to publish to npm, e.g. v0.4.0"
+        required: true
 
 jobs:
   release:
+    # Only tag pushes create a release; a dispatch publishes an existing tag,
+    # whose release already exists.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -48,13 +60,19 @@ jobs:
     # After the release, so a failing publish cannot withhold the bundle. Runs
     # from a clean checkout: prepublishOnly rebuilds dist/ and needs the dev
     # dependencies the release job pruned.
+    #
+    # always() lets a dispatch through: the release job is skipped there, and a
+    # skipped dependency would otherwise skip this job too.
     needs: release
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.release.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -63,5 +81,26 @@ jobs:
       - run: npm ci
       - name: Unit tests
         run: npm test
+      - name: Check the checked-out version matches the tag
+        # A dispatch takes an arbitrary ref. Without this a typo in the input
+        # would publish whatever version that ref happens to carry.
+        env:
+          TAG: ${{ github.event.inputs.ref || github.ref_name }}
+        run: |
+          expected="${TAG#v}"
+          actual="$(node -p 'require("./package.json").version')"
+          if [ "$expected" != "$actual" ]; then
+            echo "Refusing to publish: tag $TAG implies version $expected, but package.json is $actual." >&2
+            exit 1
+          fi
+          echo "Publishing version $actual for tag $TAG."
       - name: Publish to npm
+        env:
+          # Used for the first publish: npm trusted publishing can only be
+          # attached to a package that already exists, so OIDC alone 404s on a
+          # package npm has never seen. Once the trusted publisher is
+          # configured on npmjs.com the secret can be deleted and this line
+          # removed, and the step falls back to OIDC. --provenance still works
+          # with token auth inside GitHub Actions.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --access public
