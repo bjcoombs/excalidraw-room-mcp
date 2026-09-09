@@ -135,6 +135,7 @@ test("envelopeShape names the keys of a result the parser could not read", () =>
 test("resultText finds the summary a host nested, for the note under the header", () => {
   assert.equal(resultText(summaryResult()), SUMMARY);
   assert.equal(resultText({ result: summaryResult() }), SUMMARY);
+  assert.equal(resultText({ content: [{ type: "text", text: "" }, { type: "text", text: SUMMARY }] }), SUMMARY, "an empty item is skipped, not the answer");
   assert.equal(resultText({ content: [] }), null);
   assert.equal(resultText(undefined), null);
 });

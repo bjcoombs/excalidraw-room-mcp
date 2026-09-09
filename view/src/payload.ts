@@ -182,8 +182,11 @@ export function resultText(result: unknown): string | null {
   for (const level of envelopes(result)) {
     const content = level.content;
     if (!Array.isArray(content)) continue;
-    const item = (content as { type?: string; text?: string }[]).find((c) => c && typeof c.text === "string");
-    if (item?.text) return item.text;
+    for (const item of content as { type?: string; text?: string }[]) {
+      // An empty text item is not the note to show, and not a reason to stop
+      // looking: a host that pads the list would otherwise hide the summary.
+      if (item?.text) return item.text;
+    }
   }
   return null;
 }
