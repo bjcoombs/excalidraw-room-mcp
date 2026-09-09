@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import type { ExcalidrawElement } from "./elements.js";
-import type { Mention } from "./mentions.js";
+import { DEFAULT_NEARBY_RADIUS, formatMention, nearbyElements, type Mention } from "./mentions.js";
 import type { RoomStatus } from "./room.js";
 import {
   buildShowRoomPayload,
   CANVAS_RESOURCE_URI,
   canvasHtmlUrl,
+  formatShowRoomMention,
   NOT_IN_ROOM_TEXT,
   registerCanvasResource,
+  SUMMARY_MENTION_LIMIT,
+  SUMMARY_NEARBY_LIMIT,
+  summariseShowRoom,
 } from "./view.js";
 
 const LINK = "https://excalidraw.com/#room=0123456789abcdef0123,AbCdEfGhIjKlMnOpQrStUv";
@@ -98,6 +102,118 @@ test("buildShowRoomPayload reports a disconnected room with a null link", () => 
 test("the show_room result body is JSON with exactly the five documented keys", () => {
   const parsed = JSON.parse(JSON.stringify(buildShowRoomPayload(status(), [element()], [])));
   assert.deepEqual(Object.keys(parsed).sort(), ["connected", "elements", "link", "mentions", "peers"]);
+});
+
+// The layout issue #34 reported: a wide diagram with the note written below it.
+// https://github.com/bjcoombs/excalidraw-room-mcp/issues/34
+const WIDE_DIAGRAM = element({ id: "diagram", x: 0, y: 0, width: 800, height: 300 });
+const NOTE_BELOW = mention({ id: "note", text: "@claude add a cache here", x: 0, y: 460, width: 200, height: 25 });
+
+function centreDistance(a: { x: number; y: number; width: number; height: number }, b: typeof a): number {
+  return Math.hypot(a.x + a.width / 2 - (b.x + b.width / 2), a.y + a.height / 2 - (b.y + b.height / 2));
+}
+
+test("a wide shape above the note is nearby: the boxes are within the radius even though the centres are not", () => {
+  // The geometry is the point of the test, so it is asserted rather than
+  // asserted-by-comment: a centre-to-centre measure would call this 440 px
+  // apart at the 250 px default and return an empty nearby list.
+  assert.ok(WIDE_DIAGRAM.width >= 600, "a wide shape, where the two measures disagree");
+  assert.equal(NOTE_BELOW.y - (WIDE_DIAGRAM.y + WIDE_DIAGRAM.height), 160);
+  assert.ok(160 < DEFAULT_NEARBY_RADIUS, "the note's box is within the default radius of the shape's box");
+  assert.ok(centreDistance(WIDE_DIAGRAM, NOTE_BELOW) > DEFAULT_NEARBY_RADIUS, "the centres are further apart than the radius");
+
+  const noteEl = element({ id: "note", type: "text", text: NOTE_BELOW.text, x: NOTE_BELOW.x, y: NOTE_BELOW.y, width: NOTE_BELOW.width, height: NOTE_BELOW.height });
+  const payload = buildShowRoomPayload(status(), [WIDE_DIAGRAM, noteEl], [NOTE_BELOW]);
+
+  assert.deepEqual(payload.mentions[0].nearby, ["diagram"]);
+});
+
+test("show_room and list_mentions report the same nearby ids for the same scene", () => {
+  // show_room goes through buildShowRoomPayload; list_mentions and
+  // wait_for_mention call nearbyElements directly. The two must not drift.
+  const els = [
+    WIDE_DIAGRAM,
+    element({ id: "note", type: "text", text: NOTE_BELOW.text, x: NOTE_BELOW.x, y: NOTE_BELOW.y, width: NOTE_BELOW.width, height: NOTE_BELOW.height }),
+    element({ id: "label", type: "text", text: "cache", x: 40, y: 380, width: 60, height: 25 }),
+    element({ id: "elsewhere", x: 4000, y: 4000, width: 100, height: 100 }),
+  ];
+  const mentions = [NOTE_BELOW];
+
+  for (const radius of [0, 100, DEFAULT_NEARBY_RADIUS, 10_000]) {
+    const fromShowRoom = buildShowRoomPayload(status(), els, mentions, radius).mentions[0].nearby;
+    const fromListMentions = nearbyElements(els, NOTE_BELOW, radius).map((e) => e.id);
+    assert.deepEqual(fromShowRoom, fromListMentions, `radius ${radius}`);
+  }
+
+  // And the default the two tools share is the same default.
+  const fromShowRoom = buildShowRoomPayload(status(), els, mentions).mentions[0].nearby;
+  assert.deepEqual(fromShowRoom, nearbyElements(els, NOTE_BELOW).map((e) => e.id));
+  assert.ok(fromShowRoom.includes("diagram"));
+  assert.ok(fromShowRoom.includes("label"));
+  assert.ok(!fromShowRoom.includes("elsewhere"));
+  // list_mentions renders those same ids as text.
+  const rendered = formatMention(NOTE_BELOW, nearbyElements(els, NOTE_BELOW));
+  for (const id of fromShowRoom) assert.ok(rendered.includes(id), `${id} named in the list_mentions text`);
+});
+
+test("the text summary of a 35-element room stays under 1500 characters and names the link and the count", () => {
+  const els = Array.from({ length: 35 }, (_, i) => element({ id: `rect-${i}`, x: i * 40, y: 0, width: 30, height: 30 }));
+  const summary = summariseShowRoom(buildShowRoomPayload(status(), els, []));
+
+  assert.ok(summary.length < 1500, `summary was ${summary.length} characters`);
+  assert.ok(summary.includes(LINK), "the room link is in the text");
+  assert.match(summary, /elements: 35/);
+  assert.match(summary, /peers: 1/);
+  assert.match(summary, /connected: true/);
+  assert.ok(!summary.includes("versionNonce"), "no element JSON leaks into the text");
+});
+
+test("the summary names every pending mention with the ids around it, and stays bounded when there are many", () => {
+  const near = element({ id: "near-1", x: 30, y: 30, width: 40, height: 40 });
+  const els = [near, element({ id: "text-1", type: "text", text: "@claude add a cache here", x: 20, y: 20, width: 200, height: 25 })];
+  const summary = summariseShowRoom(buildShowRoomPayload(status(), els, [mention()]));
+
+  assert.match(summary, /pending mentions: 1/);
+  assert.ok(summary.includes('"@claude add a cache here"'), "the note's text is quoted");
+  assert.match(summary, /mention text-1 v5 at \(20,20\):/);
+  assert.match(summary, /nearby \(1\): near-1/);
+
+  const many = Array.from({ length: SUMMARY_MENTION_LIMIT + 3 }, (_, i) => mention({ id: `m-${i}` }));
+  const bounded = summariseShowRoom(buildShowRoomPayload(status(), els, many));
+  assert.match(bounded, new RegExp(`pending mentions: ${many.length}`));
+  assert.ok(bounded.includes("m-0"), "the first mentions are spelled out");
+  assert.ok(!bounded.includes(`mention m-${SUMMARY_MENTION_LIMIT} `), "past the limit they are not");
+  assert.match(bounded, /\+3 more pending; call list_mentions/);
+});
+
+test("a mention next to a crowd lists the first ids and counts the rest", () => {
+  const crowd = Array.from({ length: SUMMARY_NEARBY_LIMIT + 4 }, (_, i) => `id-${i}`);
+  const line = formatShowRoomMention({ id: "note", version: 2, text: "@claude here", x: 0, y: 0, width: 10, height: 10, containerId: null, nearby: crowd });
+
+  assert.match(line, new RegExp(`nearby \\(${crowd.length}\\): id-0`));
+  assert.match(line, /\+4 more/);
+  assert.ok(!line.includes(`id-${SUMMARY_NEARBY_LIMIT}`), "past the limit the ids are counted, not listed");
+});
+
+test("a mention bound inside a shape says so, and one with nothing around it says none", () => {
+  const inside = formatShowRoomMention({ id: "label", version: 1, text: "@claude rename", x: 5, y: 5, width: 10, height: 10, containerId: "box", nearby: [] });
+  assert.match(inside, /^mention label v1 inside box:/);
+  assert.match(inside, /nearby: none/);
+});
+
+test("the summary points at the structured channel rather than pretending the elements are missing", () => {
+  const summary = summariseShowRoom(buildShowRoomPayload(status(), [element()], []));
+  assert.match(summary, /structured content/);
+  assert.match(summary, /include: "json"/);
+});
+
+test("a disconnected room summarises without a link", () => {
+  const summary = summariseShowRoom(buildShowRoomPayload(status({ connected: false, link: null, peers: [] }), [], []));
+  assert.match(summary, /room: -/);
+  assert.match(summary, /connected: false/);
+  assert.match(summary, /peers: 0/);
+  assert.match(summary, /elements: 0/);
+  assert.match(summary, /pending mentions: 0/);
 });
 
 test("show_room's pre-join message names the room and the tools that open one", () => {

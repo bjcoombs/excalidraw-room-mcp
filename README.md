@@ -93,7 +93,7 @@ The listener runs until you stop it or until it escalates. A subagent's report r
 |---|---|
 | `create_room` | Make a new empty room, join it, return the link to open. |
 | `join_room` | Join a room from its link. Loads the scene from a peer, or from the persisted copy if nobody else is there. |
-| `show_room` | The room as JSON (link, connection state, peers, elements, pending mentions) and, in a host that supports MCP Apps, the canvas rendered in the chat. |
+| `show_room` | The room summarised as text (link, connection state, peer and element counts, pending mentions with the ids around each), the full payload (link, connection state, peers, elements, mentions) as structured content for the view, and in a host that supports MCP Apps the canvas rendered in the chat. `include: "json"` puts the whole payload in the text too. |
 | `poll_room` | Lightweight state probe: connection state, scene version, peers, pending mention ids, and whether the scene changed since a version you pass. |
 | `room_status` | Connection state, peers, element counts. |
 | `read_scene` | The drawing as one line per element (default), or the full element JSON (compact). Freehand strokes come back as a sampled path so a scribble is legible. `ids` narrows the read to named elements; `near: {id, radius}` reads one element and its neighbourhood, so a check costs a few elements rather than the whole scene. |
