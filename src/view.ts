@@ -8,10 +8,13 @@
  * the host asks for the resource rather than inlined into this source, so the
  * view can be rebuilt without touching the server.
  *
- * An MCP Apps tool result has two channels. The payload goes in
- * `structuredContent`, which the bound view reads; the model reads `content`,
- * so that carries {@link summariseShowRoom}'s few lines rather than the element
- * array, which costs about 10k tokens for a 35-element scene.
+ * The result carries text and nothing else. An MCP Apps result may also hold
+ * `structuredContent`, and the payload used to travel there, but a host is free
+ * to inline that channel into the model-visible transcript - Claude Desktop
+ * does - which charges the reader the element array on every call, the cost the
+ * split was meant to avoid. So `content` carries {@link summariseShowRoom}'s
+ * few lines, and the view fetches the payload itself by calling `show_room`
+ * with include: "json" and parsing the text.
  * https://github.com/bjcoombs/excalidraw-room-mcp/issues/29
  */
 import { readFile } from "node:fs/promises";
@@ -128,7 +131,7 @@ export function summariseShowRoom(payload: ShowRoomPayload): string {
   for (const mention of shown) lines.push("", formatShowRoomMention(mention));
   const hidden = payload.mentions.length - shown.length;
   if (hidden) lines.push("", `+${hidden} more pending; call list_mentions for them.`);
-  lines.push("", 'The elements are in this result\'s structured content, which the canvas renders. Pass include: "json" for them as text.');
+  lines.push("", 'The elements are not in this text. The canvas view fetches them itself; pass include: "json" if you need them here.');
   return lines.join("\n");
 }
 
