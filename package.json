@@ -13,6 +13,7 @@
   },
   "files": [
     "dist",
+    "agents",
     "README.md",
     "LICENSE"
   ],

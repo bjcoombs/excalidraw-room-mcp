@@ -62,9 +62,10 @@ export default tseslint.config(
     },
   },
   {
-    // The manual e2e driver is a CLI, not the MCP server: its stdout is a human
-    // transcript, so console.log is the correct output channel there.
-    files: ["src/e2e.ts"],
+    // The manual e2e driver and the install-agent subcommand are CLIs, not the
+    // MCP server: their stdout is a human transcript, so console.log is the
+    // correct output channel there.
+    files: ["src/e2e.ts", "src/install-agent.ts"],
     rules: {
       "no-console": "off",
     },
