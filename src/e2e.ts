@@ -50,8 +50,8 @@ if (showRoomOnly) {
   if (link) await call("join_room", { link });
   else await call("create_room");
   await new Promise((r) => setTimeout(r, Math.min(seconds, 10) * 1000));
-  // include: "json" because this driver reads the text channel only; the
-  // structured channel is what the in-chat view consumes.
+  // include: "json" is what the in-chat view asks for too: show_room's text is
+  // the summary unless a caller wants the payload.
   console.log(await call("show_room", { include: "json" }));
   await client.close();
   process.exit(0);
