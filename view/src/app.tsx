@@ -49,13 +49,15 @@ interface Diagnostics {
   updates: number;
   /** Scenes held because the canvas was not ready yet. */
   deferred: number;
+  /** Results dropped because a later poll had already answered. */
+  stale: number;
   fits: number;
   lastRefreshAt: number | null;
   lastError: string | null;
 }
 
 function emptyDiagnostics(): Diagnostics {
-  return { polls: 0, applies: 0, parseNulls: 0, updates: 0, deferred: 0, fits: 0, lastRefreshAt: null, lastError: null };
+  return { polls: 0, applies: 0, parseNulls: 0, updates: 0, deferred: 0, stale: 0, fits: 0, lastRefreshAt: null, lastError: null };
 }
 
 export function RoomView({ app }: { app: App }) {
@@ -65,6 +67,8 @@ export function RoomView({ app }: { app: App }) {
   const [pollingAvailable, setPollingAvailable] = useState<boolean | null>(null);
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
   const lastSignature = useRef<string | null>(null);
+  /** Which poll is newest. A result from an older one is dropped rather than applied. */
+  const lastGeneration = useRef(0);
   const lastBounds = useRef<SceneBounds | null>(null);
   /** The newest scene that has not reached the canvas, or null when the canvas is current. */
   const pending = useRef<ShowRoomPayload | null>(null);
@@ -99,16 +103,18 @@ export function RoomView({ app }: { app: App }) {
     diagnostics.current.updates += 1;
     pending.current = null;
 
-    const bounds = sceneBounds(next.elements);
+    // Measured over the drawn list, not over next.elements: a highlight box sits
+    // 8 px outside the mention it wraps, so bounds taken from the elements alone
+    // can exclude a highlight at the scene edge. Relying on FIT_PADDING to
+    // absorb the overhang would tie correctness to two unrelated constants.
+    const bounds = sceneBounds(elements as unknown as Record<string, unknown>[]);
     if (bounds && boundsChanged(lastBounds.current, bounds)) {
       lastBounds.current = bounds;
       diagnostics.current.fits += 1;
       // Guarded by boundsChanged above: fitToContent runs on first paint and
       // whenever an edge moved, and never for an edit inside the existing box,
-      // which would yank a viewport the reader is looking at. scrollToContent
-      // measures the elements it is given, so the highlights go in too - a
-      // mention box sits outside the element it wraps. canvasOffsets is the
-      // only padding fitToContent takes.
+      // which would yank a viewport the reader is looking at. canvasOffsets is
+      // the only padding fitToContent takes.
       instance.scrollToContent(elements as never, {
         fitToContent: true,
         animate: false,
@@ -149,8 +155,18 @@ export function RoomView({ app }: { app: App }) {
 
   const refresh = useCallback(async () => {
     diagnostics.current.polls += 1;
+    // The poll does not await the previous call, so two can be in flight at
+    // once and the older one can answer last. Applying it would show a scene
+    // the reader has already moved past - self-healing on the next poll, but a
+    // visible step backwards until then. A result is applied only while it is
+    // still the newest one dispatched.
+    const generation = (lastGeneration.current += 1);
     try {
       const result = await app.callServerTool({ name: "show_room", arguments: {} });
+      if (generation !== lastGeneration.current) {
+        diagnostics.current.stale += 1;
+        return;
+      }
       diagnostics.current.lastRefreshAt = Date.now();
       diagnostics.current.lastError = null;
       const next = parsePayload(result as never);
@@ -300,6 +316,12 @@ function StatusLine({
         <>
           <span className="sep">·</span>
           <span>{diagnostics.deferred} deferred</span>
+        </>
+      ) : null}
+      {diagnostics.stale ? (
+        <>
+          <span className="sep">·</span>
+          <span>{diagnostics.stale} stale</span>
         </>
       ) : null}
       <span className="sep">·</span>
