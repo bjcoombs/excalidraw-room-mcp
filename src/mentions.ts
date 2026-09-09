@@ -5,6 +5,7 @@
  * the text plus what sits around it. Pure functions here; the waiting and the
  * handled-set live in RoomClient.
  */
+import { z } from "zod";
 import { bump, measureText, summarise, type ExcalidrawElement } from "./elements.js";
 
 export const DEFAULT_TAG = "@claude";
@@ -20,6 +21,27 @@ export const SEEN_MARKER = " \u23f3";
 export const SEEN_STROKE = "#e8590c";
 export const ACKNOWLEDGED_MARK = "\u2713";
 export const ACKNOWLEDGED_STROKE = "#868e96";
+
+/**
+ * How long a canvas-facing note may be. The canvas is a shared drawing, not a
+ * reply channel: a note wider than the diagram it annotates zooms the whole
+ * scene out under fit-to-content rendering. Prose about the work goes to chat;
+ * only a status a person must read on the canvas earns a note, and 24
+ * characters is enough for "declined" or "see chat".
+ */
+export const MAX_NOTE_LENGTH = 24;
+
+/** Why a note was refused, in words the caller can act on. */
+export const NOTE_TOO_LONG_TEXT =
+  `note is longer than ${MAX_NOTE_LENGTH} characters; the canvas is not a reply channel. ` +
+  "Reply in chat and acknowledge without a note, or use a short status such as \"see chat\".";
+
+/**
+ * The cap as the tool declares and enforces it. The schema is the enforcement
+ * point: the MCP SDK validates arguments before the handler runs, so a long
+ * note is refused with this message and the element is never touched.
+ */
+export const noteSchema = z.string().max(MAX_NOTE_LENGTH, { message: NOTE_TOO_LONG_TEXT });
 
 /** Remove every seen marker, wherever a later edit left it. */
 export function stripSeenMarker(text: string): string {
@@ -79,16 +101,27 @@ export function markSeen(el: ExcalidrawElement): ExcalidrawElement | null {
 }
 
 /**
- * The element as it should look once the agent is done: grey stroke and one
- * status suffix, replacing the seen marker rather than following it.
+ * The element as it should look when the note stays on the canvas: grey stroke
+ * and one status suffix, replacing the seen marker rather than following it.
+ * This is the exception now that acknowledgement removes the note by default -
+ * it is for an outcome the person has to read where they wrote the request.
  */
-export function markAcknowledged(
-  el: ExcalidrawElement,
-  opts: { note?: string; keepText?: boolean } = {},
-): ExcalidrawElement {
+export function markAcknowledged(el: ExcalidrawElement, opts: { note?: string } = {}): ExcalidrawElement {
   const current = el.text ?? "";
-  const next = opts.keepText ? stripStatus(current) : acknowledgedText(current, ` ${opts.note ?? ACKNOWLEDGED_MARK}`);
+  const next = acknowledgedText(current, ` ${opts.note ?? ACKNOWLEDGED_MARK}`);
   return bump({ ...retext(el, next), strokeColor: ACKNOWLEDGED_STROKE });
+}
+
+/**
+ * The element as it should look once the mention is handled: gone. Excalidraw
+ * has no annotation layer, so a handled note is clutter in the same coordinate
+ * space as the drawing; the seen marker already told the person it landed and
+ * the drawing is the evidence it was done. A tombstone rather than a real
+ * delete, so peers converge, and the version bump means the caller can record
+ * it handled and never surface it again.
+ */
+export function markRemoved(el: ExcalidrawElement): ExcalidrawElement {
+  return bump({ ...el, isDeleted: true });
 }
 
 export interface Mention {

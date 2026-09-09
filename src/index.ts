@@ -16,8 +16,11 @@ import {
   findMentions,
   formatMention,
   markAcknowledged,
+  markRemoved,
   markSeen,
+  MAX_NOTE_LENGTH,
   nearbyElements,
+  noteSchema,
   type HandledVersions,
   type Mention,
 } from "./mentions.js";
@@ -286,7 +289,7 @@ server.registerTool(
   "add_raw_elements",
   {
     description:
-      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent.",
+      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent. Hosts cap tool-argument size, so keep each call's arguments under the limit in README Limits (4 KB on Claude Desktop, 16 KB on Claude Code) and send a large scene as several batches; a later batch may reference ids from an earlier one.",
     inputSchema: { elements: z.array(z.record(z.unknown())).min(1) },
   },
   async ({ elements }) => {
@@ -374,7 +377,7 @@ server.registerTool(
   "wait_for_mention",
   {
     description:
-      "Block until someone writes a text element containing the tag (default '@claude') on the canvas, then return it with the elements around it. Returns 'no mention' after timeoutSeconds so the caller can loop. A mention is reported once it has stopped changing for about 1.5s. Returning it also marks it seen on the canvas (amber stroke and a marker) so the person knows the note landed; pass autoSeen false to poll without touching the drawing. Acknowledge it with acknowledge_mention when done, which replaces the seen marker with a check mark.",
+      "Block until someone writes a text element containing the tag (default '@claude') on the canvas, then return it with the elements around it. Returns 'no mention' after timeoutSeconds so the caller can loop. A mention is reported once it has stopped changing for about 1.5s. Returning it also marks it seen on the canvas (amber stroke and a marker) so the person knows the note landed; pass autoSeen false to poll without touching the drawing. Acknowledge it with acknowledge_mention when done, which removes the handled note from the canvas; reply about the work in chat.",
     inputSchema: {
       tag: z.string().default(DEFAULT_TAG),
       timeoutSeconds: z.number().min(1).max(600).default(60),
@@ -419,21 +422,36 @@ server.registerTool(
   "acknowledge_mention",
   {
     description:
-      "Mark a mention as handled so it is not returned again, and show that on the canvas: the text turns grey and the seen marker is replaced by a check mark (or a note of your choosing, e.g. why it was declined), so the note ends up with exactly one status suffix. If the person edits the text again it becomes pending again.",
+      "Mark a mention as handled so it is not returned again. By default the note is removed from the canvas (soft-deleted): the seen marker already told the person it landed and the drawing is the evidence it was done. Reply about the work in chat, not on the canvas - artefacts of the work belong on the canvas, prose about it does not. Pass a short note (up to " +
+      `${MAX_NOTE_LENGTH} characters) to keep the note instead, greyed with that note as its only suffix, when the person has to read the outcome where they wrote the request ("declined", "see chat"). Pass keep true to keep it greyed with a check mark for an audit trail. If the person edits the text again it becomes pending again.`,
     inputSchema: {
       id: z.string().describe("The mention's element id from wait_for_mention or list_mentions."),
-      note: z.string().optional().describe("Appended to the text instead of the default check mark."),
-      keepText: z.boolean().default(false).describe("Only recolour; add no suffix (the seen marker is still removed)."),
+      note: noteSchema
+        .optional()
+        .describe(
+          `Keep the note on the canvas with this as its only suffix, at most ${MAX_NOTE_LENGTH} characters. For a status the person must see there, not a reply: reply in chat instead.`,
+        ),
+      keep: z.boolean().default(false).describe("Keep the note on the canvas, greyed with a single check mark, instead of removing it."),
     },
   },
-  async ({ id, note, keepText }) => {
+  async ({ id, note, keep }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     const current = room.getElement(id);
     if (!current || current.type !== "text") return text(`no text element with id ${id}`);
-    const updated = markAcknowledged(current, { note, keepText });
+    // A note or an explicit keep leaves the element in place; otherwise the
+    // handled note goes. Either way the post-bump version is recorded, so our
+    // own edit never reads back as a new mention.
+    // An empty or blank note is no note: keeping it would leave a trailing
+    // space as the whole status, which reads as a bug on the canvas. It falls
+    // through to the default instead, so the note is removed unless keep says
+    // otherwise.
+    const status = note?.trim() || undefined;
+    const kept = status !== undefined || keep;
+    const updated = kept ? markAcknowledged(current, { note: status }) : markRemoved(current);
     const result = await room.commit([updated]);
     handledMentions.set(id, updated.version);
-    return text(`acknowledged ${id}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
+    const what = kept ? `acknowledged ${id}` : `acknowledged and removed ${id} from the canvas`;
+    return text(`${what}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
   },
 );
 

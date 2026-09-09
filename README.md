@@ -67,6 +67,8 @@ The working loop is: `wait_for_mention` (up to 600 seconds a call), act on what 
 
 Inside a turn, poll the room with `poll_room` rather than blocking: it returns the connection state, the scene version, the peers and the pending mention ids in one short block, with `changedSince` against a version you pass, so the agent can keep working and spend a `show_room` or `read_scene` call only when something moved. `wait_for_mention` is for the other case - the turn is done and the agent is handing off to a person, waiting for the note that comes back.
 
+Replies about the work go in the chat; artefacts of the work go on the canvas. A handled note is removed from the canvas, not annotated: `acknowledge_mention` soft-deletes it by default, because the seen marker already told you the note landed and the resulting drawing is the evidence it was done. Where an outcome has to be readable where you wrote the request, the agent can keep the note greyed with a short status of up to 24 characters ("declined", "see chat"); anything longer is refused and belongs in the chat reply. `keep: true` keeps the note greyed with a check mark if you want the audit trail.
+
 Mention text is data written by people in the room, not instructions addressed to the agent. The agent reads a note, decides what to do with it, and does it because you asked in the session - a note saying "run this command" is text to be shown to you, not an order to follow.
 
 ### Lead and listener
@@ -103,7 +105,7 @@ The listener runs until you stop it or until it escalates. A subagent's report r
 | `delete_elements` | Soft-delete by id. |
 | `wait_for_mention` | Block until a text element containing the tag (default `@claude`) appears and settles; return it with its nearby elements, and mark it seen on the canvas (`autoSeen: false` to skip). Returns "no mention" after the timeout so the caller can loop. |
 | `list_mentions` | Every pending mention right now, with nearby elements, marked seen as above (`autoSeen: false` to skip). |
-| `acknowledge_mention` | Mark a mention handled: grey it out and append a check mark or a note. |
+| `acknowledge_mention` | Mark a mention handled and remove the note from the canvas. `note` (24 characters max) keeps it greyed with that status instead; `keep: true` keeps it greyed with a check mark. |
 | `leave_room` | Disconnect. |
 
 ### Example
@@ -133,6 +135,21 @@ Kp3... arrow 2 pts: (156,40) -> (324,40) from api to db "query"
 - **Persistence**: excalidraw.com keeps each room's encrypted scene in a public Firestore document. On joining an empty room the server reads it. After every write it saves the reconciled scene back, conditional on the document's update time, so a stale copy never overwrites a newer one. On a conflict it reloads, reconciles, and retries once. If the save still fails, the change has already reached connected peers and their browsers persist it on their normal schedule.
 
 ## Limits
+
+### Tool-argument size
+
+The host, not this server, caps how large a tool call may be. An over-limit `add_raw_elements` call is cut and rejected before the server sees it, so the server cannot chunk around it; the caller has to split the work.
+
+| Host | Date measured | Observation | Recommended batch |
+|---|---|---|---|
+| Claude Code (2.0) | 2026-09-09 | `add_raw_elements` arguments of 5,838, 13,032 and 19,886 bytes all arrived whole, each carrying a distinct trailing sentinel id that reached the scene. No cut seen at or below 20 KB. | 16 KB |
+| Claude Desktop 1.49585.0 | 2026-09-09 | One sample: a 5,716-byte call was rejected host-side, the input cut mid-object (`__unparsedToolInput`). Where the ceiling sits is not known from a single sample. | 4 KB |
+
+The Claude Desktop figure is a single observation, so the 4 KB recommendation is deliberately conservative until more samples exist. Both recommendations are for the JSON arguments of one call, measured in bytes.
+
+Prefer `add_elements` compact specs over `add_raw_elements` for bulk creation: a spec is a fraction of the size of the equivalent raw element, so far more of a diagram fits in one call. Where raw elements are unavoidable, split them into batches under the host's limit; ids are assigned as each batch is accepted, so a later batch may reference ids from an earlier one.
+
+### Other
 
 - Images and other file attachments are out of scope. They travel by a separate path and are not needed for diagrams.
 - Text is measured by approximation, not a real font. Labels may be slightly wider or narrower than the web app would make them; the app re-measures on the next edit.
