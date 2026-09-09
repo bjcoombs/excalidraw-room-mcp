@@ -37,8 +37,9 @@ function num(value: unknown): number | null {
  * is checked rather than trusted: one element carrying a NaN width would
  * otherwise poison the whole box and fit the canvas to nothing.
  *
- * Mention highlights are not considered: they are drawn around elements that
- * are already in this box, so they cannot extend it beyond the padding.
+ * Call this with the list that is actually drawn, highlights included. A
+ * highlight box sits outside the mention it wraps, so bounds taken from the
+ * scene elements alone can leave one at the edge outside the fitted viewport.
  */
 export function sceneBounds(elements: readonly Record<string, unknown>[]): SceneBounds | null {
   let minX = Number.POSITIVE_INFINITY;
