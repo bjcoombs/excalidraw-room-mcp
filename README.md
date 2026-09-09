@@ -192,7 +192,7 @@ The in-chat view is a separate Vite build under `view/` (paths relative to the r
 
 Releases are tag-driven. Pushing a `v*` tag runs `.github/workflows/release.yml`, which creates the GitHub release with `excalidraw-room-mcp.mcpb` attached, and then, in a second job, publishes that tag to npm with a provenance attestation. The order is deliberate: the bundle is how a Claude Desktop user installs this server, so a failing publish cannot withhold it.
 
-Re-running the tag's workflow would re-run the workflow file as it was at the tag, so a failed publish is retried by dispatching the current file against the existing tag - `gh workflow run release.yml -f ref=v0.4.0` - which skips the release job and refuses to publish if that ref's `package.json` version does not match the tag. The first publish authenticates with the `NPM_TOKEN` repository secret, because npm trusted publishing can only be attached to a package that already exists; once the trusted publisher is configured on npmjs.com the secret and its `env:` line can be removed and the job falls back to OIDC.
+Re-running the tag's workflow would re-run the workflow file as it was at the tag, so a failed publish is retried by dispatching the current file against the existing tag - `gh workflow run release.yml -f ref=v0.4.0` - which skips the release job and refuses to publish if that ref's `package.json` version does not match the tag. The publish job authenticates through npm trusted publishing: npm matches the run's GitHub OIDC token against the trusted publisher configured for this repository and `release.yml`, so no registry token is stored anywhere.
 
 ## License
 
