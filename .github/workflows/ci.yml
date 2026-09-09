@@ -47,9 +47,10 @@ jobs:
           path: coverage/lcov.info
 
   mutation:
-    # Minutes rather than seconds, so it is kept off the push path entirely:
-    # weekly on a schedule and on demand (gh workflow run ci.yml). `npm run
-    # mutate` builds once itself, then recompiles only the server per mutant.
+    # Minutes rather than seconds even after tuning, so it is kept off the push
+    # path entirely: weekly on a schedule and on demand (gh workflow run
+    # ci.yml). Stryker runs the TypeScript sources directly through tsx, so
+    # there is no compile step per mutant and no build step here.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -60,6 +61,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Stryker reuses results for mutants whose source and covering tests are
+      # unchanged. The key is hashed over all of src so any change starts a new
+      # cache entry, while restore-keys seeds it from the most recent run.
+      - name: Restore Stryker incremental cache
+        uses: actions/cache@v4
+        with:
+          path: reports/mutation/stryker-incremental.json
+          key: stryker-incremental-${{ hashFiles('src/**/*.ts') }}
+          restore-keys: |
+            stryker-incremental-
       - run: npm run mutate
       - uses: actions/upload-artifact@v4
         if: always()
