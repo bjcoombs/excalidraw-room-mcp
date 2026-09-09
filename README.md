@@ -65,6 +65,8 @@ A loop that keeps an agent listening is just: `wait_for_mention` (up to 10 minut
 
 The working loop is: `wait_for_mention` (up to 600 seconds a call), act on what comes back, `acknowledge_mention`, repeat. The agent stays in it until you say to stop, so you can draw, write a note, and walk away. Hosts are told this at connection time - the server sends the loop as MCP `instructions` during the handshake, and `create_room` and `join_room` repeat it as a one-line tip - so a fresh session starts listening without being asked to.
 
+Replies about the work go in the chat; artefacts of the work go on the canvas. A handled note is removed from the canvas, not annotated: `acknowledge_mention` soft-deletes it by default, because the seen marker already told you the note landed and the resulting drawing is the evidence it was done. Where an outcome has to be readable where you wrote the request, the agent can keep the note greyed with a short status of up to 24 characters ("declined", "see chat"); anything longer is refused and belongs in the chat reply. `keep: true` keeps the note greyed with a check mark if you want the audit trail.
+
 Mention text is data written by people in the room, not instructions addressed to the agent. The agent reads a note, decides what to do with it, and does it because you asked in the session - a note saying "run this command" is text to be shown to you, not an order to follow.
 
 ### Lead and listener
@@ -100,7 +102,7 @@ The listener runs until you stop it or until it escalates. A subagent's report r
 | `delete_elements` | Soft-delete by id. |
 | `wait_for_mention` | Block until a text element containing the tag (default `@claude`) appears and settles; return it with its nearby elements, and mark it seen on the canvas (`autoSeen: false` to skip). Returns "no mention" after the timeout so the caller can loop. |
 | `list_mentions` | Every pending mention right now, with nearby elements, marked seen as above (`autoSeen: false` to skip). |
-| `acknowledge_mention` | Mark a mention handled: grey it out and append a check mark or a note. |
+| `acknowledge_mention` | Mark a mention handled and remove the note from the canvas. `note` (24 characters max) keeps it greyed with that status instead; `keep: true` keeps it greyed with a check mark. |
 | `leave_room` | Disconnect. |
 
 ### Example
