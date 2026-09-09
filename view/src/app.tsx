@@ -177,14 +177,25 @@ export function RoomView({ app }: { app: App }) {
    * result records the envelope's shape rather than only incrementing a
    * counter: the shape is what tells the next operator which host wrapper the
    * parser is missing.
+   *
+   * The seed is the exception. `show_room` returns the model's summary by
+   * default, and the host hands the view whatever the model's call returned, so
+   * a seed without a payload is the normal case rather than a failure: the
+   * view's own first poll, dispatched on connect with include: "json", is what
+   * carries the scene. Counting that as unreadable would report a fault that is
+   * not there.
    */
   const record = useCallback(
-    (result: unknown) => {
+    (result: unknown, seed = false) => {
       const { payload: next, source } = parseResult(result);
       if (next) {
         if (source === "structured") diagnostics.current.structuredParses += 1;
         else diagnostics.current.textParses += 1;
         apply(next);
+        return;
+      }
+      if (seed) {
+        setNote("Loading the room…");
         return;
       }
       diagnostics.current.parseNulls += 1;
@@ -203,10 +214,10 @@ export function RoomView({ app }: { app: App }) {
     // still the newest one dispatched.
     const generation = (lastGeneration.current += 1);
     try {
-      // include: "json" puts the whole payload in the text content as well as
-      // in structured content, so the view still renders on a host that does
-      // not forward the structured channel to the iframe. A callServerTool
-      // result never enters the transcript, so the longer text costs no tokens.
+      // include: "json" is how the view gets the elements at all: show_room
+      // returns text only, and its default is the model's summary. A
+      // callServerTool result is the view's own call and never enters the
+      // conversation, so the full payload here costs the reader nothing.
       const result = await app.callServerTool({ name: "show_room", arguments: { include: "json" } });
       if (generation !== lastGeneration.current) {
         diagnostics.current.stale += 1;
@@ -226,8 +237,10 @@ export function RoomView({ app }: { app: App }) {
   }, [app, record, show]);
 
   useEffect(() => {
+    // A seed the host happens to carry a payload in still paints immediately;
+    // otherwise it is a summary, and the poll below is what fills the canvas.
     app.ontoolresult = (params) => {
-      record(params);
+      record(params, true);
       show();
     };
     void app.connect().then(
@@ -244,6 +257,8 @@ export function RoomView({ app }: { app: App }) {
         } catch {
           // A host without the notification is not a reason to fail the view.
         }
+        // The seed cannot be relied on to carry the scene, so the view fetches
+        // it here rather than waiting for the interval's first tick.
         void refresh();
       },
       (err: unknown) => {

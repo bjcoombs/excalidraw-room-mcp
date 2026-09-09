@@ -94,7 +94,10 @@ const app = {
   },
   callServerTool: async () => {
     polls += 1;
-    return { content: [{ type: "text", text: "room summary" }], structuredContent: current };
+    // What the server returns for include: "json": the payload as text, no
+    // structured channel. The seed paths below still deliver structuredContent,
+    // which is the other shape a host may hand the view.
+    return { content: [{ type: "text", text: JSON.stringify(current) }] };
   },
   getHostCapabilities: () => ({ serverTools: {} }),
   getHostContext: () => ({ displayMode: "inline", availableDisplayModes: ["inline", "fullscreen"] }),

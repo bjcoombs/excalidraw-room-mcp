@@ -201,14 +201,14 @@ registerAppTool(
   {
     _meta: CANVAS_META,
     description:
-      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending @claude mentions with the ids of the elements around each - and the full payload (link, connected, peers, elements, mentions) as structured content, which the canvas view reads. Call it any time to bring the view back without rejoining. Pass include: \"json\" only if you need the element array as text; read_scene with ids or near is the cheaper way to inspect elements.",
+      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending @claude mentions with the ids of the elements around each. The canvas view fetches the elements for itself, so they never pass through this result unless you ask: pass include: \"json\" only if you need the element array in the text; read_scene with ids or near is the cheaper way to inspect elements.",
     inputSchema: {
       tag: z.string().default(DEFAULT_TAG),
       radius: z.number().min(0).default(DEFAULT_NEARBY_RADIUS).describe("How far around each mention to look for related elements, in canvas px."),
       include: z
         .enum(["summary", "json"])
         .default("summary")
-        .describe("What the text content carries. 'summary' (default) is a few lines; 'json' is the whole payload, which for a 35-element scene is roughly 10k tokens. Either way the full payload is in the result's structured content."),
+        .describe("What the text content carries. 'summary' (default) is a few lines; 'json' is the whole payload, which for a 35-element scene is roughly 10k tokens. The canvas view asks for 'json' itself, so the default keeps the elements out of the conversation."),
     },
   },
   async ({ tag, radius, include }) => {
@@ -216,11 +216,11 @@ registerAppTool(
     const elements = room.getElements();
     const pending = findMentions(elements, tag, handledMentions);
     const payload = buildShowRoomPayload(room.status(), elements, pending, radius);
-    return {
-      ...text(include === "json" ? JSON.stringify(payload) : summariseShowRoom(payload)),
-      // The view reads this channel; `content` above is what the model pays for.
-      structuredContent: payload as unknown as Record<string, unknown>,
-    };
+    // Text only, deliberately: a host that inlines structuredContent into the
+    // model-visible transcript charges the reader for the element array on
+    // every call, which is what a split payload was meant to avoid. The view
+    // calls this tool itself with include: "json" and reads the text.
+    return text(include === "json" ? JSON.stringify(payload) : summariseShowRoom(payload));
   },
 );
 

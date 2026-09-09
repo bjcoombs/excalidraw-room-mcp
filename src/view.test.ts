@@ -201,10 +201,11 @@ test("a mention bound inside a shape says so, and one with nothing around it say
   assert.match(inside, /nearby: none/);
 });
 
-test("the summary points at the structured channel rather than pretending the elements are missing", () => {
+test("the summary says where the elements are rather than pretending they are missing", () => {
   const summary = summariseShowRoom(buildShowRoomPayload(status(), [element()], []));
-  assert.match(summary, /structured content/);
+  assert.match(summary, /fetches them itself/, "the view is named as the thing that has the elements");
   assert.match(summary, /include: "json"/);
+  assert.doesNotMatch(summary, /structured content/, "there is no structured channel to point at");
 });
 
 test("a disconnected room summarises without a link", () => {
