@@ -95,12 +95,8 @@ jobs:
           fi
           echo "Publishing version $actual for tag $TAG."
       - name: Publish to npm
-        env:
-          # Used for the first publish: npm trusted publishing can only be
-          # attached to a package that already exists, so OIDC alone 404s on a
-          # package npm has never seen. Once the trusted publisher is
-          # configured on npmjs.com the secret can be deleted and this line
-          # removed, and the step falls back to OIDC. --provenance still works
-          # with token auth inside GitHub Actions.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # Authenticates through npm trusted publishing: the job's GitHub OIDC
+        # token (id-token: write) is matched against the trusted publisher
+        # configured on npmjs.com for this repository and workflow file. No
+        # registry token is stored anywhere.
         run: npm publish --provenance --access public
