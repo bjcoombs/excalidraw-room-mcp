@@ -24,6 +24,7 @@ export type ExcalidrawElement = ElementLike & {
   endBinding?: Binding | null;
   strokeColor?: string;
   backgroundColor?: string;
+  link?: string | null;
 };
 
 export interface Binding {
@@ -54,6 +55,8 @@ export interface ElementSpec {
   start?: string;
   /** Element id an arrow or line ends at. */
   end?: string;
+  /** URL the element links to. Renders a link icon on the canvas; null when absent. */
+  link?: string;
   strokeColor?: string;
   backgroundColor?: string;
   strokeWidth?: number;
@@ -100,6 +103,7 @@ interface BaseInit {
   fillStyle?: string;
   roughness?: number;
   opacity?: number;
+  link?: string | null;
 }
 
 function base(type: string, init: BaseInit): ExcalidrawElement {
@@ -128,7 +132,7 @@ function base(type: string, init: BaseInit): ExcalidrawElement {
     isDeleted: false,
     boundElements: null,
     updated: Date.now(),
-    link: null,
+    link: init.link ?? null,
     locked: false,
   };
 }
@@ -255,6 +259,7 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
             fillStyle: spec.fillStyle,
             roughness: spec.roughness,
             opacity: spec.opacity,
+            link: spec.link,
           }),
           roundness: spec.rounded === false || spec.type !== "rectangle" ? null : { type: 3 },
         };
@@ -285,6 +290,7 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
             fontSize: spec.fontSize,
             strokeColor: spec.strokeColor,
             opacity: spec.opacity,
+            link: spec.link,
           }),
         );
         break;
@@ -329,6 +335,7 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
             strokeStyle: spec.strokeStyle,
             roughness: spec.roughness,
             opacity: spec.opacity,
+            link: spec.link,
           }),
           roundness: { type: 2 },
           points: rel,
@@ -382,6 +389,7 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
             strokeWidth: spec.strokeWidth,
             roughness: spec.roughness,
             opacity: spec.opacity,
+            link: spec.link,
           }),
           points: rel,
           pressures: [],
