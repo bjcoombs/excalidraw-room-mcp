@@ -33,6 +33,7 @@ node dist/index.js install-agent [--global] [--force]  # CLI mode: copy agents/c
 - **Handled mentions are keyed by (id, version)**, held in memory in `src/index.ts` and reset on join. Acknowledging bumps the version, so record the post-bump version or the acknowledgement itself reads as a new mention.
 - **Every local mutation must bump `version` and refresh `versionNonce`** (use `bump()` in `src/elements.ts`), or peers discard the change.
 - **Firestore writes are conditional** on the document update time. Keep `persist()`'s reload-reconcile-retry; an unconditional PATCH silently drops a peer's edit.
+- **The Firebase project id and API key in `src/firebase.ts` are not a leaked secret.** They are excalidraw.com's public web client configuration, copied from upstream `.env.production`; a Firebase web API key identifies the project and grants nothing, and the scene is ciphertext without the room key. Override them with `EXCALIDRAW_FIREBASE_PROJECT` and `EXCALIDRAW_FIREBASE_API_KEY` rather than editing or removing the defaults.
 - **ESM imports need the `.js` suffix** even in `.ts` files (`moduleResolution: NodeNext`).
 - **Element ids are immutable and unique.** `add_elements` rejects known or repeated ids; `update_elements` preserves the id.
 
