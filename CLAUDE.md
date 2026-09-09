@@ -8,7 +8,7 @@ MCP server (stdio) that joins an excalidraw.com live-collaboration room as a hea
 npm run lint        # eslint flat config: the CLAUDE.md contracts, enforced
 npm test            # tsc build, then node --test over dist/*.test.js
 npm run test:coverage   # same, plus lcov at coverage/lcov.info
-npm run mutate      # stryker over crypto/reconcile/elements (builds first, ~2 min; weekly in CI)
+npm run mutate      # stryker over crypto/reconcile/elements via tsx, no build (~70s cold; weekly in CI)
 npm run e2e -- "<collab link>" [seconds]   # manual: joins a real room, needs a browser peer
 npm run e2e:show-room -- "<collab link>"   # manual: joins, prints the show_room payload, exits
 npm run build:view  # just the in-chat view: view/ -> dist/view/canvas.html
