@@ -10,11 +10,17 @@ body,
   margin: 0;
 }
 
+/*
+ * 560 px is what the view asks the host for through sendSizeChanged. A host that
+ * ignores the hint gets the same floor here, so a 1200x700 scene is never
+ * letterboxed into a strip.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/31
+ */
 .room {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 420px;
+  min-height: 560px;
 }
 
 .room-header {
@@ -102,4 +108,40 @@ body,
 
 .read-only {
   margin-top: 12px;
+}
+
+/*
+ * The status line is diagnostics, not chrome: small, quiet, and one line, so it
+ * costs the canvas as little height as possible while still answering "is this
+ * thing refreshing?" without dev tools.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/30
+ */
+.room-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  opacity: 0.75;
+  border-top: 1px solid rgba(128, 128, 128, 0.3);
+  flex-wrap: wrap;
+}
+
+.room-status .sep {
+  opacity: 0.5;
+}
+
+.room-status .refresh {
+  font: inherit;
+  padding: 1px 8px;
+  cursor: pointer;
+  border: 1px solid rgba(128, 128, 128, 0.5);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+
+.room-status .status-error {
+  color: #e03131;
+  margin-left: auto;
 }

@@ -18,5 +18,5 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["view/src/payload.ts", "view/src/payload.test.ts"]
+  "include": ["view/src/payload.ts", "view/src/payload.test.ts", "view/src/bounds.ts"]
 }
