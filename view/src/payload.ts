@@ -36,25 +36,19 @@ export function roomLink(link: string | null): string | null {
 
 interface ToolResultLike {
   content?: { type?: string; text?: string }[];
+  structuredContent?: unknown;
   isError?: boolean;
 }
 
 /**
- * A show_room result carries one text item holding the JSON payload. Before a
- * join it carries the plain-text refusal instead, which is not JSON: that reads
- * as "no payload yet", not as a crash.
+ * The payload as this view needs it, or null when the value is not one. Every
+ * field is defaulted rather than trusted: the object crosses a postMessage
+ * boundary from a host, and a missing elements array is the one thing the
+ * caller cannot paper over.
  */
-export function parsePayload(result: ToolResultLike | undefined): ShowRoomPayload | null {
-  const text = result?.content?.find((c) => c.type === "text")?.text;
-  if (!text) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object") return null;
-  const p = parsed as Partial<ShowRoomPayload>;
+function coerce(value: unknown): ShowRoomPayload | null {
+  if (!value || typeof value !== "object") return null;
+  const p = value as Partial<ShowRoomPayload>;
   if (!Array.isArray(p.elements)) return null;
   return {
     link: typeof p.link === "string" ? p.link : null,
@@ -63,6 +57,30 @@ export function parsePayload(result: ToolResultLike | undefined): ShowRoomPayloa
     elements: p.elements,
     mentions: Array.isArray(p.mentions) ? p.mentions : [],
   };
+}
+
+/** The JSON payload a caller asked for as text (show_room's include: "json"). */
+function fromText(result: ToolResultLike | undefined): ShowRoomPayload | null {
+  const text = result?.content?.find((c) => c.type === "text")?.text;
+  if (!text) return null;
+  try {
+    return coerce(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A show_room result carries the payload in `structuredContent`; its text is a
+ * short summary the model reads, not JSON. Read the structured channel first
+ * and fall back to the text, which still holds the payload when a caller passed
+ * include: "json" and is how a host that drops structured content keeps working.
+ *
+ * Before a join the text is the plain-text refusal, which is not JSON and
+ * carries no structured content: that reads as "no payload yet", not a crash.
+ */
+export function parsePayload(result: ToolResultLike | undefined): ShowRoomPayload | null {
+  return coerce(result?.structuredContent) ?? fromText(result);
 }
 
 /**

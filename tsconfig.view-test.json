@@ -1,0 +1,22 @@
+{
+  // The view is a Vite bundle for the browser and `npm test` runs Node, so the
+  // view's pure modules are compiled a second time here - to CommonJS-free
+  // NodeNext under dist/view-test/ - and their tests run alongside the
+  // server's. Only modules with no DOM or React dependency belong in `include`;
+  // anything that touches the Excalidraw component cannot run under Node.
+  // .mcpbignore and scripts/check-bundle.sh keep this output out of the bundle.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023", "DOM"],
+    "outDir": "dist/view-test",
+    "rootDir": "view/src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["view/src/payload.ts", "view/src/payload.test.ts"]
+}

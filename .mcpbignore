@@ -29,3 +29,7 @@ CLAUDE.md
 *.mcpb
 dist/*.test.js
 dist/e2e.js
+# The second, Node-targeted compile of the view's pure modules, built by
+# `npm test` only so those tests can run outside the browser. The bundle needs
+# dist/view/canvas.html, not this.
+/dist/view-test/

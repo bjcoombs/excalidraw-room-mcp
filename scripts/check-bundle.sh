@@ -31,6 +31,7 @@ forbidden_prefixes=(
   .assess/
   .claude/
   .stryker-tmp/
+  dist/view-test/
 )
 
 bundle=${1:-}
