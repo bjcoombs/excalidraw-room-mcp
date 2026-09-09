@@ -259,7 +259,7 @@ server.registerTool(
   "add_raw_elements",
   {
     description:
-      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent.",
+      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent. Hosts cap tool-argument size, so keep each call's arguments under the limit in README Limits (4 KB on Claude Desktop, 16 KB on Claude Code) and send a large scene as several batches; a later batch may reference ids from an earlier one.",
     inputSchema: { elements: z.array(z.record(z.unknown())).min(1) },
   },
   async ({ elements }) => {
