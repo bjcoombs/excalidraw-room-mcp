@@ -88,3 +88,31 @@ test("saveScene raises SceneConflictError on a failed precondition and a plain E
     stub.restore();
   }
 });
+
+test("the document URL follows EXCALIDRAW_FIREBASE_PROJECT and EXCALIDRAW_FIREBASE_API_KEY, defaulting to the upstream values", async () => {
+  const key = await generateRoomKey();
+  const before = {
+    project: process.env.EXCALIDRAW_FIREBASE_PROJECT,
+    apiKey: process.env.EXCALIDRAW_FIREBASE_API_KEY,
+  };
+  const stub = stubFetch(() => new Response("", { status: 404 }));
+  try {
+    delete process.env.EXCALIDRAW_FIREBASE_PROJECT;
+    delete process.env.EXCALIDRAW_FIREBASE_API_KEY;
+    await loadScene("room1", key);
+    assert.match(stub.calls[0].url.pathname, /\/projects\/excalidraw-room-persistence\/databases\//);
+    assert.equal(stub.calls[0].url.searchParams.get("key"), "AIzaSyAd15pYlMci_xIp9ko6wkEsDzAAA0Dn0RU");
+
+    process.env.EXCALIDRAW_FIREBASE_PROJECT = "self-hosted-scenes";
+    process.env.EXCALIDRAW_FIREBASE_API_KEY = "self-hosted-key";
+    await loadScene("room1", key);
+    assert.match(stub.calls[1].url.pathname, /\/projects\/self-hosted-scenes\/databases\//);
+    assert.equal(stub.calls[1].url.searchParams.get("key"), "self-hosted-key");
+  } finally {
+    stub.restore();
+    if (before.project === undefined) delete process.env.EXCALIDRAW_FIREBASE_PROJECT;
+    else process.env.EXCALIDRAW_FIREBASE_PROJECT = before.project;
+    if (before.apiKey === undefined) delete process.env.EXCALIDRAW_FIREBASE_API_KEY;
+    else process.env.EXCALIDRAW_FIREBASE_API_KEY = before.apiKey;
+  }
+});

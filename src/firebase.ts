@@ -1,9 +1,19 @@
 /**
  * Room persistence. excalidraw.com stores each room's scene, encrypted with
- * the room key, in a Firestore document at scenes/{roomId}. This is the same
- * public project and API key the web app ships in its bundle; the key only
- * identifies the project, it grants nothing. Without the room key the document
- * is ciphertext.
+ * the room key, in a Firestore document at scenes/{roomId}.
+ *
+ * DEFAULT_PROJECT and DEFAULT_API_KEY below are excalidraw.com's own public
+ * client configuration, copied verbatim from `VITE_APP_FIREBASE_CONFIG` in
+ * `.env.production` of github.com/excalidraw/excalidraw (commit
+ * 14d512f32136b376707ed2a3f5af90d6c262d461). A Firebase web API key is a
+ * project identifier that every visitor already receives in the web app's
+ * bundle, not a credential: it names the project the request goes to, and
+ * reading a scene still requires the room key, without which the document is
+ * ciphertext. Do not "fix" this value by removing it.
+ *
+ * A self-hosted deployment points at its own project with the
+ * EXCALIDRAW_FIREBASE_PROJECT and EXCALIDRAW_FIREBASE_API_KEY environment
+ * variables, read per request so nothing has to be set before import.
  *
  * Writes are conditional on the document's update time (or on it not existing
  * yet), so a stale client cannot overwrite a newer scene. On a conflict the
@@ -12,12 +22,14 @@
 import { decryptJson, encryptJson } from "./crypto.js";
 import type { ExcalidrawElement } from "./elements.js";
 
-const PROJECT = "excalidraw-room-persistence";
-const API_KEY = "AIzaSyAd15pYlMci_xIp9ko6wkEsDzAAA0Dn0RU";
+const DEFAULT_PROJECT = "excalidraw-room-persistence";
+const DEFAULT_API_KEY = "AIzaSyAd15pYlMci_xIp9ko6wkEsDzAAA0Dn0RU";
 
 function docUrl(roomId: string, params: Record<string, string> = {}): string {
-  const qs = new URLSearchParams({ key: API_KEY, ...params });
-  return `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/scenes/${roomId}?${qs}`;
+  const project = process.env.EXCALIDRAW_FIREBASE_PROJECT ?? DEFAULT_PROJECT;
+  const apiKey = process.env.EXCALIDRAW_FIREBASE_API_KEY ?? DEFAULT_API_KEY;
+  const qs = new URLSearchParams({ key: apiKey, ...params });
+  return `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents/scenes/${roomId}?${qs}`;
 }
 
 function toBase64(buf: ArrayBuffer | Uint8Array): string {
