@@ -14,8 +14,6 @@ It works because Excalidraw's collaboration protocol is open. The relay server (
 
 Requires Node 22 or newer. Nothing to clone or build.
 
-The npm package is pending its first publish, so the `npx` commands below do not resolve yet. Until it is published, install the `.mcpb` bundle from the [latest release](https://github.com/bjcoombs/excalidraw-room-mcp/releases/latest), or register a local build (see [Development](#development)).
-
 **Claude Code**
 
 ```bash
