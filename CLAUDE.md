@@ -12,6 +12,7 @@ npm run mutate      # stryker over crypto/reconcile/elements (slow, minutes)
 npm run e2e -- "<collab link>" [seconds]   # manual: joins a real room, needs a browser peer
 npm run e2e:show-room -- "<collab link>"   # manual: joins, prints the show_room payload, exits
 npm run build:view  # just the in-chat view: view/ -> dist/view/canvas.html
+npm run check:bundle   # packs a throwaway .mcpb and asserts its contents (needs network for npx mcpb)
 EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js  # run the server with diagnostics on stderr
 node dist/index.js install-agent [--global] [--force]  # CLI mode: copy agents/canvas-listener.md into .claude/agents/
 ```
@@ -19,6 +20,7 @@ node dist/index.js install-agent [--global] [--force]  # CLI mode: copy agents/c
 ## Layout
 
 - `view/` is a separate Vite build (React + `@excalidraw/excalidraw`) producing the single file `dist/view/canvas.html`, the MCP Apps resource the chat host renders. Its dependencies live in the root `package.json`; there is no nested lockfile. `src/view.ts` builds the `show_room` payload and serves that file.
+- `.mcpbignore` patterns are gitignore-style, so a pattern naming a directory that also exists under `dist/` must be anchored with a leading slash. `/view/` excludes the Vite sources; unanchored `view/` excluded `dist/view/canvas.html` too and shipped a bundle whose `show_room` resource 404s. `npm run check:bundle` (`scripts/check-bundle.sh`) is the guard, and the release workflow runs it on the artifact it is about to attach.
 - `src/instructions.ts` holds the `instructions` string sent at initialize and the listen tip appended to `create_room` and `join_room`. `agents/canvas-listener.md` is the Sonnet subagent that runs the listen loop; it is documented in README under Collaborating.
 - `src/room.ts` socket + scene state + `waitForMention`; `src/crypto.ts` AES-GCM; `src/reconcile.ts` merge rule; `src/elements.ts` builders + summariser; `src/mentions.ts` `@claude` detection and neighbourhood; `src/firebase.ts` persistence; `src/index.ts` MCP tool surface; `src/e2e.ts` manual driver.
 - Tests live beside the source as `*.test.ts` and run from `dist/`, so a test needs a build first. `npm test` does that.

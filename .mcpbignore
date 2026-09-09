@@ -1,15 +1,25 @@
 # The bundle ships the built server only: dist/, production node_modules,
 # manifest.json, README.md and LICENSE. Everything below is source, tooling or
 # generated reports that a client does not need to run the server.
-src/
-view/
-tests/
-.github/
-.assess/
-.claude/
-coverage/
-reports/
-.stryker-tmp/
+#
+# Anchor any pattern whose name also appears under dist/. These are
+# gitignore-style patterns, so an unanchored `view/` matches at every depth and
+# silently drops `dist/view/canvas.html` - the MCP Apps resource the server
+# reads at resources/read time, which makes the installed bundle broken rather
+# than merely smaller. `/view/` matches the source directory only.
+# `src/`, `tests/`, `coverage/`, `reports/` have no dist/ counterpart (tsc
+# flattens src/ into dist/ and the compiled tests are excluded by name below),
+# so they are safe unanchored - anchored anyway, to keep the rule one rule.
+/src/
+/view/
+/tests/
+/coverage/
+/reports/
+/.github/
+/.assess/
+/.claude/
+/.stryker-tmp/
+/scripts/
 tsconfig.json
 eslint.config.js
 stryker.config.json
