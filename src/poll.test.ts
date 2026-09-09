@@ -102,3 +102,13 @@ test("newlines in mention text collapse to one line", () => {
   const payload = buildPollPayload(state({ pending: [mention("n1", "@claude one\n  two\tthree")] }));
   assert.equal(payload.pendingMentions[0].text, "@claude one two three");
 });
+
+test("peer names are sacrificed before mention text", () => {
+  const peers = Array.from({ length: 6 }, (_, i) => ({ socketId: `sock-${i}`, username: `Collaborator number ${i}` }));
+  const note = "@claude move the queue box above the worker";
+  const payload = buildPollPayload(state({ status: status({ peers }), pending: [mention("n1", note)] }));
+  assert.equal(payload.pendingMentions[0].text, note);
+  assert.ok(payload.peers.length < 6);
+  assert.equal(payload.peerCount, 6);
+  assert.ok(pollText(payload).length <= POLL_TEXT_LIMIT);
+});

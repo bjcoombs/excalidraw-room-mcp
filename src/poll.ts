@@ -9,9 +9,9 @@
  *
  * The size bound is part of the contract, not a nicety - a probe an agent is
  * expected to call repeatedly must cost a fixed, small number of tokens. The
- * payload is therefore assembled at the largest detail level whose serialised
- * form fits POLL_TEXT_LIMIT: peer names go first, then mention text, then
- * entries drop out of the mention list. `peerCount` and `pendingCount` always
+ * payload is therefore assembled at the widest detail level whose serialised
+ * form fits POLL_TEXT_LIMIT, sacrificing peer names first, then mention text,
+ * then entries in the mention list. `peerCount` and `pendingCount` always
  * report the true totals, so a shortened list is visible rather than silent.
  */
 import type { Mention } from "./mentions.js";
@@ -38,16 +38,30 @@ export interface PollPayload {
   changedSince: boolean;
 }
 
-/** Detail levels, widest first: mention entries, then text length, then peer names. */
-const MENTION_CAPS = [10, 4, 2, 1, 0];
-const TEXT_BUDGETS = [60, 32, 16, 8, 0];
-const PEER_CAPS = [6, 2, 0];
-
 interface Detail {
   mentionCap: number;
   textBudget: number;
   peerCap: number;
 }
+
+/**
+ * Detail levels, widest first, each strictly narrower than the one before it:
+ * peer names go first, then mention text, then entries drop out of the mention
+ * list. The last level is the counters alone, which is always inside the bound.
+ */
+const DETAIL_LEVELS: Detail[] = [
+  { mentionCap: 10, textBudget: 60, peerCap: 6 },
+  { mentionCap: 10, textBudget: 60, peerCap: 2 },
+  { mentionCap: 10, textBudget: 60, peerCap: 0 },
+  { mentionCap: 10, textBudget: 32, peerCap: 0 },
+  { mentionCap: 10, textBudget: 16, peerCap: 0 },
+  { mentionCap: 10, textBudget: 8, peerCap: 0 },
+  { mentionCap: 10, textBudget: 0, peerCap: 0 },
+  { mentionCap: 4, textBudget: 0, peerCap: 0 },
+  { mentionCap: 2, textBudget: 0, peerCap: 0 },
+  { mentionCap: 1, textBudget: 0, peerCap: 0 },
+  { mentionCap: 0, textBudget: 0, peerCap: 0 },
+];
 
 function oneLine(s: string): string {
   return s.replace(/\s+/g, " ").trim();
@@ -85,15 +99,10 @@ export function pollText(payload: PollPayload): string {
  * mention entries, which is bounded by the counters alone.
  */
 export function buildPollPayload(state: PollState, sinceVersion?: number): PollPayload {
-  let narrowest = assemble(state, sinceVersion, { mentionCap: 0, textBudget: 0, peerCap: 0 });
-  for (const mentionCap of MENTION_CAPS) {
-    for (const textBudget of TEXT_BUDGETS) {
-      for (const peerCap of PEER_CAPS) {
-        const candidate = assemble(state, sinceVersion, { mentionCap, textBudget, peerCap });
-        if (pollText(candidate).length <= POLL_TEXT_LIMIT) return candidate;
-        narrowest = candidate;
-      }
-    }
+  const fallback = assemble(state, sinceVersion, DETAIL_LEVELS[DETAIL_LEVELS.length - 1]);
+  for (const detail of DETAIL_LEVELS) {
+    const candidate = assemble(state, sinceVersion, detail);
+    if (pollText(candidate).length <= POLL_TEXT_LIMIT) return candidate;
   }
-  return narrowest;
+  return fallback;
 }
