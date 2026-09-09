@@ -15,6 +15,14 @@ import { RoomClient } from "./room.js";
 import { selectElements, unknownIdsText } from "./scene.js";
 import { buildShowRoomPayload, CANVAS_RESOURCE_URI, NOT_IN_ROOM_TEXT, canvasHtmlUrl, registerCanvasResource } from "./view.js";
 
+// The `install-agent` subcommand copies the bundled canvas-listener subagent
+// into a .claude/agents directory and exits. With no argv the MCP server starts
+// exactly as before, and nothing but protocol frames reaches stdout.
+if (process.argv[2] === "install-agent") {
+  const { runInstallAgentCli } = await import("./install-agent.js");
+  process.exit(await runInstallAgentCli(process.argv.slice(3)));
+}
+
 const room = new RoomClient();
 /** Mentions already acted on, by element id -> version. Reset on join. */
 let handledMentions: HandledVersions = new Map();

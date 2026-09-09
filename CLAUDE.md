@@ -13,6 +13,7 @@ npm run e2e -- "<collab link>" [seconds]   # manual: joins a real room, needs a 
 npm run e2e:show-room -- "<collab link>"   # manual: joins, prints the show_room payload, exits
 npm run build:view  # just the in-chat view: view/ -> dist/view/canvas.html
 EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js  # run the server with diagnostics on stderr
+node dist/index.js install-agent [--global] [--force]  # CLI mode: copy agents/canvas-listener.md into .claude/agents/
 ```
 
 ## Layout
