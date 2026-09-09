@@ -14,6 +14,8 @@ It works because Excalidraw's collaboration protocol is open. The relay server (
 
 Requires Node 22 or newer. Nothing to clone or build.
 
+The npm package is pending its first publish, so the `npx` commands below do not resolve yet. Until it is published, install the `.mcpb` bundle from the [latest release](https://github.com/bjcoombs/excalidraw-room-mcp/releases/latest), or register a local build (see [Development](#development)).
+
 **Claude Code**
 
 ```bash
@@ -39,6 +41,8 @@ Download `excalidraw-room-mcp.mcpb` from the [latest release](https://github.com
 
 Run the same command, `npx -y excalidraw-room-mcp`, as the server command.
 
+The package also carries a listener subagent, installed with `npx -y excalidraw-room-mcp install-agent`. See [Lead and listener](#lead-and-listener).
+
 ## Use
 
 1. On excalidraw.com, click **Live collaboration**, then **Start session**, and copy the link. It looks like `https://excalidraw.com/#room=<id>,<key>`.
@@ -51,15 +55,19 @@ Or the other way round: ask the agent to create a room, and open the link it giv
 
 In a host that supports MCP Apps (Claude Desktop, claude.ai), joining or creating a room renders the drawing in the chat window. The view refreshes every two seconds while it is on screen, so a shape someone draws on excalidraw.com turns up in the chat without another prompt; it stops asking when the window is hidden. Pending `@claude` mentions are outlined on the canvas and listed in a strip beside it, and clear from both when the agent acknowledges them. Ask for `show_room` to bring the view back at any point.
 
-The view is read-only: it never writes to the room. Editing happens on excalidraw.com, and the header carries an **Open on excalidraw.com** link to the room. Hosts without MCP Apps support get the same text results as before.
+The viewport fits the drawing on the first paint and again whenever the scene's extent moves, so an element added off to one side does not land out of view; a scene that only changes within its existing bounds is repainted where the reader left it.
+
+A status line along the bottom carries a **Refresh** button and says when the last refresh landed, how many polls and repaints there have been, whether the window is visible, and the last error if there was one. In a host that does not proxy server tools there is no polling and **Refresh** is the only way to update the view; the status line says so rather than leaving a still frame unexplained.
+
+The view is read-only: it never writes to the room. Editing happens on excalidraw.com. The header shows the connection state, the peer count and the element count, and carries an **Open on excalidraw.com** link to the room. Hosts without MCP Apps support get the same text results as before.
 
 ### Talk to it on the canvas
 
-Type a text element containing `@claude` next to the thing you mean, for example `@claude add a cache between these`. The agent calls `wait_for_mention`, which blocks until such a text appears and has stopped changing, then returns the instruction together with the elements around it. When it has acted, `acknowledge_mention` turns the text grey and appends a check mark (or a short note, such as why it declined), so you can see on the canvas what has been dealt with. Edit the text again and it becomes pending again.
+Type a text element containing `@claude` next to the thing you mean, for example `@claude add a cache between these`. The agent calls `wait_for_mention`, which blocks until such a text appears and has stopped changing, then returns the instruction together with the elements around it.
 
-The moment a mention is returned the server marks it seen on the canvas itself - amber stroke and an hourglass - so you get an immediate "the note landed" without waiting for the agent to finish, and `acknowledge_mention` then replaces that marker with the check mark rather than adding a second suffix. Pass `autoSeen: false` to `wait_for_mention` or `list_mentions` to poll without touching the drawing.
+The moment a mention is returned the server marks it seen on the canvas itself - amber stroke and an hourglass - so you get an immediate "the note landed" without waiting for the agent to finish. Pass `autoSeen: false` to `wait_for_mention` or `list_mentions` to poll without touching the drawing.
 
-A loop that keeps an agent listening is just: `wait_for_mention` (up to 10 minutes per call), act, `acknowledge_mention`, repeat.
+When the agent has acted it calls `acknowledge_mention`, which removes the handled note from the canvas; the account of what it did goes in the chat reply. Where a note is kept instead, editing its text makes it pending again. [Collaborating](#collaborating) has the rest of the loop.
 
 ## Collaborating
 
@@ -132,6 +140,8 @@ Kp3... arrow 2 pts: (156,40) -> (324,40) from api to db "query"
 - **Encryption**: AES-128-GCM with the key from the link, matching `packages/excalidraw/data/encryption.ts` upstream. Implemented on Node's WebCrypto so the server does not depend on the browser-oriented `@excalidraw/excalidraw` package.
 - **Merging**: Excalidraw's reconcile rule, per element id: higher `version` wins, ties go to the lower `versionNonce`. Local edits bump both, exactly as the web app does, so peers accept them.
 - **Z-order**: fractional indices via the same `fractional-indexing` library upstream uses. New elements go on top.
+- **In-chat view**: `show_room` puts the summary in the result's text and the whole payload (link, connection state, peers, elements, mentions) in its structured content, and the MCP Apps view reads the payload from that channel rather than parsing the text; while it is visible the view calls `show_room` itself every two seconds.
+- **Neighbourhood**: "the elements around a mention" is measured box to box, not centre to centre - an element counts as nearby when the gap between its bounding box and the mention's is within the radius (250 canvas px by default) - so a note beside a wide diagram picks up the shapes next to it instead of the whole scene.
 - **Persistence**: excalidraw.com keeps each room's encrypted scene in a public Firestore document. On joining an empty room the server reads it. After every write it saves the reconciled scene back, conditional on the document's update time, so a stale copy never overwrites a newer one. On a conflict it reloads, reconciles, and retries once. If the save still fails, the change has already reached connected peers and their browsers persist it on their normal schedule.
 
 ## Limits
@@ -168,17 +178,23 @@ The Firebase project id and web API key in `src/firebase.ts` are excalidraw.com'
 git clone https://github.com/bjcoombs/excalidraw-room-mcp.git
 cd excalidraw-room-mcp
 npm install
-npm test          # build (server + view) + unit tests
+npm run build        # the server (tsc) and the in-chat view
+npm test             # build, build:view-test, then the unit tests
 npm run build:view   # just the in-chat view: view/ -> dist/view/canvas.html
+npm run check:bundle # pack a throwaway .mcpb and assert its contents (needs network for npx mcpb)
+npm run e2e -- "<collab link>"             # join a real room, seed elements, watch strokes arrive
 npm run e2e:show-room -- "<collab link>"   # join a real room and print the show_room payload
-EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js   # run with diagnostics on stderr
+node dist/index.js install-agent           # install the listener subagent from the clone
+EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js # run with diagnostics on stderr
 ```
 
 Register the local build with a client by pointing it at `dist/index.js` in the clone, for example `claude mcp add excalidraw-room-dev -- node "$PWD/dist/index.js"`.
 
 The in-chat view is a separate Vite build under `view/` (paths relative to the repo root). It bundles `@excalidraw/excalidraw` into the single file `dist/view/canvas.html`, which `src/view.ts` serves as the MCP Apps resource. The Node server itself never imports that package.
 
-Releases are tag-driven: pushing a `v*` tag runs `.github/workflows/release.yml`, which publishes to npm with a provenance attestation and attaches `excalidraw-room-mcp.mcpb` to the GitHub release. If the npm publish fails, re-run it for an existing tag with `gh workflow run release.yml -f ref=v0.4.0`, which skips the release job and publishes that tag from the current workflow file. The first publish authenticates with the `NPM_TOKEN` repository secret, because npm trusted publishing can only be attached to a package that already exists; once the trusted publisher is configured on npmjs.com the secret and its `env:` line can be removed and the job falls back to OIDC.
+Releases are tag-driven. Pushing a `v*` tag runs `.github/workflows/release.yml`, which creates the GitHub release with `excalidraw-room-mcp.mcpb` attached, and then, in a second job, publishes that tag to npm with a provenance attestation. The order is deliberate: the bundle is how a Claude Desktop user installs this server, so a failing publish cannot withhold it.
+
+Re-running the tag's workflow would re-run the workflow file as it was at the tag, so a failed publish is retried by dispatching the current file against the existing tag - `gh workflow run release.yml -f ref=v0.4.0` - which skips the release job and refuses to publish if that ref's `package.json` version does not match the tag. The first publish authenticates with the `NPM_TOKEN` repository secret, because npm trusted publishing can only be attached to a package that already exists; once the trusted publisher is configured on npmjs.com the secret and its `env:` line can be removed and the job falls back to OIDC.
 
 ## License
 
