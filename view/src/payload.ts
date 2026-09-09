@@ -35,6 +35,36 @@ export function roomLink(link: string | null): string | null {
 }
 
 /**
+ * What `show_room` answers when the process it reached has joined nothing.
+ * Mirrors NOT_IN_ROOM_TEXT in src/view.ts, which src/view.test.ts pins; the two
+ * builds share no module.
+ */
+export const NOT_IN_ROOM_TEXT = "Not in a room. Call create_room or join_room first.";
+
+/** Whether a result's text is the server's not-in-a-room refusal. */
+export function isNotInRoom(text: string | null): boolean {
+  return text !== null && text.trimStart().startsWith(NOT_IN_ROOM_TEXT);
+}
+
+/**
+ * The room link out of a `show_room` summary, whose first line is
+ * `room: <link>` (summariseShowRoom in src/view.ts). This is how the view
+ * learns the link at all in a host that routes its calls to a second server
+ * process: the seed is the model's summary, taken over the connection that is
+ * in the room, so it names the room even when the view's own polls cannot
+ * reach it. Anything that is not a collaboration link is rejected, so the
+ * value can only be handed back to the server as a room to join.
+ */
+export function linkFromSummary(text: string | null): string | null {
+  if (!text) return null;
+  for (const line of text.split("\n")) {
+    const match = /^\s*room:\s*(\S+)\s*$/.exec(line);
+    if (match) return roomLink(match[1]);
+  }
+  return null;
+}
+
+/**
  * An MCP `CallToolResult` as far as this view cares: a text `content` list and
  * a `structuredContent` object. Both `ontoolresult` and `callServerTool` are
  * typed to deliver exactly this, but the value that reaches the iframe is

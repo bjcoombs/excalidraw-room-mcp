@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { boundsChanged, sceneBounds } from "./bounds.js";
-import { envelopeShape, parsePayload, parseResult, resultText, roomLink, sceneSignature } from "./payload.js";
+import { envelopeShape, isNotInRoom, linkFromSummary, NOT_IN_ROOM_TEXT, parsePayload, parseResult, resultText, roomLink, sceneSignature } from "./payload.js";
 
 const LINK = "https://excalidraw.com/#room=0123456789abcdef0123,AbCdEfGhIjKlMnOpQrStUv";
 
@@ -225,4 +225,42 @@ test("sceneBounds grows for a mention highlight at the edge of the scene", () =>
   assert.deepEqual(withoutHighlight, { minX: 0, minY: 0, maxX: 1200, maxY: 925 });
   assert.deepEqual(withHighlight, { minX: -8, minY: 0, maxX: 1200, maxY: 933 }, "the highlight extends the box it is drawn around");
   assert.equal(boundsChanged(withoutHighlight, withHighlight), true, "measuring the wrong list would skip this refit");
+});
+
+// SUMMARY above is what summariseShowRoom writes and what the seed carries.
+// Its first line is the only thing naming the room in a host that routes the
+// view's own calls to a server process which has joined nothing.
+test("linkFromSummary reads the room link off the summary's first line", () => {
+  assert.equal(linkFromSummary(SUMMARY), LINK);
+});
+
+test("linkFromSummary tolerates the summary's trailing sections and blank lines", () => {
+  const withMentions = `${SUMMARY}\n\nmention note-1 v4 at (10,20):\n"@claude do a thing"\nnearby: none\n`;
+  assert.equal(linkFromSummary(withMentions), LINK);
+});
+
+test("linkFromSummary returns null for a summary with no room", () => {
+  assert.equal(linkFromSummary("room: -\nconnected: false"), null);
+  assert.equal(linkFromSummary(null), null);
+  assert.equal(linkFromSummary(NOT_IN_ROOM_TEXT), null);
+});
+
+test("linkFromSummary refuses anything that is not a collaboration link", () => {
+  // The value is handed straight back to the server as a room to join, so a
+  // room: line naming somewhere else must not become one.
+  assert.equal(linkFromSummary("room: https://evil.example/#room=abc,def"), null);
+  assert.equal(linkFromSummary("room: javascript:alert(1)"), null);
+});
+
+test("linkFromSummary reads the link out of a show_room result's text", () => {
+  const result = summaryResult();
+  assert.equal(linkFromSummary(resultText(result)), LINK);
+  assert.equal(parsePayload(result), null, "a summary is not a payload");
+});
+
+test("isNotInRoom recognises the refusal and nothing else", () => {
+  assert.equal(isNotInRoom(NOT_IN_ROOM_TEXT), true);
+  assert.equal(isNotInRoom(`${NOT_IN_ROOM_TEXT}\nlink not joined: relay connection failed`), true);
+  assert.equal(isNotInRoom(SUMMARY), false);
+  assert.equal(isNotInRoom(null), false);
 });
