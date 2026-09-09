@@ -16,12 +16,21 @@ required=(
   dist/view/canvas.html
 )
 
-# Path prefixes that must not appear at the root of the bundle. Anchored: a
-# bundled dependency is free to carry its own src/ or view/ directory.
+# Path prefixes that must not appear at the root of the bundle - one per
+# directory .mcpbignore excludes, so an ignore-rule regression fails here rather
+# than shipping. Anchored to the start of the entry name: a bundled dependency
+# is free to carry its own src/ or view/ directory.
 forbidden_prefixes=(
   src/
   view/
   tests/
+  coverage/
+  reports/
+  scripts/
+  .github/
+  .assess/
+  .claude/
+  .stryker-tmp/
 )
 
 bundle=${1:-}
@@ -51,7 +60,9 @@ for path in "${required[@]}"; do
 done
 
 for prefix in "${forbidden_prefixes[@]}"; do
-  if matches=$(grep -E "^${prefix}" <<<"$entries"); then
+  # Escape the dots so `.github/` cannot also match `xgithub/`.
+  pattern="^$(sed 's/\./\\./g' <<<"$prefix")"
+  if matches=$(grep -E "$pattern" <<<"$entries"); then
     echo "PRESENT  ${prefix} should not be in the bundle:" >&2
     sed 's/^/         /' <<<"$matches" >&2
     failed=1
