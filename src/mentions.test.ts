@@ -135,7 +135,6 @@ test("seen then acknowledged leaves exactly one status suffix", () => {
   const noted = markAcknowledged(seen, { note: "declined: ambiguous" });
   assert.equal(noted.text, `${original} declined: ambiguous`);
   assert.ok(!hasSeenMarker(noted.text));
-
 });
 
 test("acknowledging by default removes the note, and the removed note never re-surfaces", () => {

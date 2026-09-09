@@ -414,8 +414,13 @@ server.registerTool(
     // A note or an explicit keep leaves the element in place; otherwise the
     // handled note goes. Either way the post-bump version is recorded, so our
     // own edit never reads back as a new mention.
-    const kept = note !== undefined || keep;
-    const updated = kept ? markAcknowledged(current, { note }) : markRemoved(current);
+    // An empty or blank note is no note: keeping it would leave a trailing
+    // space as the whole status, which reads as a bug on the canvas. It falls
+    // through to the default instead, so the note is removed unless keep says
+    // otherwise.
+    const status = note?.trim() || undefined;
+    const kept = status !== undefined || keep;
+    const updated = kept ? markAcknowledged(current, { note: status }) : markRemoved(current);
     const result = await room.commit([updated]);
     handledMentions.set(id, updated.version);
     const what = kept ? `acknowledged ${id}` : `acknowledged and removed ${id} from the canvas`;
