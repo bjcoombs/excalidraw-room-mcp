@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
-import { MENTION_SCOPE_RULE } from "./mentions.js";
+import { MENTION_SCOPE_RULE, STATE_REQUESTS_LINE } from "./mentions.js";
 
 test("instructions name the listen loop and both of its tools", () => {
   assert.match(SERVER_INSTRUCTIONS, /wait_for_mention/);
@@ -39,6 +39,20 @@ test("instructions tell the agent to snapshot hand-drawn content and to check a 
   );
   assert.ok(
     sentences.some((s) => /snapshot_scene/.test(s) && /overlap/.test(s)),
+    SERVER_INSTRUCTIONS,
+  );
+});
+
+test("instructions tell the model to state each mention's request before it draws", () => {
+  assert.ok(SERVER_INSTRUCTIONS.includes(STATE_REQUESTS_LINE), SERVER_INSTRUCTIONS);
+  assert.equal(
+    STATE_REQUESTS_LINE,
+    "Before changing anything, say in one line per mention what it asks and what you will draw.",
+  );
+  // It has to arrive before the acting: the model reads these once, at
+  // initialize, and the line is worth nothing after the first element lands.
+  assert.ok(
+    SERVER_INSTRUCTIONS.indexOf(STATE_REQUESTS_LINE) < SERVER_INSTRUCTIONS.indexOf("Say what you did in chat"),
     SERVER_INSTRUCTIONS,
   );
 });

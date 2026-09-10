@@ -43,9 +43,11 @@ import {
   stripStatus,
   seenText,
   MENTION_SCOPE_RULE,
+  STATE_REQUESTS_LINE,
   UNTRUSTED_CLOSE,
   UNTRUSTED_OPEN,
   untrustedBlock,
+  withRequestPreamble,
   withScopeRule,
   type HandledVersions,
   type Mention,
@@ -549,6 +551,24 @@ test("mention text is wrapped in the untrusted block and followed by the rule in
 
   const polled = pollText(buildPollPayload({ status: pollStatus(), pending: [note] }));
   assertWrapped(polled, words);
+});
+
+test("a mention result opens with the line that states each request", () => {
+  const body = withScopeRule(formatMention(pending("n1", "@claude add a box here"), []));
+  const out = withRequestPreamble(body);
+
+  // The line is first, on its own, with a blank line before the first mention
+  // block: an instruction that arrives after a stranger\'s text has already
+  // been read is an instruction about what to do next, not what to do first.
+  const lines = out.split("\n");
+  assert.equal(lines[0], "Before changing anything, say in one line per mention what it asks and what you will draw.");
+  assert.equal(lines[0], STATE_REQUESTS_LINE);
+  assert.equal(lines[1], "");
+  assert.match(lines[2], /^mention n1 v3 /);
+  // Nothing else moved: the body is intact and the rule still ends it.
+  assert.equal(out, `${STATE_REQUESTS_LINE}\n\n${body}`);
+  assert.ok(out.endsWith(MENTION_SCOPE_RULE), out);
+  assert.equal(out.split(STATE_REQUESTS_LINE).length - 1, 1, "the line is stated once");
 });
 
 test("a note that types the closing marker cannot end the block early", () => {
