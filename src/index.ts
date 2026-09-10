@@ -29,6 +29,7 @@ import {
   previousLine,
   replySchema,
   statusSchema,
+  withRequestPreamble,
   withScopeRule,
   type HandledVersions,
   type Mention,
@@ -534,7 +535,7 @@ server.registerTool(
       previous: previousLineFor(mention.id, elements),
     });
     if (autoSeen) await commitSeen(mention);
-    return text(withScopeRule(out));
+    return text(withRequestPreamble(withScopeRule(out)));
   },
 );
 
@@ -573,7 +574,7 @@ server.registerTool(
     if (autoSeen) {
       for (const m of pending) await commitSeen(m);
     }
-    return text(withScopeRule(out));
+    return text(withRequestPreamble(withScopeRule(out)));
   },
 );
 

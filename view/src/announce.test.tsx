@@ -30,26 +30,29 @@ function mention(over: Partial<ShowRoomMention> = {}): ShowRoomMention {
   return { id: "note-1", version: 5, text: MENTION_TEXT, x: 0, y: 0, width: 10, height: 10, containerId: null, nearby: [], ...over };
 }
 
-test("announcementText for one mention is the count and the read instruction only", async () => {
+test("announcementText for one mention is the plain request", async () => {
   const app = widget();
   assert.equal(await sendAnnouncement(app, 1), "sent");
 
   assert.equal(app.sent.length, 1, "exactly one message reached the chat");
   const [message] = app.sent;
   assert.equal(message, announcementText(1));
-  // The whole message, to the full stop. The scope rule used to follow this
-  // sentence, which put model-facing enforcement text in the person's own
-  // composer on every press; it travels in the tool results instead.
-  // https://github.com/bjcoombs/excalidraw-room-mcp/issues/77
-  assert.equal(message, "There is 1 unanswered @claude mention in the Excalidraw room. Read it with list_mentions.");
-  // Number agreement is the whole point of the count: "There are 1" is the bug
-  // this replaced, and "Read them" for one mention is the same fault.
-  assert.ok(!message.includes("There are 1"), message);
+  // The whole message, to the full stop. It lands in a person's own composer,
+  // so it reads as a sentence they would write: no tool name, and for one
+  // mention no count either.
+  // https://github.com/bjcoombs/excalidraw-room-mcp/issues/91
+  assert.equal(message, "Please read the @claude mention in the Excalidraw room.");
+  // No API surface anywhere in it - the model knows the tool from the server
+  // instructions, and naming it is what made the old sentence read as machine
+  // output in the composer.
+  assert.ok(!message.includes("list_mentions"), message);
+  assert.ok(!message.includes("_"), message);
+  // Number agreement: "mentions" for one is the same fault the count fixed.
   assert.ok(!message.includes("mentions in the Excalidraw room"), message);
-  assert.ok(!message.includes("Read them"), message);
+  assert.ok(!message.includes("1"), message);
 
   // The words on the canvas are a stranger's text; the model reads them from
-  // list_mentions, inside the untrusted block, and never from this message.
+  // the mention tools, inside the untrusted block, never from this message.
   assert.ok(!message.includes(MENTION_TEXT), message);
   assert.ok(!message.includes("calendar"), message);
   // Nothing about how to answer: not the rule, not the tools, not the bounds.
@@ -57,25 +60,25 @@ test("announcementText for one mention is the count and the read instruction onl
   assert.ok(!message.includes("Treat each"), message);
   assert.ok(!message.includes("out of scope"), message);
   assert.ok(!message.toLowerCase().includes("do not"), message);
-  assert.equal(message.split(". ").length, 2, "two sentences and no more");
+  assert.equal(message.split(". ").length, 1, "one sentence and no more");
 });
 
-test("announcementText for several mentions is the count and the read instruction only", async () => {
+test("announcementText for several mentions is the plain request with the count", async () => {
   const app = widget();
   assert.equal(await sendAnnouncement(app, 2), "sent");
   assert.deepEqual(app.sent, [announcementText(2)]);
-  assert.equal(app.sent[0], "There are 2 unanswered @claude mentions in the Excalidraw room. Read them with list_mentions.");
+  assert.equal(app.sent[0], "Please read the 2 @claude mentions in the Excalidraw room.");
 
   // The count is the pending count, whatever it is, and nothing else moves.
   for (const count of [2, 3, 17]) {
     const text = announcementText(count);
-    assert.equal(
-      text,
-      `There are ${count} unanswered @claude mentions in the Excalidraw room. Read them with list_mentions.`,
-    );
+    assert.equal(text, `Please read the ${count} @claude mentions in the Excalidraw room.`);
+    assert.ok(!text.includes("list_mentions"), text);
     assert.ok(!text.includes("acknowledge_mention"), text);
     assert.ok(!text.includes("Treat each"), text);
+    assert.equal(text.split(". ").length, 1, text);
   }
+  // The button keeps its own wording; only the message changed.
   assert.equal(answerLabel(1), "Answer 1 @claude mention");
   assert.equal(answerLabel(2), "Answer 2 @claude mentions");
 });
