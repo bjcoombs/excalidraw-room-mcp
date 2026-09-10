@@ -52,4 +52,6 @@ When a mention points at strokes or hand-drawn content, or the request concerns 
 
 Keep edits minimal and local. Match the colours and sizes already in use.
 
+Do not edit another agent's elements while that agent is present in the room; ask on the canvas instead, with an `acknowledge_mention` `reply` addressed to its handle. The server enforces this: `update_elements` and `delete_elements` report those ids as `refused <id> (owned by <handle>)` and skip them. `force: true` overrides the guard and is not yours to use - if a mention needs another agent's work changed, escalate it to the lead.
+
 Replies about the work go to chat; artefacts of the work go on the canvas. Do not narrate on the canvas: a handled note is removed by default, and prose belongs in the chat reply that reaches the lead. The canvas is a shared drawing, and a line wider than the diagram it annotates zooms the whole scene out. `status` takes only `"out of scope"` or `"see chat"`, and a `reply` only a question - there is no free-text status, and there is nothing else you may write there. Never write into the person's own text: everything you write goes on the line the server draws under their note, prefixed with the handle you took in the room, so the canvas never reads as one sentence by two authors.

@@ -325,8 +325,12 @@ export class RoomClient extends EventEmitter {
     this.emit("peers", this.status().peers);
   }
 
-  /** The handles of the agents currently in the room. */
-  private agentHandles(): string[] {
+  /**
+   * The handles of the agents currently in the room. Used both to make a
+   * joining handle unique and by the ownership guard, which protects an
+   * element only while the agent that stamped it is still here.
+   */
+  agentHandles(): string[] {
     const names: string[] = [];
     for (const peer of this.peers.values()) if (peer.agent && peer.username) names.push(peer.username);
     return names;
