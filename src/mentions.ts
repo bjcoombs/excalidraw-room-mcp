@@ -15,6 +15,7 @@
  */
 import { z } from "zod";
 import {
+  AGENT_AUTHOR_KIND,
   buildElements,
   bump,
   elementAuthor,
@@ -28,6 +29,7 @@ import {
   type ExcalidrawElement,
   type SummaryReasons,
 } from "./elements.js";
+import { isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
 
 export const DEFAULT_TAG = "@claude";
 
@@ -94,19 +96,156 @@ export function isAgentAuthored(mention: Mention, handle?: string | null): boole
 }
 
 /**
+ * Where a chain of replies started, and how far it has run.
+ *
+ * A reply addressed to the agent that wrote the mention is itself a mention for
+ * that agent, so two agents with `answerAgentMentions` on answer each other's
+ * answers forever unless something counts the hops. These two keys are that
+ * count, written into `customData` beside the back reference: the kind of
+ * writer the chain's first note came from, carried down unchanged, and the
+ * number of agent replies since it. A note nobody replied to is depth 0.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/84
+ */
+export const ROOT_AUTHOR_KIND_CUSTOM_DATA_KEY = "excalidrawRoomRootAuthorKind";
+export const DEPTH_CUSTOM_DATA_KEY = "excalidrawRoomDepth";
+
+/** Who the chain started with: a person in a browser, or an agent. */
+export type RootAuthorKind = typeof PERSON_AUTHOR | typeof AGENT_AUTHOR_KIND;
+
+export interface ChainOrigin {
+  rootAuthorKind: RootAuthorKind;
+  depth: number;
+}
+
+/**
+ * The chain an element belongs to, as the room records it.
+ *
+ * The two keys arrive from peers unsanitised, so each is read defensively and
+ * falls back to what the element itself says: an unstamped note is a person's,
+ * a stamped one is an agent's, and a note carrying no depth is the root of its
+ * own chain. That fallback is what makes an ordinary note written in a browser
+ * the depth-0 root it is.
+ *
+ * One exception, and it is the whole reason the fallback is not simply 0: an
+ * element carrying the back reference is by construction an answer to something
+ * else, so it is at least one hop from a root however it was written. Reading
+ * it as 0 would let a peer that writes the back reference without the depth
+ * restart the count at every hop, and a mixed pair of implementations could
+ * then trade replies forever. Missing metadata is read the bounded way in both
+ * fields: such a line counts as a hop, and an agent wrote it.
+ */
+export function chainOf(el: ExcalidrawElement): ChainOrigin {
+  const data = el.customData as Record<string, unknown> | undefined;
+  const kind = data?.[ROOT_AUTHOR_KIND_CUSTOM_DATA_KEY];
+  const depth = data?.[DEPTH_CUSTOM_DATA_KEY];
+  const answersSomething = typeof data?.[REPLY_CUSTOM_DATA_KEY] === "string";
+  return {
+    rootAuthorKind:
+      kind === PERSON_AUTHOR || kind === AGENT_AUTHOR_KIND
+        ? kind
+        : elementAuthor(el) === null
+          ? PERSON_AUTHOR
+          : AGENT_AUTHOR_KIND,
+    depth:
+      typeof depth === "number" && Number.isInteger(depth)
+        ? Math.max(0, depth)
+        : answersSomething
+          ? 1
+          : 0,
+  };
+}
+
+/** The chain a reply to that element belongs to: same root, one hop further. */
+export function nextChain(origin: ChainOrigin): ChainOrigin {
+  return { rootAuthorKind: origin.rootAuthorKind, depth: origin.depth + 1 };
+}
+
+/** The chain as an element carries it, for merging into `customData`. */
+export function chainCustomData(origin: ChainOrigin): Record<string, unknown> {
+  return {
+    [ROOT_AUTHOR_KIND_CUSTOM_DATA_KEY]: origin.rootAuthorKind,
+    [DEPTH_CUSTOM_DATA_KEY]: origin.depth,
+  };
+}
+
+/**
+ * How many agent replies deep an agent-rooted chain may run before this agent
+ * stops hearing it. One hop by default: an agent may answer another agent once,
+ * and the conversation goes on only if a person writes again. Zero means an
+ * agent never answers an agent-rooted chain, with the flag on or off.
+ */
+export const MIN_AGENT_REPLY_DEPTH = 0;
+export const MAX_AGENT_REPLY_DEPTH = 5;
+export const DEFAULT_AGENT_REPLY_DEPTH = 1;
+
+/** Whether a value is a depth this room can be given. */
+export function isAgentReplyDepth(value: unknown): boolean {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= MIN_AGENT_REPLY_DEPTH &&
+    value <= MAX_AGENT_REPLY_DEPTH
+  );
+}
+
+/** Why a depth was refused. Names the argument, because the caller reads it. */
+export const AGENT_REPLY_DEPTH_RANGE_TEXT =
+  `agentReplyDepth must be a whole number from ${MIN_AGENT_REPLY_DEPTH} to ${MAX_AGENT_REPLY_DEPTH}: ` +
+  "it is how many agent replies deep an agent-rooted chain may run before this agent stops hearing it.";
+
+/**
+ * The refusal for a depth outside the range, or null. Checked here as well as
+ * by the schema: a host that forwards arguments unvalidated must not get a
+ * room whose bound is a fraction or a thousand.
+ */
+export function agentReplyDepthRefusal(depth: number | undefined): string | null {
+  return depth === undefined || isAgentReplyDepth(depth) ? null : AGENT_REPLY_DEPTH_RANGE_TEXT;
+}
+
+/** The bound as the tool declares it, which is where a host validates it. */
+export const agentReplyDepthSchema = z
+  .number()
+  .int({ message: AGENT_REPLY_DEPTH_RANGE_TEXT })
+  .min(MIN_AGENT_REPLY_DEPTH, { message: AGENT_REPLY_DEPTH_RANGE_TEXT })
+  .max(MAX_AGENT_REPLY_DEPTH, { message: AGENT_REPLY_DEPTH_RANGE_TEXT })
+  .optional();
+
+/** The bound as room_status prints it. */
+export function agentReplyDepthLine(depth: number): string {
+  return `agentReplyDepth: ${depth}`;
+}
+
+/**
+ * Whether a mention is still inside the room's bound.
+ *
+ * A chain a person started is never bounded: they are in the room watching it,
+ * and cutting their thread off mid-answer is the bug rather than the feature.
+ * A chain an agent started runs while its depth is strictly below the bound, so
+ * the default of 1 lets exactly one agent reply be heard.
+ */
+export function withinReplyDepth(mention: Mention, agentReplyDepth: number = DEFAULT_AGENT_REPLY_DEPTH): boolean {
+  return mention.rootAuthorKind !== AGENT_AUTHOR_KIND || mention.depth < agentReplyDepth;
+}
+
+/**
  * The mentions an agent should act on. Agent-authored notes are dropped unless
  * the caller opted in: two agents listening in one room would otherwise answer
  * each other's requests and each other's answers, and nothing in the text of a
  * note says which of the two wrote it. Opting in returns them all, each still
  * carrying the `from:` line that names the author.
+ *
+ * The room's bound is applied either way, because opting in is what makes an
+ * agent-to-agent chain possible at all and the bound is what ends it.
  */
 export function visibleMentions(
   mentions: readonly Mention[],
   handle?: string | null,
   answerAgentMentions: boolean = false,
+  agentReplyDepth: number = DEFAULT_AGENT_REPLY_DEPTH,
 ): Mention[] {
-  if (answerAgentMentions) return [...mentions];
-  return mentions.filter((m) => !isAgentAuthored(m, handle));
+  const bounded = mentions.filter((m) => withinReplyDepth(m, agentReplyDepth));
+  if (answerAgentMentions) return bounded;
+  return bounded.filter((m) => !isAgentAuthored(m, handle));
 }
 
 /**
@@ -256,6 +395,33 @@ export function replyTagText(tag: string | readonly string[] = DEFAULT_TAG): str
 }
 
 /**
+ * Whether an address is one this agent answers to. A reply tagged with our own
+ * handle, or with the broadcast tag, comes straight back as a mention of our
+ * own - which is the loop the whole of this is here to end.
+ */
+export function addressesSelf(to: string, tag: string | readonly string[] = DEFAULT_TAG): boolean {
+  const tags = typeof tag === "string" ? [tag] : tag;
+  const address = handleTag(to).toLowerCase();
+  return tags.some((one) => one.toLowerCase() === address);
+}
+
+/** Why a `replyTo` was refused, in words the caller can act on. Each names it. */
+export const REPLY_TO_WITHOUT_REPLY_TEXT =
+  "replyTo belongs to a reply: it is the handle your question is addressed to, so pass it with reply or not at all.";
+export function replyToInvalidText(replyTo: string): string {
+  return (
+    `invalid replyTo ${JSON.stringify(replyTo)}: it is the handle to address the question to, ` +
+    `1 to ${MAX_HANDLE_LENGTH} characters of lowercase letters, digits and hyphens.`
+  );
+}
+export function replyToSelfText(replyTo: string): string {
+  return (
+    `replyTo ${JSON.stringify(replyTo)} is an address this agent answers to: the question would come back as a ` +
+    "mention of its own. Address it to the agent you are answering, or omit replyTo for the mention's author."
+  );
+}
+
+/**
  * How long an answer may be. An answer is a glance, not a document: the
  * question stays on the canvas as its heading and the line under it is read at
  * whatever zoom the diagram is drawn at, so two sentences is the shape. 400
@@ -310,9 +476,19 @@ export function attributedStatusText(status: MentionStatus, handle?: string | nu
   return `${attributionPrefix(handle)}${status}`;
 }
 
-/** The attributed line for a question: the attributed question, then the fixed prompt. */
-export function attributedReplyText(reply: string, handle?: string | null): string {
-  return `${attributionPrefix(handle)}${reply.trim()}\n${REPLY_PROMPT_LINE}`;
+/**
+ * The attributed line for a question: the attributed question, addressed to
+ * whoever has to answer it, then the fixed prompt.
+ *
+ * The address is what makes a reply reach another agent at all. A question
+ * written under an agent's note is invisible to it - it answers the tags it
+ * listens on and nothing else - so a reply to an agent carries `@<handle>` and
+ * is itself a mention for that agent. A reply to a person carries no tag: they
+ * are looking at the canvas, and a tag addressed to a person is noise.
+ */
+export function attributedReplyText(reply: string, handle?: string | null, to?: string | null): string {
+  const address = to ? `${handleTag(to)} ` : "";
+  return `${attributionPrefix(handle)}${address}${reply.trim()}\n${REPLY_PROMPT_LINE}`;
 }
 
 /** What the server last wrote under a mention, and which of the three it was. */
@@ -373,6 +549,12 @@ export interface AttributedLineOptions {
   link?: string;
   /** True for an answer line, so {@link previousLine} names it as one. */
   answer?: boolean;
+  /**
+   * The chain this line belongs to: the root kind carried down from the note
+   * it answers and the depth one hop past it. Written on every line the server
+   * draws, so the count holds however the chain was continued.
+   */
+  chain?: ChainOrigin;
 }
 
 export function buildAttributedLine(
@@ -409,6 +591,7 @@ export function buildAttributedLine(
       customData: {
         [REPLY_CUSTOM_DATA_KEY]: mention.id,
         ...(opts.answer ? { [REPLY_KIND_CUSTOM_DATA_KEY]: ANSWER_KIND } : {}),
+        ...(opts.chain ? chainCustomData(opts.chain) : {}),
       },
     },
     handle,
@@ -516,6 +699,8 @@ export function markAnswered(el: ExcalidrawElement): ExcalidrawElement {
 export interface AcknowledgeRequest {
   keep?: boolean;
   reply?: string;
+  /** Handle the reply is addressed to. Absent means the mention's own author. */
+  replyTo?: string;
   status?: string;
   answer?: string;
   source?: string;
@@ -560,6 +745,41 @@ function answerRefusal(req: AcknowledgeRequest): string | null {
 }
 
 /**
+ * Why a `replyTo` will not be honoured, or null when it will.
+ *
+ * It addresses a question, so it belongs to one; it is written on the canvas as
+ * `@<handle>` and read back by another agent as its own address, so it has to
+ * be a handle; and it may not be an address this agent answers to, or the
+ * question comes back as a mention of our own.
+ */
+function replyToRefusal(req: AcknowledgeRequest, tag: string | readonly string[]): string | null {
+  if (req.replyTo === undefined) return null;
+  if (req.reply === undefined) return REPLY_TO_WITHOUT_REPLY_TEXT;
+  if (!isValidHandle(req.replyTo)) return replyToInvalidText(req.replyTo);
+  if (addressesSelf(req.replyTo, tag)) return replyToSelfText(req.replyTo);
+  return null;
+}
+
+/**
+ * Who the question is addressed to: the handle the caller named, else the
+ * mention's own author, else nobody.
+ *
+ * The default is what makes a reply reach the agent that asked, without the
+ * caller having to think about it. A person's note has no author to name, and
+ * an address this agent answers to is dropped rather than refused when it came
+ * from the default: answering our own note is a reasonable thing to do, and
+ * tagging ourselves in the answer is not.
+ */
+function replyAddressee(
+  req: AcknowledgeRequest,
+  tag: string | readonly string[],
+  mentionAuthor?: string | null,
+): string | null {
+  const to = req.replyTo ?? mentionAuthor ?? null;
+  return to && !addressesSelf(to, tag) ? to : null;
+}
+
+/**
  * Decide what an acknowledgement does, before the room is touched.
  *
  * `status` and `reply` exclude each other and the exclusion cannot be said in
@@ -576,6 +796,7 @@ export function planAcknowledgement(
   req: AcknowledgeRequest,
   tag: string | readonly string[] = DEFAULT_TAG,
   handle?: string | null,
+  mentionAuthor?: string | null,
 ): AcknowledgePlan {
   const untouched = { kept: false, replies: false };
   // The answer exclusions come first, and each names both arguments it refuses:
@@ -583,11 +804,19 @@ export function planAcknowledgement(
   // one of them is invalid.
   const answerProblem = answerRefusal(req);
   if (answerProblem) return { refusal: answerProblem, ...untouched };
+  const addressProblem = replyToRefusal(req, tag);
+  if (addressProblem) return { refusal: addressProblem, ...untouched };
   if (req.status !== undefined && req.reply !== undefined) return { refusal: STATUS_WITH_REPLY_TEXT, ...untouched };
   if (req.status !== undefined && !isMentionStatus(req.status)) return { refusal: statusUnknownText(req.status), ...untouched };
   if (req.reply !== undefined && replyIsMention(req.reply, tag)) return { refusal: replyTagText(tag), ...untouched };
   if (req.status !== undefined) return { line: attributedStatusText(req.status, handle), kept: true, replies: false };
-  if (req.reply !== undefined) return { line: attributedReplyText(req.reply, handle), kept: true, replies: true };
+  if (req.reply !== undefined) {
+    return {
+      line: attributedReplyText(req.reply, handle, replyAddressee(req, tag, mentionAuthor)),
+      kept: true,
+      replies: true,
+    };
+  }
   if (req.answer !== undefined) {
     return {
       line: attributedAnswerText(req.answer, handle),
@@ -636,6 +865,34 @@ export interface Mention {
    * this to tell a facilitator's request from another agent's.
    */
   author: string | null;
+  /**
+   * Who started the chain this note belongs to, and how many agent replies
+   * deep it already is. A note nobody replied to is the root of its own chain:
+   * its kind is read off its author and its depth is 0.
+   */
+  rootAuthorKind: RootAuthorKind;
+  depth: number;
+}
+
+/**
+ * One mention as the room records it, chain and all. Exported because
+ * `read_scene near` and `snapshot_scene near` centre a neighbourhood on an
+ * arbitrary element, and it has to read as a mention exactly as one found on
+ * the canvas does.
+ */
+export function mentionOf(el: ExcalidrawElement): Mention {
+  return {
+    id: el.id,
+    version: el.version,
+    text: el.text ?? "",
+    x: el.x,
+    y: el.y,
+    width: el.width,
+    height: el.height,
+    containerId: el.containerId ?? null,
+    author: elementAuthor(el),
+    ...chainOf(el),
+  };
 }
 
 /** id -> version already dealt with. A newer version of the same text is a new mention. */
@@ -659,17 +916,7 @@ export function findMentions(
     if (!isMentionText(el.text, tag)) continue;
     const seen = handled.get(el.id);
     if (seen !== undefined && el.version <= seen) continue;
-    out.push({
-      id: el.id,
-      version: el.version,
-      text: el.text ?? "",
-      x: el.x,
-      y: el.y,
-      width: el.width,
-      height: el.height,
-      containerId: el.containerId ?? null,
-      author: elementAuthor(el),
-    });
+    out.push(mentionOf(el));
   }
   return out;
 }
@@ -695,17 +942,7 @@ export function findHandledMentions(
     if (!isMentionText(el.text, tag)) continue;
     const seen = acknowledged.get(el.id);
     if (seen === undefined || el.version > seen) continue;
-    out.push({
-      id: el.id,
-      version: el.version,
-      text: el.text ?? "",
-      x: el.x,
-      y: el.y,
-      width: el.width,
-      height: el.height,
-      containerId: el.containerId ?? null,
-      author: elementAuthor(el),
-    });
+    out.push(mentionOf(el));
   }
   return out;
 }

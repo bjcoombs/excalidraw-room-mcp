@@ -33,7 +33,15 @@ import { decryptJson, encryptJson, generateRoomId, generateRoomKey } from "./cry
 import { defaultHandle, isValidHandle, uniqueHandle } from "./handle.js";
 import type { ExcalidrawElement } from "./elements.js";
 import { loadScene, saveScene, SceneConflictError } from "./firebase.js";
-import { DEFAULT_NEARBY_RADIUS, findMentions, isMentionText, type HandledVersions, type Mention } from "./mentions.js";
+import {
+  agentReplyDepthRefusal,
+  DEFAULT_AGENT_REPLY_DEPTH,
+  DEFAULT_NEARBY_RADIUS,
+  findMentions,
+  isMentionText,
+  type HandledVersions,
+  type Mention,
+} from "./mentions.js";
 import { orderByIndex, reconcile, sceneVersion } from "./reconcile.js";
 
 export const DEFAULT_SERVER_URL = "https://oss-collab.excalidraw.com";
@@ -75,6 +83,8 @@ export interface RoomStatus {
   handle: string | null;
   /** The room's neighbourhood radius, in canvas px. */
   nearbyRadius: number;
+  /** How many agent replies deep an agent-rooted chain runs in this room. */
+  agentReplyDepth: number;
   peers: RoomPeer[];
   elementCount: number;
   deletedCount: number;
@@ -103,6 +113,13 @@ export class RoomClient extends EventEmitter {
    * mention pulls in are measured with the same tape.
    */
   private roomRadius: number = DEFAULT_NEARBY_RADIUS;
+  /**
+   * How many agent replies deep an agent-rooted chain may run before this
+   * agent stops hearing it. A property of the room rather than of the call: the
+   * facilitator who set the room up is the one who decides how much
+   * agent-to-agent traffic their canvas carries.
+   */
+  private roomReplyDepth: number = DEFAULT_AGENT_REPLY_DEPTH;
   private presenceTimer: NodeJS.Timeout | null = null;
   private firstInRoom = false;
   private lastRemoteUpdate: number | null = null;
@@ -141,6 +158,11 @@ export class RoomClient extends EventEmitter {
     return this.roomRadius;
   }
 
+  /** The agent-reply bound agreed for this room, for the other tools. */
+  get agentReplyDepth(): number {
+    return this.roomReplyDepth;
+  }
+
   status(): RoomStatus {
     const all = [...this.elements.values()];
     return {
@@ -149,6 +171,7 @@ export class RoomClient extends EventEmitter {
       link: this.link,
       handle: this.currentHandle,
       nearbyRadius: this.roomRadius,
+      agentReplyDepth: this.roomReplyDepth,
       peers: [...this.peers.entries()].map(([socketId, peer]) => ({
         socketId,
         username: peer.username,
@@ -188,11 +211,15 @@ export class RoomClient extends EventEmitter {
       handleWaitMs?: number;
       /** Neighbourhood radius for this room, in canvas px. */
       nearbyRadius?: number;
+      /** Agent-reply bound for this room, 0 to 5. Out-of-range values are refused here. */
+      agentReplyDepth?: number;
     } = {},
   ): Promise<RoomStatus> {
     if (opts.handle !== undefined && !isValidHandle(opts.handle)) {
       throw new Error(`invalid handle ${JSON.stringify(opts.handle)}`);
     }
+    const depthRefusal = agentReplyDepthRefusal(opts.agentReplyDepth);
+    if (depthRefusal) throw new Error(depthRefusal);
     if (this.socket) this.leave();
     const { roomId, roomKey } = RoomClient.parseLink(link);
     this.roomId = roomId;
@@ -205,6 +232,7 @@ export class RoomClient extends EventEmitter {
     this.desiredHandle = opts.handle ?? defaultHandle();
     this.currentHandle = null;
     this.roomRadius = opts.nearbyRadius ?? DEFAULT_NEARBY_RADIUS;
+    this.roomReplyDepth = opts.agentReplyDepth ?? DEFAULT_AGENT_REPLY_DEPTH;
     this.firstInRoom = false;
 
     // The public relay rejects handshakes without a browser Origin (400 on
@@ -433,15 +461,22 @@ export class RoomClient extends EventEmitter {
     const settleMs = opts.settleMs ?? 1500;
     const deadline = Date.now() + timeoutMs;
 
+    // Applied to what is returned, not only to what was picked. Settling
+    // re-reads the element, so the mention that ends the wait may be a later
+    // version than the one that passed the filter - one a peer has rewritten,
+    // chain metadata included. The filter therefore holds at both ends.
+    const accepted = (mention: Mention): Mention | null =>
+      !opts.accept || opts.accept(mention) ? mention : null;
+
     const settled = async (candidate: Mention): Promise<Mention | null> => {
       // Wait until the element stops changing, then re-read it.
       for (;;) {
         await new Promise((r) => setTimeout(r, settleMs));
         const now = this.elements.get(candidate.id);
         if (!now || now.isDeleted || !isMentionText(now.text, tags)) return null;
-        if (now.version === candidate.version) return candidate;
+        if (now.version === candidate.version) return accepted(candidate);
         candidate = findMentions([now], tags, handled)[0] ?? candidate;
-        if (Date.now() > deadline) return candidate;
+        if (Date.now() > deadline) return accepted(candidate);
       }
     };
 

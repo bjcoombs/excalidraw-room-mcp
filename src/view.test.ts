@@ -28,6 +28,7 @@ function status(over: Partial<RoomStatus> = {}): RoomStatus {
     link: LINK,
     handle: "kt",
     nearbyRadius: 250,
+    agentReplyDepth: 1,
     peers: [{ socketId: "sock-1", username: "Ada", kind: "browser" }],
     elementCount: 2,
     deletedCount: 0,
@@ -55,7 +56,7 @@ function element(over: Partial<ExcalidrawElement> = {}): ExcalidrawElement {
 }
 
 function mention(over: Partial<Mention> = {}): Mention {
-  return { id: "text-1", version: 5, text: "@claude add a cache here", x: 20, y: 20, width: 200, height: 25, containerId: null, author: null, ...over };
+  return { id: "text-1", version: 5, text: "@claude add a cache here", x: 20, y: 20, width: 200, height: 25, containerId: null, author: null, rootAuthorKind: "person", depth: 0, ...over };
 }
 
 test("buildShowRoomPayload carries link, connection state, peers, elements and mentions", () => {

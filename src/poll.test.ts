@@ -12,6 +12,7 @@ function status(over: Partial<RoomStatus> = {}): RoomStatus {
     link: "https://excalidraw.com/#room=room1,0123456789abcdefghijkl",
     handle: "kt",
     nearbyRadius: 250,
+    agentReplyDepth: 1,
     peers: [{ socketId: "sock-1", username: "Ada", kind: "browser" }],
     elementCount: 3,
     deletedCount: 0,
@@ -23,7 +24,7 @@ function status(over: Partial<RoomStatus> = {}): RoomStatus {
 }
 
 function mention(id: string, text: string): Mention {
-  return { id, version: 4, text, x: 0, y: 0, width: 100, height: 25, containerId: null, author: null };
+  return { id, version: 4, text, x: 0, y: 0, width: 100, height: 25, containerId: null, author: null, rootAuthorKind: "person", depth: 0 };
 }
 
 function state(over: Partial<PollState> = {}): PollState {
