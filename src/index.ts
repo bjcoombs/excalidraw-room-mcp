@@ -38,6 +38,7 @@ import { openRoom } from "./open.js";
 import { buildPollPayload, pollText } from "./poll.js";
 import { RoomClient } from "./room.js";
 import { selectElements, unknownIdsText } from "./scene.js";
+import { DEFAULT_MAX_DIMENSION, MAX_SCALE, snapshotScene } from "./snapshot.js";
 import {
   buildShowRoomPayload,
   CANVAS_RESOURCE_URI,
@@ -349,6 +350,57 @@ server.registerTool(
             : "(empty scene)";
     if (!unknownIds.length) return text(body);
     return { content: [...text(body).content, ...text(unknownIdsText(unknownIds)).content] };
+  },
+);
+
+server.registerTool(
+  "snapshot_scene",
+  {
+    description:
+      "Render a region of the room to a PNG and see it. Use it whenever the drawing itself is the question: to read hand-drawn content (handwriting, sketched boxes, freehand arrows) that reaches you as point arrays and is otherwise unreadable, to answer \"what does this look like\", and after moving, spacing or grouping elements to check whether anything still overlaps and the groups read as intended. Select with ids, near (one element and its neighbourhood), or bbox; with no selector the whole scene is rendered. The text block after the image gives the bounding box in scene coordinates, the scale, the pixel size and the ids of the elements drawn, so you can map what you see back to read_scene ids and near queries. Shapes, lines, arrows, freehand strokes and text are drawn flat, without the hand-drawn wobble the canvas shows; images, frames and embeds are drawn as a labelled dashed box and named on a placeholders line.",
+    inputSchema: {
+      ids: z.array(z.string()).min(1).optional().describe("Render only the elements with these ids. A container's bound label travels with it."),
+      near: z
+        .string()
+        .optional()
+        .describe(`Element id to centre on: it and everything within ${DEFAULT_NEARBY_RADIUS} scene units of it are rendered.`),
+      bbox: z
+        .object({
+          x: z.number(),
+          y: z.number(),
+          width: z.number().positive(),
+          height: z.number().positive(),
+        })
+        .optional()
+        .describe("Region of scene space to render, and the elements that intersect it."),
+      scale: z
+        .number()
+        .positive()
+        .max(MAX_SCALE)
+        .optional()
+        .describe(`Pixels per scene unit, 1 by default and at most ${MAX_SCALE}. Raise it to read small handwriting.`),
+      maxWidth: z
+        .number()
+        .positive()
+        .optional()
+        .describe(`Pixel ceiling for the width, ${DEFAULT_MAX_DIMENSION} by default. A wider render is downscaled and the text block says so.`),
+      maxHeight: z
+        .number()
+        .positive()
+        .optional()
+        .describe(`Pixel ceiling for the height, ${DEFAULT_MAX_DIMENSION} by default. A taller render is downscaled and the text block says so.`),
+    },
+  },
+  async ({ ids, near, bbox, scale, maxWidth, maxHeight }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const snapshot = await snapshotScene(room.getElements(), { ids, near, bbox, scale, maxWidth, maxHeight });
+    if (!snapshot.png) return text(snapshot.text);
+    return {
+      content: [
+        { type: "image" as const, data: Buffer.from(snapshot.png).toString("base64"), mimeType: "image/png" },
+        { type: "text" as const, text: snapshot.text },
+      ],
+    };
   },
 );
 

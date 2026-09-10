@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-type Tool = { name: string; inputSchema: unknown };
+type Tool = { name: string; description?: string; inputSchema: unknown };
 
 /** One `tools/list` round trip against the built server over stdio. */
 async function listTools(): Promise<Tool[]> {
@@ -81,4 +81,23 @@ test("add_elements describes a point as a two-number array with object-form item
   assert.deepEqual(pointSchema.items, { type: "number" });
   assert.equal(pointSchema.minItems, 2);
   assert.equal(pointSchema.maxItems, 2);
+});
+
+test("snapshot_scene takes only the six selector and size arguments, none of them required", () => {
+  const snapshot = tools.find((t) => t.name === "snapshot_scene");
+  assert.ok(snapshot, "snapshot_scene is not in tools/list");
+  const schema = snapshot.inputSchema as { properties: Record<string, unknown>; required?: string[] };
+  assert.deepEqual(Object.keys(schema.properties).sort(), [
+    "bbox",
+    "ids",
+    "maxHeight",
+    "maxWidth",
+    "near",
+    "scale",
+  ]);
+  assert.deepEqual(schema.required ?? [], []);
+  // The description is what makes the model reach for the tool at the right
+  // moment, so the two cases it exists for are pinned here.
+  assert.match(snapshot.description ?? "", /hand-drawn/);
+  assert.match(snapshot.description ?? "", /overlap/);
 });
