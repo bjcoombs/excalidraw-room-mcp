@@ -2,8 +2,8 @@
   "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-js/master/packages/core/schema/stryker-schema.json",
   "testRunner": "command",
   "commandRunner": {
-    "//": "tsx runs the TypeScript sources directly, so no compile step runs per mutant. view.test.ts and schema.test.ts are excluded because they need a built dist/ (the Vite canvas bundle and the server entrypoint); neither kills a mutant in the files below. Every other test file is picked up automatically.",
-    "command": "node_modules/.bin/tsx --test --experimental-test-isolation=none $(ls src/*.test.ts | grep -vE \"(view|schema)\\.test\\.ts\")"
+    "//": "tsx runs the TypeScript sources directly, so no compile step runs per mutant. view.test.ts, schema.test.ts and canvas-meta.test.ts are excluded because they need a built dist/ (the Vite canvas bundle and the server entrypoint), which Stryker's sandbox does not contain; none of them kills a mutant in the files below. Every other test file is picked up automatically.",
+    "command": "node_modules/.bin/tsx --test --experimental-test-isolation=none $(ls src/*.test.ts | grep -vE \"(view|schema|canvas-meta)\\.test\\.ts\")"
   },
   "mutate": ["src/crypto.ts", "src/reconcile.ts", "src/elements.ts"],
   "reporters": ["json", "progress", "clear-text"],

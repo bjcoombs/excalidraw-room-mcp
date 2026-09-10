@@ -28,8 +28,22 @@ export async function generateRoomKey(): Promise<string> {
   return jwk.k;
 }
 
-export function generateRoomId(): string {
-  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(10));
+const ROOM_ID_BYTES = 10;
+
+/** Default byte source: cryptographically strong random bytes. */
+function defaultRandomBytes(n: number): Uint8Array {
+  return globalThis.crypto.getRandomValues(new Uint8Array(n));
+}
+
+/**
+ * 20 lowercase hex characters, matching upstream's room ids. The byte source is
+ * injectable so the zero-padding of bytes below 0x10 can be tested
+ * deterministically; production always uses crypto.getRandomValues.
+ */
+export function generateRoomId(
+  randomBytes: (n: number) => Uint8Array = defaultRandomBytes,
+): string {
+  const bytes = randomBytes(ROOM_ID_BYTES);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 

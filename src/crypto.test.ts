@@ -28,3 +28,8 @@ test("decrypt accepts a Node Buffer for the ciphertext, as socket.io delivers", 
   const back = await decryptJson<{ ok: boolean }>(key, Buffer.from(iv), Buffer.from(ciphertext));
   assert.equal(back.ok, true);
 });
+
+test("generateRoomId zero-pads bytes below 0x10", () => {
+  const bytes = Uint8Array.from([0x00, 0x0f, 0x01, 0xff, 0x10, 0x0a, 0x7b, 0x00, 0x09, 0xc3]);
+  assert.equal(generateRoomId(() => bytes), "000f01ff100a7b0009c3");
+});
