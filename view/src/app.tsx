@@ -208,6 +208,10 @@ export function RoomView({ app }: { app: App }) {
       setError(null);
       record(result);
     } catch (err) {
+      // A rejection from a call a later one has already overtaken says nothing
+      // about the state now, and reporting it would put an error back over the
+      // newer call's success.
+      if (generation !== lastGeneration.current) return;
       // A call that throws is reported and retried. Stopping here is what turns
       // one bad call into a permanently still frame.
       setError(String(err));
