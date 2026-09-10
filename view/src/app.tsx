@@ -68,9 +68,9 @@ export function RoomView({ app }: { app: App }) {
   const [hint, setHint] = useState<string | null>(null);
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
   /**
-   * True while an announcement is in flight. A `sendMessage` round trip can
+   * True while an announcement is in flight. A round trip to the host can
    * outlast a second press, and two presses must not put two messages in the
-   * chat for one set of notes.
+   * chat for one set of notes. `announce.ts` owns the call itself.
    */
   const announcing = useRef(false);
   const lastSignature = useRef<string | null>(null);
@@ -146,8 +146,9 @@ export function RoomView({ app }: { app: App }) {
    * press, so the sentence agrees with the canvas rather than with whatever a
    * poll had claimed.
    *
-   * Deliberately not able to throw: a host with no `ui/message` must cost the
-   * reader nothing but the refusal line next to a button that stays pressable.
+   * Deliberately not able to throw: a host that will not take a message at
+   * all must cost the reader nothing but the refusal line next to a button
+   * that stays pressable.
    */
   const answer = useCallback(() => {
     const count = payload?.mentions.length ?? 0;

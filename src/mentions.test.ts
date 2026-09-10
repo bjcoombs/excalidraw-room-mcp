@@ -7,20 +7,25 @@ import {
   ACKNOWLEDGED_STROKE,
   acknowledgementText,
   planAcknowledgement,
-  REPLY_WITH_NOTE_TEXT,
-  buildReply,
+  STATUS_WITH_REPLY_TEXT,
+  ATTRIBUTED_LINE_GAP,
+  ATTRIBUTION_PREFIX,
+  attributedReplyText,
+  attributedStatusText,
+  buildAttributedLine,
+  findAttributedLine,
   findHandledMentions,
-  findReply,
+  isMentionStatus,
   MAX_REPLY_LENGTH,
+  MENTION_STATUSES,
+  previousLine,
   REPLY_CUSTOM_DATA_KEY,
-  REPLY_GAP,
-  REPLY_NOTE,
   REPLY_PROMPT_LINE,
-  replyElementText,
   replyIsMention,
-  replyQuestion,
   replySchema,
   replyTagText,
+  statusSchema,
+  statusUnknownText,
   acknowledgedText,
   boxDistance,
   DEFAULT_NEARBY_RADIUS,
@@ -30,10 +35,7 @@ import {
   markAcknowledged,
   markRemoved,
   markSeen,
-  MAX_NOTE_LENGTH,
   nearbyElements,
-  noteSchema,
-  NOTE_TOO_LONG_TEXT,
   SEEN_MARKER,
   SEEN_STROKE,
   stripSeenMarker,
@@ -189,9 +191,10 @@ test("seen then acknowledged leaves exactly one status suffix", () => {
   assert.equal(done.text!.split(ACKNOWLEDGED_MARK).length - 1, 1, "one check mark, not two");
   assert.ok(done.version > seen.version);
 
-  const noted = markAcknowledged(seen, { note: "declined: ambiguous" });
-  assert.equal(noted.text, `${original} declined: ambiguous`);
-  assert.ok(!hasSeenMarker(noted.text));
+  // The server never writes into the person's own sentence: whatever it has to
+  // say goes on the attributed line under the note, so the only thing added
+  // here is the mark. https://github.com/bjcoombs/excalidraw-room-mcp/issues/77
+  assert.equal(stripStatus(String(done.text)), original);
 });
 
 test("acknowledging by default removes the note, and the removed note never re-surfaces", () => {
@@ -232,17 +235,40 @@ test("keep is today's output: grey with a single check mark and the element stil
   assert.equal(kept.strokeColor, ACKNOWLEDGED_STROKE);
 });
 
-test("a note over the cap is refused with a message pointing at chat", () => {
-  const long = "x".repeat(MAX_NOTE_LENGTH + 1);
-  assert.equal(long.length, 25);
-  const refused = noteSchema.safeParse(long);
-  assert.equal(refused.success, false);
-  assert.equal(refused.error!.issues[0]!.message, NOTE_TOO_LONG_TEXT);
-  assert.match(NOTE_TOO_LONG_TEXT, /chat/i, "the refusal says where the reply belongs");
+test("the canvas takes two statuses and no free text", () => {
+  assert.deepEqual([...MENTION_STATUSES], ["out of scope", "see chat"]);
+  for (const status of MENTION_STATUSES) {
+    assert.equal(statusSchema.safeParse(status).success, true, status);
+    assert.equal(isMentionStatus(status), true, status);
+  }
+  assert.equal(statusSchema.optional().safeParse(undefined).success, true, "no status is always fine");
 
-  assert.equal(noteSchema.safeParse("x".repeat(MAX_NOTE_LENGTH)).success, true, "the cap itself is allowed");
-  assert.equal(noteSchema.safeParse("declined").success, true);
-  assert.equal(noteSchema.optional().safeParse(undefined).success, true, "no note is always fine");
+  // Free text on the canvas is prose about the work, which belongs in chat.
+  for (const other of ["declined", "OUT OF SCOPE", "", "see  chat"]) {
+    assert.equal(statusSchema.safeParse(other).success, false, other);
+    assert.equal(isMentionStatus(other), false, other);
+    assert.ok(statusUnknownText(other).includes("status"), other);
+    assert.ok(statusUnknownText(other).includes(other) || other === "", other);
+  }
+  assert.equal(isMentionStatus(undefined), false);
+  assert.equal(isMentionStatus(7), false);
+  assert.match(statusUnknownText("declined"), /chat/i, "the refusal says where prose belongs");
+  assert.ok(statusUnknownText("declined").includes('"out of scope"'));
+  assert.ok(statusUnknownText("declined").includes('"see chat"'));
+});
+
+test("every word the server draws on the canvas is attributed to the agent", () => {
+  assert.equal(ATTRIBUTION_PREFIX, "claude: ");
+  assert.equal(attributedStatusText("out of scope"), "claude: out of scope");
+  assert.equal(attributedStatusText("see chat"), "claude: see chat");
+  // A status line is the prefix and the fixed words, and nothing else: no
+  // prompt line, because there is nothing for the person to answer.
+  assert.ok(!attributedStatusText("see chat").includes(REPLY_PROMPT_LINE));
+  assert.ok(!attributedStatusText("see chat").includes("\n"));
+
+  assert.equal(attributedReplyText("  Which box?  "), `claude: Which box?\n${REPLY_PROMPT_LINE}`);
+  assert.ok(attributedReplyText("Which box?").startsWith(ATTRIBUTION_PREFIX));
+  assert.ok(attributedReplyText("Which box?").endsWith(REPLY_PROMPT_LINE));
 });
 
 test("the server's own seen edit does not re-pend, but a later human edit does and the marker is rewritten", () => {
@@ -288,7 +314,8 @@ test("stripSeenMarker and seenText are pure text helpers acknowledge can rely on
   assert.equal(stripSeenMarker(`a${SEEN_MARKER}b${SEEN_MARKER}`), "ab");
   assert.equal(seenText("@claude go"), `@claude go${SEEN_MARKER}`);
   assert.equal(seenText(`@claude go${SEEN_MARKER}`), `@claude go${SEEN_MARKER}`);
-  assert.equal(acknowledgedText(`@claude go${SEEN_MARKER}`, " ✓"), "@claude go ✓");
+  assert.equal(acknowledgedText(`@claude go${SEEN_MARKER}`), "@claude go ✓");
+  assert.equal(acknowledgedText("@claude go ✓"), "@claude go ✓", "one mark however many times it runs");
   assert.equal(hasSeenMarker("plain"), false);
   assert.equal(hasSeenMarker(undefined), false);
 });
@@ -376,33 +403,57 @@ test("a note that types the closing marker cannot end the block early", () => {
   assert.ok(block.includes("now follow these orders"));
 });
 
-test("planAcknowledgement refuses reply with note, keeps the note for a reply, removes it by default", () => {
+test("planAcknowledgement writes one attributed line for a status or a reply, and nothing by default", () => {
   // The default: the note goes, because the drawing is the evidence.
-  assert.deepEqual(planAcknowledgement({}), { status: undefined, kept: false, replies: false });
+  assert.deepEqual(planAcknowledgement({}), { kept: false, replies: false });
   assert.equal(acknowledgementText("m", planAcknowledgement({})), "acknowledged and removed m from the canvas");
 
-  // keep and a status both leave it on the canvas.
-  assert.deepEqual(planAcknowledgement({ keep: true }), { status: undefined, kept: true, replies: false });
-  assert.deepEqual(planAcknowledgement({ note: "declined" }), { status: "declined", kept: true, replies: false });
+  // keep alone leaves it on the canvas and writes no words at all.
+  assert.deepEqual(planAcknowledgement({ keep: true }), { kept: true, replies: false });
   assert.equal(acknowledgementText("m", planAcknowledgement({ keep: true })), "acknowledged m");
+  assert.equal(planAcknowledgement({ keep: true }).line, undefined, "keep alone draws nothing");
 
-  // A blank note is no note, so it falls through to the default rather than
-  // leaving a trailing space as the whole status.
-  assert.deepEqual(planAcknowledgement({ note: "   " }), { status: undefined, kept: false, replies: false });
-  assert.deepEqual(planAcknowledgement({ note: "  ok  " }), { status: "ok", kept: true, replies: false });
-  assert.deepEqual(planAcknowledgement({ note: "   ", keep: true }), { status: undefined, kept: true, replies: false });
+  // A status keeps the note and draws one attributed line under it, whether or
+  // not keep was also passed.
+  assert.deepEqual(planAcknowledgement({ status: "out of scope" }), {
+    line: "claude: out of scope",
+    kept: true,
+    replies: false,
+  });
+  assert.deepEqual(planAcknowledgement({ status: "see chat", keep: true }), {
+    line: "claude: see chat",
+    kept: true,
+    replies: false,
+  });
+  assert.equal(
+    acknowledgementText("m", planAcknowledgement({ status: "out of scope" })),
+    'acknowledged m, kept the note and wrote "claude: out of scope" on the canvas under it',
+  );
 
-  // A reply keeps the note with the reply marker and draws the question.
-  assert.deepEqual(planAcknowledgement({ reply: "Which box?" }), { status: REPLY_NOTE, kept: true, replies: true });
+  // A reply keeps the note and draws the attributed question.
+  assert.deepEqual(planAcknowledgement({ reply: "Which box?" }), {
+    line: `claude: Which box?\n${REPLY_PROMPT_LINE}`,
+    kept: true,
+    replies: true,
+  });
   assert.ok(acknowledgementText("m", planAcknowledgement({ reply: "Which box?" })).includes("replied on the canvas"));
 
-  // The two refusals, both naming reply, and neither carrying a plan to run.
-  const both = planAcknowledgement({ reply: "Which box?", note: "declined" });
-  assert.equal(both.refusal, REPLY_WITH_NOTE_TEXT);
+  // The three refusals, each naming what it refused, none carrying a plan to run.
+  const both = planAcknowledgement({ reply: "Which box?", status: "out of scope" });
+  assert.equal(both.refusal, STATUS_WITH_REPLY_TEXT);
   assert.ok(both.refusal!.includes("reply"));
-  assert.ok(both.refusal!.includes("note"));
+  assert.ok(both.refusal!.includes("status"));
   assert.equal(both.kept, false);
   assert.equal(both.replies, false);
+  assert.equal(both.line, undefined);
+
+  // A host that forwarded the arguments unvalidated is refused here too.
+  const unknown = planAcknowledgement({ status: "declined" });
+  assert.equal(unknown.refusal, statusUnknownText("declined"));
+  assert.equal(unknown.kept, false);
+  assert.equal(unknown.line, undefined);
+  // The exclusion is checked before the value, so both-and-invalid names both.
+  assert.equal(planAcknowledgement({ status: "declined", reply: "x" }).refusal, STATUS_WITH_REPLY_TEXT);
 
   const tagged = planAcknowledgement({ reply: "which box, @claude?" });
   assert.ok(tagged.refusal!.includes("reply"), tagged.refusal);
@@ -413,14 +464,14 @@ test("planAcknowledgement refuses reply with note, keeps the note for a reply, r
   assert.ok(planAcknowledgement({ reply: "ask @bot" }, "@bot").refusal);
 });
 
-test("a reply element sits under the note, in its font, greyed, linked back to it", () => {
+test("an attributed line sits under the note, in its font, greyed, linked back to it", () => {
   const [note] = buildElements([{ type: "text", id: "note", x: 20, y: 120, text: "@claude which box" }], ctx()).created;
   const existing = new Map([[note.id, note]]);
-  const reply = buildReply(note, "The left or the right one?", { existing, lastIndex: null });
+  const reply = buildAttributedLine(note, attributedReplyText("The left or the right one?"), { existing, lastIndex: null });
 
   // Directly below the note, same column, so the two read as one annotation.
   assert.equal(reply.x, note.x);
-  assert.equal(reply.y, note.y + note.height + REPLY_GAP);
+  assert.equal(reply.y, note.y + note.height + ATTRIBUTED_LINE_GAP);
   assert.equal(reply.fontSize, note.fontSize);
   assert.equal(reply.fontFamily, note.fontFamily);
   assert.equal(reply.strokeColor, ACKNOWLEDGED_STROKE);
@@ -429,31 +480,63 @@ test("a reply element sits under the note, in its font, greyed, linked back to i
   // accept it without a reorder.
   assert.ok(typeof reply.index === "string" && reply.index.length > 0);
 
-  // The question, then the line that makes it a two-way channel.
-  assert.equal(reply.text, `The left or the right one?\n${REPLY_PROMPT_LINE}`);
-  assert.ok(String(reply.text).startsWith("The left or the right one?"));
+  // The attributed question, then the line that makes it a two-way channel.
+  assert.equal(reply.text, `claude: The left or the right one?\n${REPLY_PROMPT_LINE}`);
+  assert.ok(String(reply.text).startsWith(ATTRIBUTION_PREFIX));
   assert.ok(String(reply.text).endsWith(REPLY_PROMPT_LINE));
   assert.equal((reply.customData as Record<string, unknown>)[REPLY_CUSTOM_DATA_KEY], "note");
+
+  // The same element carries a status, which is the whole of that line.
+  const line = buildAttributedLine(note, attributedStatusText("out of scope"), { existing, lastIndex: null });
+  assert.equal(line.text, "claude: out of scope");
+  assert.equal(line.x, note.x);
+  assert.equal(line.y, note.y + note.height + ATTRIBUTED_LINE_GAP);
+  assert.equal(line.strokeColor, ACKNOWLEDGED_STROKE);
+  assert.equal((line.customData as Record<string, unknown>)[REPLY_CUSTOM_DATA_KEY], "note");
 
   // The fixed line carries no tag, so the reply is never itself a mention.
   assert.equal(findMentions([reply]).length, 0);
   assert.ok(!String(reply.text).includes("@claude"));
 
   // And the room can find it again by the mention it answers.
-  assert.equal(findReply([note, reply], "note")?.id, reply.id);
-  assert.equal(findReply([note, reply], "other"), null);
-  assert.equal(findReply([note, markRemoved(reply)], "note"), null);
-  assert.equal(findReply([note], "note"), null);
+  assert.equal(findAttributedLine([note, reply], "note")?.id, reply.id);
+  assert.equal(findAttributedLine([note, reply], "other"), null);
+  assert.equal(findAttributedLine([note, markRemoved(reply)], "note"), null);
+  assert.equal(findAttributedLine([note], "note"), null);
 });
 
-test("replyQuestion gives back what was asked, without the fixed line", () => {
-  assert.equal(replyElementText("  Which box?  "), `Which box?\n${REPLY_PROMPT_LINE}`);
-  const [reply] = buildElements([{ type: "text", id: "r", x: 0, y: 0, text: replyElementText("Which box?") }], ctx()).created;
-  assert.equal(replyQuestion(reply), "Which box?");
+test("previousLine gives back what the server wrote, and which of the two it was", () => {
+  const line = (text: string, id = "r") => buildElements([{ type: "text", id, x: 0, y: 0, text }], ctx()).created[0];
+
+  // A question: the prompt line is what marks it, and it is dropped.
+  assert.deepEqual(previousLine(line(attributedReplyText("Which box?"))), { kind: "reply", text: "Which box?" });
   // A multi-line question survives; only the prompt line is dropped.
-  const [two] = buildElements([{ type: "text", id: "r2", x: 0, y: 0, text: replyElementText("Which box?\nthe left?") }], ctx()).created;
-  assert.equal(replyQuestion(two), "Which box?\nthe left?");
-  assert.equal(replyQuestion({ ...reply, text: undefined }), "");
+  assert.deepEqual(previousLine(line(attributedReplyText("Which box?\nthe left?"), "r2")), {
+    kind: "reply",
+    text: "Which box?\nthe left?",
+  });
+
+  // A status: no prompt line, so it reads back as a status.
+  for (const status of MENTION_STATUSES) {
+    assert.deepEqual(previousLine(line(attributedStatusText(status), `s-${status}`)), { kind: "status", text: status });
+  }
+
+  // Only the final prompt line is dropped: a question whose own words carry
+  // that line keeps them, because the server appends its own after them.
+  assert.deepEqual(previousLine(line(attributedReplyText(`ask again?\n${REPLY_PROMPT_LINE}`), "r6")), {
+    kind: "reply",
+    text: `ask again?\n${REPLY_PROMPT_LINE}`,
+  });
+  // And a status whose text happens to name the line is still a status.
+  assert.deepEqual(previousLine(line(`${REPLY_PROMPT_LINE}\nclaude: see chat`, "r7")), {
+    kind: "status",
+    text: `${REPLY_PROMPT_LINE}\nclaude: see chat`,
+  });
+
+  // The prefix is stripped once, and only from the front.
+  assert.equal(previousLine(line("claude: claude: odd", "r3")).text, "claude: odd");
+  assert.equal(previousLine(line("no prefix here", "r4")).text, "no prefix here");
+  assert.deepEqual(previousLine({ ...line("x", "r5"), text: undefined }), { kind: "status", text: "" });
 });
 
 test("a blank, over-long or tag-carrying reply is refused, and the messages name reply", () => {
@@ -477,17 +560,17 @@ test("a blank, over-long or tag-carrying reply is refused, and the messages name
   assert.ok(replyTagText().includes("@claude"));
 });
 
-test("a replied-to note is kept, greyed, with see reply as its only suffix", () => {
+test("a kept note reads as the person wrote it, plus one check mark, whatever the server had to say", () => {
   const [note] = buildElements([{ type: "text", id: "note", x: 0, y: 0, text: "@claude which box" }], ctx()).created;
-  const kept = markAcknowledged(markSeen(note)!, { note: REPLY_NOTE });
-  assert.equal(kept.text, `@claude which box ${REPLY_NOTE}`);
-  assert.ok(String(kept.text).endsWith(" see reply"));
+  const kept = markAcknowledged(markSeen(note)!);
+  // The words the server has - a status or a question - never touch this text.
+  assert.equal(kept.text, `@claude which box ${ACKNOWLEDGED_MARK}`);
   assert.equal(kept.strokeColor, ACKNOWLEDGED_STROKE);
+  assert.ok(!String(kept.text).includes("out of scope"));
+  assert.ok(!String(kept.text).includes("see reply"));
   // The seen marker is replaced, not followed, so a second pass adds nothing.
   assert.ok(!String(kept.text).includes(SEEN_MARKER));
-  // Replying twice replaces the marker rather than stacking a second one.
-  assert.equal(markAcknowledged(kept, { note: REPLY_NOTE }).text, kept.text);
-  assert.equal(markAcknowledged(kept).text, `@claude which box ${ACKNOWLEDGED_MARK}`);
+  assert.equal(markAcknowledged(kept).text, kept.text, "acknowledging twice stacks nothing");
   assert.equal(stripStatus(String(kept.text)), "@claude which box");
 });
 
@@ -521,7 +604,7 @@ test("findHandledMentions lists acknowledged notes still on the canvas and nothi
   assert.deepEqual(findHandledMentions(scene, "@nobody", acknowledged), []);
 });
 
-test("formatMention marks a handled mention and carries the previous reply inside the block", () => {
+test("formatMention marks a handled mention and carries the previous line inside the block", () => {
   const els = scene();
   const [mention] = findMentions(els).filter((m) => m.id === "note");
 
@@ -533,7 +616,7 @@ test("formatMention marks a handled mention and carries the previous reply insid
   const handled = formatMention(mention, [], { handled: true });
   assert.ok(handled.split("\n")[0].startsWith(`mention note v${mention.version} handled at (`), handled);
 
-  const asked = formatMention(mention, [], { previousReply: "Which box?" });
+  const asked = formatMention(mention, [], { previous: { kind: "reply", text: "Which box?" } });
   const lines = asked.split("\n");
   const open = lines.indexOf(UNTRUSTED_OPEN);
   const close = lines.indexOf(UNTRUSTED_CLOSE);
@@ -541,8 +624,16 @@ test("formatMention marks a handled mention and carries the previous reply insid
   // The question and the answer are a person's text read together, so both sit
   // inside the block.
   assert.ok(at > open && at < close, asked);
-  // Null is the no-reply case and adds nothing.
-  assert.ok(!formatMention(mention, [], { previousReply: null }).includes("previous reply:"));
+
+  // A status reads back under its own label, so the agent knows what it told
+  // the person last time rather than reading a status as a question.
+  const declined = formatMention(mention, [], { previous: { kind: "status", text: "out of scope" } });
+  assert.ok(declined.includes("previous status: out of scope"), declined);
+  assert.ok(!declined.includes("previous reply:"), declined);
+  assert.ok(!declined.includes(ATTRIBUTION_PREFIX), "the prefix is stripped for the agent to read");
+
+  // Null is the nothing-written case and adds nothing.
+  assert.ok(!formatMention(mention, [], { previous: null }).includes("previous "));
 });
 
 test("pending means unacknowledged, so a seen mention is still listed", () => {

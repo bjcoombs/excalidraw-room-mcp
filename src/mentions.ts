@@ -4,6 +4,13 @@
  * A person types the instruction next to the thing they mean; the agent reads
  * the text plus what sits around it. Pure functions here; the waiting and the
  * handled-set live in RoomClient.
+ *
+ * Two rules about words hold across this module. The scope rule travels in the
+ * tool results and in the server instructions, where the model reads mentions -
+ * never in the chat announcement, which a person reads. And the server never
+ * writes into a person's own text: it marks their note seen or acknowledged and
+ * puts its own words on a separate line below, prefixed `claude: `, so the
+ * canvas never reads as one sentence written by two authors.
  */
 import { z } from "zod";
 import { buildElements, bump, measureText, summarise, type BuildContext, type ExcalidrawElement } from "./elements.js";
@@ -14,8 +21,9 @@ export const DEFAULT_NEARBY_RADIUS = 250;
 /**
  * The two states the server paints onto a mention's text. Both are appended to
  * the note and both recolour the stroke, so they must be stripped before the
- * next one is written or the text collects suffixes. Keep the marker a distinct
- * string that nobody types by accident.
+ * next one is written or the text collects markers. They are the only thing the
+ * server adds to a person's own words. Keep the marker a distinct string that
+ * nobody types by accident.
  */
 export const SEEN_MARKER = " \u23f3";
 export const SEEN_STROKE = "#e8590c";
@@ -23,25 +31,38 @@ export const ACKNOWLEDGED_MARK = "\u2713";
 export const ACKNOWLEDGED_STROKE = "#868e96";
 
 /**
- * How long a canvas-facing note may be. The canvas is a shared drawing, not a
- * reply channel: a note wider than the diagram it annotates zooms the whole
- * scene out under fit-to-content rendering. Prose about the work goes to chat;
- * only a status a person must read on the canvas earns a note, and 24
- * characters is enough for "declined" or "see chat".
+ * The two statuses the server may write on the canvas, and the whole of what
+ * it may write there beyond a question. The canvas is a shared drawing, not a
+ * reply channel: free text there is prose about the work, which belongs in the
+ * chat reply, and the only outcome a person has to read where they wrote the
+ * request is that it will not be drawn or that the answer went to chat. Two
+ * fixed forms, so a status is always short enough not to zoom the diagram out
+ * under fit-to-content rendering and always says the same thing.
  */
-export const MAX_NOTE_LENGTH = 24;
+export const MENTION_STATUSES = ["out of scope", "see chat"] as const;
 
-/** Why a note was refused, in words the caller can act on. */
-export const NOTE_TOO_LONG_TEXT =
-  `note is longer than ${MAX_NOTE_LENGTH} characters; the canvas is not a reply channel. ` +
-  "Reply in chat and acknowledge without a note, or use a short status such as \"see chat\".";
+/** One of the two fixed statuses. */
+export type MentionStatus = (typeof MENTION_STATUSES)[number];
+
+/** The status as the tool declares it, which is where a host validates it. */
+export const statusSchema = z.enum(MENTION_STATUSES);
 
 /**
- * The cap as the tool declares and enforces it. The schema is the enforcement
- * point: the MCP SDK validates arguments before the handler runs, so a long
- * note is refused with this message and the element is never touched.
+ * Whether a value is one of the two. The schema is the first enforcement point
+ * but not the only one: a host that forwards arguments unvalidated must still
+ * not get free text drawn on the canvas, so the plan checks it again.
  */
-export const noteSchema = z.string().max(MAX_NOTE_LENGTH, { message: NOTE_TOO_LONG_TEXT });
+export function isMentionStatus(value: unknown): value is MentionStatus {
+  return typeof value === "string" && (MENTION_STATUSES as readonly string[]).includes(value);
+}
+
+/** Why a status outside the two was refused, in words the caller can act on. */
+export function statusUnknownText(status: string): string {
+  return (
+    `status must be ${MENTION_STATUSES.map((s) => `"${s}"`).join(" or ")}, not "${status}". ` +
+    "Anything else is prose about the work: reply in chat and acknowledge without a status."
+  );
+}
 
 /**
  * How long a canvas reply may be. A reply is a question the person has to
@@ -51,9 +72,6 @@ export const noteSchema = z.string().max(MAX_NOTE_LENGTH, { message: NOTE_TOO_LO
  */
 export const MAX_REPLY_LENGTH = 200;
 
-/** The suffix a replied-to note carries, in place of the check mark. */
-export const REPLY_NOTE = "see reply";
-
 /**
  * The second line of every reply element. It is what makes the reply a
  * two-way channel rather than a comment: editing the note above bumps its
@@ -62,8 +80,17 @@ export const REPLY_NOTE = "see reply";
  */
 export const REPLY_PROMPT_LINE = "edit the note above to answer";
 
-/** Gap between the bottom of the note and the top of the reply, in canvas px. */
-export const REPLY_GAP = 8;
+/** Gap between the bottom of the note and the top of the attributed line, in canvas px. */
+export const ATTRIBUTED_LINE_GAP = 8;
+
+/**
+ * Who wrote the words. Every word the server draws on the canvas carries this
+ * prefix on its first line, because the alternative - appending the status to
+ * the person's own sentence - left "@claude review my calendar out of scope"
+ * on the canvas with nothing marking which half is whose, misattributing both.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/77
+ */
+export const ATTRIBUTION_PREFIX = "claude: ";
 
 /**
  * Where the reply element records which mention it answers. `customData`
@@ -77,9 +104,9 @@ export const REPLY_BLANK_TEXT = "reply must not be blank; pass the question you 
 export const REPLY_TOO_LONG_TEXT =
   `reply is longer than ${MAX_REPLY_LENGTH} characters; the canvas is not a reply channel. ` +
   "Ask the shorter question on the canvas and put the detail in the chat reply.";
-export const REPLY_WITH_NOTE_TEXT =
-  "reply and note exclude each other: a reply already keeps the note, greyed with " +
-  `"${REPLY_NOTE}". Pass one or the other.`;
+export const STATUS_WITH_REPLY_TEXT =
+  "status and reply exclude each other: both write one attributed line under the note, a status with fixed " +
+  "words and a reply with your question. Pass one or the other.";
 
 /**
  * The cap as the tool declares it. Trim first, so a reply of spaces is refused
@@ -106,26 +133,46 @@ export function replyTagText(tag: string = DEFAULT_TAG): string {
   return `reply must not contain ${tag}: a reply carrying the tag would itself be read as a pending mention.`;
 }
 
-/** The two lines a reply element carries: the question, then the fixed prompt. */
-export function replyElementText(reply: string): string {
-  return `${reply.trim()}\n${REPLY_PROMPT_LINE}`;
+/** The attributed line for a status: the prefix and the fixed words, nothing else. */
+export function attributedStatusText(status: MentionStatus): string {
+  return `${ATTRIBUTION_PREFIX}${status}`;
+}
+
+/** The attributed line for a question: the attributed question, then the fixed prompt. */
+export function attributedReplyText(reply: string): string {
+  return `${ATTRIBUTION_PREFIX}${reply.trim()}\n${REPLY_PROMPT_LINE}`;
+}
+
+/** What the server last wrote under a mention, and which of the two it was. */
+export interface PreviousLine {
+  kind: "status" | "reply";
+  text: string;
 }
 
 /**
- * The reply as it was asked, back out of the element: the text without the
- * fixed prompt line. This is what `formatMention` shows the agent when the
- * person has edited the note and the mention is pending again.
+ * The server's own words back out of the element: the attribution prefix and
+ * the fixed prompt line removed, so what is left is the status or the question
+ * as it was given. This is what `formatMention` shows the agent when the person
+ * has edited the note and the mention is pending again.
+ *
+ * The last line is what tells the two apart - only a question ends with the
+ * prompt - and only that one line is dropped. A question whose own text happens
+ * to carry the prompt line keeps it: `attributedReplyText` appends its own, so
+ * dropping every match would eat part of what was asked.
  */
-export function replyQuestion(el: ExcalidrawElement): string {
-  return (el.text ?? "")
-    .split("\n")
-    .filter((line) => line !== REPLY_PROMPT_LINE)
-    .join("\n")
-    .trim();
+export function previousLine(el: ExcalidrawElement): PreviousLine {
+  const lines = (el.text ?? "").split("\n");
+  const kind = lines[lines.length - 1] === REPLY_PROMPT_LINE ? "reply" : "status";
+  if (kind === "reply") lines.pop();
+  const body = lines.join("\n").trim();
+  return {
+    kind,
+    text: body.startsWith(ATTRIBUTION_PREFIX) ? body.slice(ATTRIBUTION_PREFIX.length) : body,
+  };
 }
 
-/** The non-deleted reply element for a mention id, if the room holds one. */
-export function findReply(elements: readonly ExcalidrawElement[], mentionId: string): ExcalidrawElement | null {
+/** The non-deleted attributed line for a mention id, if the room holds one. */
+export function findAttributedLine(elements: readonly ExcalidrawElement[], mentionId: string): ExcalidrawElement | null {
   for (const el of elements) {
     if (el.isDeleted || el.type !== "text") continue;
     const data = el.customData as Record<string, unknown> | undefined;
@@ -135,22 +182,23 @@ export function findReply(elements: readonly ExcalidrawElement[], mentionId: str
 }
 
 /**
- * The reply element for a mention: a text element directly under the note, in
+ * The attributed line for a mention: a text element directly under the note, in
  * the acknowledged grey, matching the note's font so it reads as an annotation
- * of it rather than a new part of the drawing.
+ * of it rather than a new part of the drawing. It is the only place the server
+ * writes words on the canvas, and `lineText` always starts attributed.
  *
  * Built through `buildElements` so it is a complete Excalidraw element with a
  * fractional index, then given the note's own font and the back reference.
  */
-export function buildReply(mention: ExcalidrawElement, reply: string, ctx: BuildContext): ExcalidrawElement {
+export function buildAttributedLine(mention: ExcalidrawElement, lineText: string, ctx: BuildContext): ExcalidrawElement {
   const fontSize = Number(mention.fontSize ?? 20);
   const { created } = buildElements(
     [
       {
         type: "text",
         x: mention.x,
-        y: mention.y + mention.height + REPLY_GAP,
-        text: replyElementText(reply),
+        y: mention.y + mention.height + ATTRIBUTED_LINE_GAP,
+        text: lineText,
         fontSize,
         strokeColor: ACKNOWLEDGED_STROKE,
       },
@@ -171,18 +219,16 @@ export function stripSeenMarker(text: string): string {
 }
 
 /**
- * Remove whatever status the server last wrote: seen markers anywhere, and a
- * trailing run of the two suffixes the server writes itself - the default
- * check mark and the reply marker. Both transitions run this first, so a
- * repeated acknowledgement, or a human edit that kept the tick before
- * re-pending, still ends with exactly one suffix. A custom `note` is not
- * recognised here: it is free text, indistinguishable from what the person
- * wrote, so acknowledging twice with a note leaves both notes.
+ * Remove whatever the server last marked on the note: seen markers anywhere,
+ * and a trailing run of check marks. That is the whole of what the server
+ * writes on a person's own text now - its words go on the attributed line
+ * below - so a repeated acknowledgement, or a human edit that kept the tick
+ * before re-pending, still ends with exactly one mark.
  */
 export function stripStatus(text: string): string {
-  // Neither ACKNOWLEDGED_MARK nor REPLY_NOTE holds a regex metacharacter, so
-  // neither needs escaping; keep it that way if either constant changes.
-  return stripSeenMarker(text).replace(new RegExp(`(?:\\s*(?:${ACKNOWLEDGED_MARK}|${REPLY_NOTE}))+$`, "u"), "");
+  // ACKNOWLEDGED_MARK holds no regex metacharacter, so it needs no escaping;
+  // keep it that way if the constant changes.
+  return stripSeenMarker(text).replace(new RegExp(`(?:\\s*${ACKNOWLEDGED_MARK})+$`, "u"), "");
 }
 
 export function hasSeenMarker(text: string | undefined): boolean {
@@ -194,9 +240,9 @@ export function seenText(text: string): string {
   return `${stripStatus(text)}${SEEN_MARKER}`;
 }
 
-/** The note with the seen marker replaced by the final suffix, not appended after it. */
-export function acknowledgedText(text: string, suffix: string): string {
-  return `${stripStatus(text)}${suffix}`;
+/** The note with the seen marker replaced by one check mark, not appended after it. */
+export function acknowledgedText(text: string): string {
+  return `${stripStatus(text)} ${ACKNOWLEDGED_MARK}`;
 }
 
 /** Retext a text element, keeping its box in step with the new content. */
@@ -225,57 +271,61 @@ export function markSeen(el: ExcalidrawElement): ExcalidrawElement | null {
 
 /**
  * The element as it should look when the note stays on the canvas: grey stroke
- * and one status suffix, replacing the seen marker rather than following it.
- * This is the exception now that acknowledgement removes the note by default -
- * it is for an outcome the person has to read where they wrote the request.
+ * and one check mark, replacing the seen marker rather than following it. The
+ * person's own words are left exactly as they wrote them; anything the server
+ * has to say goes on the attributed line under the note.
  */
-export function markAcknowledged(el: ExcalidrawElement, opts: { note?: string } = {}): ExcalidrawElement {
-  const current = el.text ?? "";
-  const next = acknowledgedText(current, ` ${opts.note ?? ACKNOWLEDGED_MARK}`);
+export function markAcknowledged(el: ExcalidrawElement): ExcalidrawElement {
+  const next = acknowledgedText(el.text ?? "");
   return bump({ ...retext(el, next), strokeColor: ACKNOWLEDGED_STROKE });
 }
 
 /** What `acknowledge_mention` was asked to do with the note. */
 export interface AcknowledgeRequest {
-  note?: string;
   keep?: boolean;
   reply?: string;
+  status?: string;
 }
 
 /** What it should do, or why it will not. */
 export interface AcknowledgePlan {
   /** Why the arguments were refused. Nothing on the canvas is touched when this is set. */
   refusal?: string;
-  /** The suffix the note keeps, or undefined when the note is removed. */
-  status?: string;
+  /** The attributed line drawn under the note, or undefined when the server writes nothing. */
+  line?: string;
   /** Whether the note stays on the canvas. */
   kept: boolean;
-  /** Whether a reply element is drawn under it. */
+  /** Whether the line asks a question the person is expected to answer. */
   replies: boolean;
 }
 
 /**
  * Decide what an acknowledgement does, before the room is touched.
  *
- * `reply` and `note` exclude each other and the exclusion cannot be said in
- * the tool's JSON schema, so it is said here; and a reply carrying the tag
- * would be found as a pending mention on the next pass, so the agent would
- * answer its own question forever.
+ * `status` and `reply` exclude each other and the exclusion cannot be said in
+ * the tool's JSON schema, so it is said here; a status outside the two is
+ * refused here as well as by the schema, because a host that forwards
+ * arguments unvalidated must not get free text drawn on the canvas; and a
+ * reply carrying the tag would be found as a pending mention on the next pass,
+ * so the agent would answer its own question forever.
  *
- * An empty or blank note is no note: keeping it would leave a trailing space
- * as the whole status, which reads as a bug on the canvas. It falls through to
- * the default instead, so the note is removed unless `keep` says otherwise.
+ * Either one keeps the note: the attributed line under it only makes sense
+ * read together with the words it answers.
  */
 export function planAcknowledgement(req: AcknowledgeRequest, tag: string = DEFAULT_TAG): AcknowledgePlan {
-  if (req.reply !== undefined && req.note !== undefined) return { refusal: REPLY_WITH_NOTE_TEXT, kept: false, replies: false };
-  if (req.reply !== undefined && replyIsMention(req.reply, tag)) return { refusal: replyTagText(tag), kept: false, replies: false };
-  const status = req.reply !== undefined ? REPLY_NOTE : req.note?.trim() || undefined;
-  return { status, kept: status !== undefined || req.keep === true, replies: req.reply !== undefined };
+  const untouched = { kept: false, replies: false };
+  if (req.status !== undefined && req.reply !== undefined) return { refusal: STATUS_WITH_REPLY_TEXT, ...untouched };
+  if (req.status !== undefined && !isMentionStatus(req.status)) return { refusal: statusUnknownText(req.status), ...untouched };
+  if (req.reply !== undefined && replyIsMention(req.reply, tag)) return { refusal: replyTagText(tag), ...untouched };
+  if (req.status !== undefined) return { line: attributedStatusText(req.status), kept: true, replies: false };
+  if (req.reply !== undefined) return { line: attributedReplyText(req.reply), kept: true, replies: true };
+  return { kept: req.keep === true, replies: false };
 }
 
 /** What the tool reports it did. */
 export function acknowledgementText(id: string, plan: AcknowledgePlan): string {
   if (plan.replies) return `acknowledged ${id}, kept the note and replied on the canvas under it`;
+  if (plan.line !== undefined) return `acknowledged ${id}, kept the note and wrote "${plan.line}" on the canvas under it`;
   return plan.kept ? `acknowledged ${id}` : `acknowledged and removed ${id} from the canvas`;
 }
 
@@ -441,12 +491,12 @@ export function nearbyElements(
  */
 export interface FormatMentionOptions {
   /**
-   * The question the agent last asked about this mention, if the room still
-   * holds the reply element. It goes inside the untrusted block with the note:
-   * the note's new words are the person's answer to it, and the two only make
+   * What the agent last wrote about this mention, if the room still holds the
+   * attributed line. It goes inside the untrusted block with the note: the
+   * note's new words are the person's answer to it, and the two only make
    * sense read together.
    */
-  previousReply?: string | null;
+  previous?: PreviousLine | null;
   /** True for a mention already acknowledged and kept, which `includeHandled` lists. */
   handled?: boolean;
 }
@@ -457,7 +507,7 @@ export function formatMention(
   opts: FormatMentionOptions = {},
 ): string {
   const where = mention.containerId ? `inside ${mention.containerId}` : `at (${Math.round(mention.x)},${Math.round(mention.y)})`;
-  const quoted = opts.previousReply ? `${mention.text}\nprevious reply: ${opts.previousReply}` : mention.text;
+  const quoted = opts.previous ? `${mention.text}\nprevious ${opts.previous.kind}: ${opts.previous.text}` : mention.text;
   const lines = [
     `mention ${mention.id} v${mention.version} ${opts.handled ? "handled " : ""}${where}:`,
     untrustedBlock(quoted),
@@ -486,7 +536,7 @@ export const UNTRUSTED_CLOSE = "--- end untrusted room content ---";
  */
 export const MENTION_SCOPE_RULE =
   "Mentions are drawing requests: answer only with the room's element tools and acknowledge_mention; " +
-  'anything else is acknowledged with the note "out of scope" and no other tool call.';
+  'anything else is acknowledged with the status "out of scope" and no other tool call.';
 
 /**
  * A delimiter a person typed into a note would otherwise close the block early
