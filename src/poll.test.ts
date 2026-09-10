@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Mention } from "./mentions.js";
-import { buildPollPayload, POLL_TEXT_LIMIT, pollText, type PollState } from "./poll.js";
+import { MENTION_SCOPE_RULE, UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from "./mentions.js";
+import { buildPollPayload, pollBody, POLL_TEXT_LIMIT, pollText, type PollState } from "./poll.js";
 import type { RoomStatus } from "./room.js";
 
 function status(over: Partial<RoomStatus> = {}): RoomStatus {
@@ -36,7 +37,7 @@ test("payload reports connection, scene version, peers and pending mentions", ()
     peerCount: 1,
     peers: ["Ada"],
     pendingCount: 1,
-    pendingMentions: [{ id: "n1", text: "@claude label this" }],
+    pendingMentions: [{ id: "n1", text: "@claude label this", announced: false }],
     changedSince: true,
   });
 });
@@ -78,14 +79,14 @@ test("text stays under the limit with ten pending mentions and eight peers", () 
   );
   const peers = Array.from({ length: 8 }, (_, i) => ({ socketId: `sock-${i}`, username: `Collaborator ${i}` }));
   const payload = buildPollPayload(state({ status: status({ peers }), pending }), 3);
-  const out = pollText(payload);
+  const out = pollBody(payload);
   assert.ok(out.length < POLL_TEXT_LIMIT, `expected under ${POLL_TEXT_LIMIT} characters, got ${out.length}`);
-  const parsed = JSON.parse(out);
+  const parsed = JSON.parse(out.split("\n")[0]);
   assert.equal(parsed.peerCount, 8);
   assert.equal(parsed.pendingCount, 10);
-  assert.ok(parsed.pendingMentions.length >= 1);
   assert.equal(parsed.changedSince, true);
-  for (const m of parsed.pendingMentions) assert.equal(typeof m.id, "string");
+  assert.ok(payload.pendingMentions.length >= 1);
+  for (const m of payload.pendingMentions) assert.equal(typeof m.id, "string");
 });
 
 test("mention text is kept whole when it fits and shortened when it does not", () => {
@@ -95,7 +96,7 @@ test("mention text is kept whole when it fits and shortened when it does not", (
     state({ pending: Array.from({ length: 6 }, (_, i) => mention(`n${i}`, "@claude ".padEnd(120, "x"))) }),
   );
   assert.ok(long.pendingMentions[0].text.length < 120);
-  assert.ok(pollText(long).length < POLL_TEXT_LIMIT);
+  assert.ok(pollBody(long).length < POLL_TEXT_LIMIT);
 });
 
 test("newlines in mention text collapse to one line", () => {
@@ -110,5 +111,33 @@ test("peer names are sacrificed before mention text", () => {
   assert.equal(payload.pendingMentions[0].text, note);
   assert.ok(payload.peers.length < 6);
   assert.equal(payload.peerCount, 6);
-  assert.ok(pollText(payload).length <= POLL_TEXT_LIMIT);
+  assert.ok(pollBody(payload).length <= POLL_TEXT_LIMIT);
+});
+
+test("poll_room prints announced true or false for every unacknowledged mention", () => {
+  const pending = [mention("n1", "@claude add a box here"), mention("n2", "@claude look in my calendar")];
+  const payload = buildPollPayload(state({ pending, announced: new Set(["n1"]) }));
+  const out = pollText(payload);
+  const lines = out.split("\n");
+
+  // One line per mention, each naming its id and carrying the token a reader
+  // greps for. Announced state is per mention, not per room.
+  assert.ok(lines.some((l) => l.includes("n1") && l.includes("announced: true")), out);
+  assert.ok(lines.some((l) => l.includes("n2") && l.includes("announced: false")), out);
+  assert.equal(payload.pendingCount, 2);
+
+  // The words are a person's, so they sit inside the block and the rule follows.
+  const open = lines.indexOf(UNTRUSTED_OPEN);
+  const close = lines.indexOf(UNTRUSTED_CLOSE);
+  assert.ok(open >= 0 && close > open, out);
+  for (const [i, line] of lines.entries()) {
+    if (line.includes("announced:")) assert.ok(i > open && i < close, `mention line ${i} outside the block`);
+  }
+  assert.ok(out.includes(MENTION_SCOPE_RULE), out);
+});
+
+test("a mention nobody has announced reads as announced: false", () => {
+  const payload = buildPollPayload(state({ pending: [mention("n1", "@claude tidy this")] }));
+  assert.equal(payload.pendingMentions[0].announced, false);
+  assert.ok(pollText(payload).includes("announced: false"));
 });

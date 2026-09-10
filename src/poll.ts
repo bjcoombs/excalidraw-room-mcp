@@ -14,15 +14,22 @@
  * then entries in the mention list. `peerCount` and `pendingCount` always
  * report the true totals, so a shortened list is visible rather than silent.
  */
-import type { Mention } from "./mentions.js";
+import { MENTION_SCOPE_RULE, UNTRUSTED_CLOSE, UNTRUSTED_OPEN, type Mention } from "./mentions.js";
 import type { RoomStatus } from "./room.js";
 
-/** Maximum characters in the serialised payload. */
+/**
+ * Maximum characters in the variable part of the result - the counters and the
+ * mention list. The scope rule that follows is a fixed sentence and is not
+ * counted: it cannot be shortened without losing the thing it says.
+ */
 export const POLL_TEXT_LIMIT = 300;
 
 export interface PollState {
   status: RoomStatus;
+  /** Every mention not yet acknowledged, whether or not an agent has seen it. */
   pending: readonly Mention[];
+  /** Ids already announced into the chat by a canvas widget. */
+  announced?: ReadonlySet<string>;
 }
 
 export interface PollPayload {
@@ -33,7 +40,7 @@ export interface PollPayload {
   peers: string[];
   pendingCount: number;
   /** Pending mentions, shortened to fit the size bound; pendingCount is the true total. */
-  pendingMentions: { id: string; text: string }[];
+  pendingMentions: { id: string; text: string; announced: boolean }[];
   /** False only when sinceVersion was given and the scene version still equals it. */
   changedSince: boolean;
 }
@@ -82,14 +89,40 @@ function assemble(state: PollState, sinceVersion: number | undefined, detail: De
     pendingCount: pending.length,
     pendingMentions: pending
       .slice(0, detail.mentionCap)
-      .map((m) => ({ id: m.id, text: shorten(oneLine(m.text), detail.textBudget) })),
+      .map((m) => ({ id: m.id, text: shorten(oneLine(m.text), detail.textBudget), announced: state.announced?.has(m.id) === true })),
     changedSince: sinceVersion === undefined || status.sceneVersion !== sinceVersion,
   };
 }
 
-/** Compact JSON, the form poll_room returns as its text content. */
+/**
+ * The counters as compact JSON plus one line per pending mention. This is the
+ * part the size bound governs: it grows with the room, so it is the part that
+ * can be traded away.
+ *
+ * The mention lines carry the id, whether a widget has already announced the
+ * mention into the chat, and the note's words - all inside the untrusted block,
+ * because a line of that list is mostly someone else's text. `oneLine` has
+ * already flattened the text, so a note can neither add a line of its own nor
+ * forge the closing marker.
+ */
+export function pollBody(payload: PollPayload): string {
+  const { pendingMentions, ...counters } = payload;
+  const lines = [JSON.stringify(counters)];
+  if (pendingMentions.length) {
+    lines.push(UNTRUSTED_OPEN);
+    for (const m of pendingMentions) lines.push(`mention ${m.id} announced: ${m.announced} - ${m.text}`);
+    lines.push(UNTRUSTED_CLOSE);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * What poll_room returns: the bounded body, then the scope rule. The rule is
+ * fixed-length and is the one thing in the result that must not be shortened,
+ * so it sits outside the bound rather than competing with the counters for it.
+ */
 export function pollText(payload: PollPayload): string {
-  return JSON.stringify(payload);
+  return `${pollBody(payload)}\n${MENTION_SCOPE_RULE}`;
 }
 
 /**
@@ -102,7 +135,7 @@ export function buildPollPayload(state: PollState, sinceVersion?: number): PollP
   const fallback = assemble(state, sinceVersion, DETAIL_LEVELS[DETAIL_LEVELS.length - 1]);
   for (const detail of DETAIL_LEVELS) {
     const candidate = assemble(state, sinceVersion, detail);
-    if (pollText(candidate).length <= POLL_TEXT_LIMIT) return candidate;
+    if (pollBody(candidate).length <= POLL_TEXT_LIMIT) return candidate;
   }
   return fallback;
 }
