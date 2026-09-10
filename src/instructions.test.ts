@@ -31,6 +31,18 @@ test("instructions point a person at the browser after a room is opened", () => 
   assert.match(SERVER_INSTRUCTIONS, /excalidraw\.com/);
 });
 
+test("instructions tell the agent to snapshot hand-drawn content and to check a layout for overlap", () => {
+  const sentences = SERVER_INSTRUCTIONS.split(". ");
+  assert.ok(
+    sentences.some((s) => /snapshot_scene/.test(s) && /hand-drawn|strokes/.test(s)),
+    SERVER_INSTRUCTIONS,
+  );
+  assert.ok(
+    sentences.some((s) => /snapshot_scene/.test(s) && /overlap/.test(s)),
+    SERVER_INSTRUCTIONS,
+  );
+});
+
 test("instructions carry the scope rule verbatim", () => {
   assert.ok(SERVER_INSTRUCTIONS.includes(MENTION_SCOPE_RULE), SERVER_INSTRUCTIONS);
   assert.ok(MENTION_SCOPE_RULE.includes('"out of scope"'), MENTION_SCOPE_RULE);

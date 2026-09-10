@@ -10,10 +10,16 @@ set -euo pipefail
 
 # Present in the bundle or the installed server is broken. dist/view/canvas.html
 # is read at resources/read time; manifest.json is how the client installs it.
+# The last two are what snapshot_scene rasterises with: the resvg WebAssembly
+# module, and the one font it loads so text renders the same on every host.
+# Keep each of those on a line of its own - the acceptance check reads the
+# whole line as the path.
 required=(
   manifest.json
   dist/index.js
   dist/view/canvas.html
+  node_modules/@resvg/resvg-wasm/index_bg.wasm
+  assets/fonts/DejaVuSans.ttf
 )
 
 # Path prefixes that must not appear at the root of the bundle - one per

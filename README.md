@@ -63,6 +63,18 @@ Hosts may cache the view HTML by resource URI and keep serving it across extensi
 
 Pending `@claude` mentions are outlined on the canvas, around the note that carries them, and the outline clears when the agent acknowledges the note. The mention's words are on the canvas where the person wrote them and are not repeated in the widget's chrome. The view is read-only: it never writes to the room, and editing happens on excalidraw.com. Hosts without MCP Apps support get the same text results as before.
 
+### Snapshots
+
+The relay carries element JSON, so a freehand stroke reaches the model as an array of points: handwriting, sketched boxes and hand-drawn arrows are unreadable to it. `snapshot_scene` renders a region of the room to a PNG on the server and returns it as an image block, so an agent running headless in Claude Code or as the listener subagent can look at the drawing without a person taking a screenshot.
+
+Select the region with `ids`, with `near` (one element and everything within 250 scene units of it), or with `bbox`; with no selector the whole scene is rendered. A container's bound label travels with the container. Deleted elements are never drawn. After the image comes a text block naming the bounding box in scene coordinates, the scale, the pixel size, the ids of every element drawn and, where any were substituted, a `placeholders` line, so what is on screen maps back to `read_scene` ids and `near` queries.
+
+Rendering happens in Node with no browser: the server writes an SVG and rasterises it with [resvg](https://github.com/yisibl/resvg-js) compiled to WebAssembly. The supported subset is `rectangle`, `ellipse`, `diamond`, `line`, `arrow` (with arrowheads), `freedraw` (smoothed, pressure ignored), `text`, and text bound inside a container. It is a flat rendering, not a copy of the canvas: `roughness` is ignored, so nothing has the hand-drawn wobble excalidraw.com draws, and every fill is solid, while `strokeColor`, `backgroundColor`, `strokeWidth` and `opacity` are honoured. `image`, `frame`, `embeddable`, `iframe` and `magicframe` elements are drawn as a dashed box labelled with the type and listed on the `placeholders` line, so the model can tell that something is there rather than reading empty space.
+
+`scale` is pixels per scene unit: 1 by default, at most 3, and worth raising to read small handwriting. `maxWidth` and `maxHeight` cap each axis at 1600 pixels by default, and the PNG is capped at 4 MB. A render that would exceed any of those is drawn at a lower scale, and the text block says the scale was reduced and why.
+
+Text is drawn with one bundled font, [DejaVu Sans](https://dejavu-fonts.github.io/), so a snapshot looks the same on every host rather than depending on the fonts installed there. It is free software under the Bitstream Vera and Arev licences; the full text ships beside it in `assets/fonts/LICENSE-DejaVu.txt` (relative to the repository root).
+
 ### Talk to it on the canvas
 
 Type a text element containing `@claude` next to the thing you mean, for example `@claude add a cache between these`. The agent calls `wait_for_mention`, which blocks until such a text appears and has stopped changing, then returns the instruction together with the elements around it.
@@ -120,6 +132,7 @@ The listener runs until you stop it or until it escalates. A subagent's report r
 | `poll_room` | Lightweight state probe: connection state, scene version, peers, every unacknowledged mention with its id, text and `announced` flag, and whether the scene changed since a version you pass. |
 | `room_status` | Connection state, peers, element counts. |
 | `read_scene` | The drawing as one line per element (default), or the full element JSON (compact). Freehand strokes come back as a sampled path so a scribble is legible. `ids` narrows the read to named elements; `near: {id, radius}` reads one element and its neighbourhood, so a check costs a few elements rather than the whole scene. |
+| `snapshot_scene` | Render a region of the room to a PNG and return it as an image block, so hand-drawn content is readable and a layout can be checked for overlap. `ids`, `near` or `bbox` selects the region; `scale` (max 3), `maxWidth` and `maxHeight` bound the render. The text block after the image gives the bounding box, scale, pixel size and the ids drawn. See [Snapshots](#snapshots). |
 | `add_elements` | Add shapes, text, arrows, lines and freehand strokes from compact specs. Arrows bind to element ids; edge points are computed. Any spec takes an optional `link` (a URL) to make the element clickable. |
 | `add_raw_elements` | Add complete Excalidraw elements verbatim, for example from an `.excalidraw` file. |
 | `update_elements` | Patch elements by id. Versions are bumped so peers accept the change. |
@@ -176,6 +189,7 @@ Prefer `add_elements` compact specs over `add_raw_elements` for bulk creation: a
 ### Other
 
 - Images and other file attachments are out of scope. They travel by a separate path and are not needed for diagrams.
+- A snapshot is a flat rendering of the supported element subset, not excalidraw.com's own export: no hand-drawn roughness, solid fills only, and image elements as labelled placeholders. Reading the files behind image elements out of Firebase Storage is out of scope.
 - Text is measured by approximation, not a real font. Labels may be slightly wider or narrower than the web app would make them; the app re-measures on the next edit.
 - The public relay is not a documented API for third parties. The protocol is open source and stable in practice, but nobody has promised to keep it that way.
 - One room per server process. Run a second instance for a second room.
