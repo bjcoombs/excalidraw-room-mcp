@@ -18,6 +18,7 @@ import {
   findHandledMentions,
   findMentions,
   formatMention,
+  nearbyNeighbourhood,
   markAcknowledged,
   markRemoved,
   markSeen,
@@ -25,12 +26,12 @@ import {
   planAcknowledgement,
   MAX_REPLY_LENGTH,
   MENTION_STATUSES,
-  nearbyElements,
   previousLine,
   replySchema,
   statusSchema,
   withScopeRule,
   type HandledVersions,
+  type FormatMentionOptions,
   type Mention,
   type PreviousLine,
 } from "./mentions.js";
@@ -97,6 +98,22 @@ function handledMentionsOnCanvas(tag: string, elements = room.getElements()): Me
 function previousLineFor(id: string, elements = room.getElements()): PreviousLine | null {
   const line = findAttributedLine(elements, id);
   return line ? previousLine(line) : null;
+}
+
+/**
+ * One mention rendered with its neighbourhood: the elements around it and the
+ * hop markers saying why the far ones are there. Every mention block goes
+ * through here so `read_scene near`, `snapshot_scene near` and the mention
+ * tools all read the same neighbourhood.
+ */
+function mentionBlock(
+  mention: Mention,
+  elements: readonly ExcalidrawElement[],
+  radius: number,
+  opts: FormatMentionOptions = {},
+): string {
+  const { elements: nearby, reasons } = nearbyNeighbourhood(elements, mention, radius);
+  return formatMention(mention, nearby, { ...opts, reasons });
 }
 
 /**
@@ -529,7 +546,7 @@ server.registerTool(
     const mention = await room.waitForMention(tag, handledMentions, { timeoutMs: timeoutSeconds * 1000 });
     if (!mention) return text(`no mention of ${tag} within ${timeoutSeconds}s`);
     const elements = room.getElements();
-    const out = formatMention(mention, nearbyElements(elements, mention, radius), {
+    const out = mentionBlock(mention, elements, radius, {
       previous: previousLineFor(mention.id, elements),
     });
     if (autoSeen) await commitSeen(mention);
@@ -564,9 +581,9 @@ server.registerTool(
     if (!pending.length && !handled.length) return text(`no pending mentions of ${tag}`);
     const blocks = [
       ...pending.map((m) =>
-        formatMention(m, nearbyElements(all, m, radius), { previous: previousLineFor(m.id, all) }),
+        mentionBlock(m, all, radius, { previous: previousLineFor(m.id, all) }),
       ),
-      ...handled.map((m) => formatMention(m, nearbyElements(all, m, radius), { handled: true })),
+      ...handled.map((m) => mentionBlock(m, all, radius, { handled: true })),
     ];
     const out = blocks.join("\n\n---\n\n");
     if (autoSeen) {

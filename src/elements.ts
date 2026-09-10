@@ -25,6 +25,12 @@ export type ExcalidrawElement = ElementLike & {
   strokeColor?: string;
   backgroundColor?: string;
   link?: string | null;
+  /** Groups the element belongs to. Upstream writes an empty array, never undefined. */
+  groupIds?: string[] | null;
+  /** Frame the element sits in, by frame id. */
+  frameId?: string | null;
+  /** A frame's title, which is the only text a frame carries. */
+  name?: string | null;
 };
 
 /** BindMode, packages/element/src/types.ts: how the arrow meets the shape. */
@@ -525,8 +531,22 @@ function samplePoints(points: [number, number][], max: number): [number, number]
   return out;
 }
 
-/** One line per element, readable by a person or an agent. */
-export function summarise(elements: readonly ExcalidrawElement[]): string {
+/**
+ * Why an element is in a neighbourhood although it sits outside the radius:
+ * id -> one of `via arrow <id>`, `via group` or `via frame <id>`. Elements
+ * picked by the radius itself carry no reason and are absent from the map.
+ */
+export type SummaryReasons = ReadonlyMap<string, string>;
+
+/**
+ * One line per element, readable by a person or an agent.
+ *
+ * `reasons` is the neighbourhood's hop map: an element reached by following an
+ * arrow binding, a group or a frame is a long way from the note it is listed
+ * under, so its line ends with why it is there. Without the marker the model
+ * reads a far shape as being next to the mention.
+ */
+export function summarise(elements: readonly ExcalidrawElement[], reasons: SummaryReasons = new Map()): string {
   const byId = new Map(elements.map((e) => [e.id, e]));
   const labelFor = new Map<string, string>();
   for (const el of elements) {
@@ -538,22 +558,30 @@ export function summarise(elements: readonly ExcalidrawElement[]): string {
   for (const el of elements) {
     if (el.isDeleted) continue;
     if (el.type === "text" && el.containerId && byId.has(el.containerId)) continue;
-    const parts: string[] = [`${el.id} ${el.type}`];
-    if (el.type === "freedraw" || el.type === "arrow" || el.type === "line") {
-      const pts = (el.points ?? []).map(([px, py]) => [round(el.x + px), round(el.y + py)] as [number, number]);
-      const sampled = samplePoints(pts, 8);
-      parts.push(`${pts.length} pts: ${sampled.map(([px, py]) => `(${px},${py})`).join(" -> ")}`);
-      if (el.startBinding) parts.push(`from ${el.startBinding.elementId}`);
-      if (el.endBinding) parts.push(`to ${el.endBinding.elementId}`);
-    } else {
-      parts.push(`@(${round(el.x)},${round(el.y)}) ${round(el.width)}x${round(el.height)}`);
-    }
-    if (el.type === "text") parts.push(`"${el.text ?? ""}"`);
-    const label = labelFor.get(el.id);
-    if (label !== undefined) parts.push(`"${label}"`);
-    if (el.strokeColor && el.strokeColor !== "#1e1e1e") parts.push(`stroke=${el.strokeColor}`);
-    if (el.backgroundColor && el.backgroundColor !== "transparent") parts.push(`fill=${el.backgroundColor}`);
-    lines.push(parts.join(" "));
+    lines.push(summaryLine(el, labelFor.get(el.id), reasons.get(el.id)));
   }
   return lines.join("\n");
+}
+
+/** One element's line: what it is, where, what it says, and why it is listed. */
+function summaryLine(el: ExcalidrawElement, label: string | undefined, reason: string | undefined): string {
+  const parts: string[] = [`${el.id} ${el.type}`];
+  if (el.type === "freedraw" || el.type === "arrow" || el.type === "line") {
+    const pts = (el.points ?? []).map(([px, py]) => [round(el.x + px), round(el.y + py)] as [number, number]);
+    const sampled = samplePoints(pts, 8);
+    parts.push(`${pts.length} pts: ${sampled.map(([px, py]) => `(${px},${py})`).join(" -> ")}`);
+    if (el.startBinding) parts.push(`from ${el.startBinding.elementId}`);
+    if (el.endBinding) parts.push(`to ${el.endBinding.elementId}`);
+  } else {
+    parts.push(`@(${round(el.x)},${round(el.y)}) ${round(el.width)}x${round(el.height)}`);
+  }
+  if (el.type === "text") parts.push(`"${el.text ?? ""}"`);
+  // A frame's title is a property rather than a child element - frames are the
+  // only type carrying one - so it only reaches the model if this prints it.
+  if (el.name) parts.push(`"${el.name}"`);
+  if (label !== undefined) parts.push(`"${label}"`);
+  if (el.strokeColor && el.strokeColor !== "#1e1e1e") parts.push(`stroke=${el.strokeColor}`);
+  if (el.backgroundColor && el.backgroundColor !== "transparent") parts.push(`fill=${el.backgroundColor}`);
+  if (reason !== undefined) parts.push(reason);
+  return parts.join(" ");
 }
