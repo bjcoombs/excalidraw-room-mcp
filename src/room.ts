@@ -461,15 +461,22 @@ export class RoomClient extends EventEmitter {
     const settleMs = opts.settleMs ?? 1500;
     const deadline = Date.now() + timeoutMs;
 
+    // Applied to what is returned, not only to what was picked. Settling
+    // re-reads the element, so the mention that ends the wait may be a later
+    // version than the one that passed the filter - one a peer has rewritten,
+    // chain metadata included. The filter therefore holds at both ends.
+    const accepted = (mention: Mention): Mention | null =>
+      !opts.accept || opts.accept(mention) ? mention : null;
+
     const settled = async (candidate: Mention): Promise<Mention | null> => {
       // Wait until the element stops changing, then re-read it.
       for (;;) {
         await new Promise((r) => setTimeout(r, settleMs));
         const now = this.elements.get(candidate.id);
         if (!now || now.isDeleted || !isMentionText(now.text, tags)) return null;
-        if (now.version === candidate.version) return candidate;
+        if (now.version === candidate.version) return accepted(candidate);
         candidate = findMentions([now], tags, handled)[0] ?? candidate;
-        if (Date.now() > deadline) return candidate;
+        if (Date.now() > deadline) return accepted(candidate);
       }
     };
 

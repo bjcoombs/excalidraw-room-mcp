@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_AGENT_REPLY_DEPTH } from "./mentions.js";
+import type { ExcalidrawElement } from "./elements.js";
+import { DEFAULT_AGENT_REPLY_DEPTH, defaultTags, visibleMentions, type Mention } from "./mentions.js";
 import { RoomClient } from "./room.js";
 
 const KEY = "CGRLjH7340vVPvMRyjFIrg"; // 22 chars, the shape excalidraw.com produces
@@ -53,4 +54,46 @@ test("a room takes its agent-reply bound on join, defaults to one hop, and refus
   }
   assert.equal(room.status().connected, false);
   assert.equal(room.agentReplyDepth, DEFAULT_AGENT_REPLY_DEPTH, "and the bound is untouched");
+});
+
+test("a mention rewritten while it settles is filtered again before it ends the wait", async () => {
+  // The filter is applied to what is returned, not only to what was picked:
+  // settling re-reads the element, so a peer that rewrites it - its chain
+  // metadata included - must not get a mention past the caller's bound
+  // returned just because the version that passed the filter was inside it.
+  const room = new RoomClient();
+  const chain = { author: "alpha", authorKind: "agent", excalidrawRoomRootAuthorKind: "agent", excalidrawRoomDepth: 0 };
+  const note = {
+    id: "n1",
+    type: "text",
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 25,
+    text: "@beta look",
+    version: 1,
+    versionNonce: 1,
+    isDeleted: false,
+    boundElements: null,
+    customData: chain,
+  } as unknown as ExcalidrawElement;
+
+  const accept = (m: Mention) => visibleMentions([m], "beta", true, 1).length > 0;
+  const waited = room.waitForMention(defaultTags("beta"), new Map(), { timeoutMs: 400, settleMs: 20, accept });
+  room.ingestRemote([note]);
+  // Rewritten mid-settle to a depth the bound no longer allows.
+  setTimeout(
+    () =>
+      room.ingestRemote([
+        { ...note, version: 2, versionNonce: 2, customData: { ...chain, excalidrawRoomDepth: 4 } } as ExcalidrawElement,
+      ]),
+    5,
+  );
+  assert.equal(await waited, null, "the rewritten version is refused, so the wait ends empty");
+
+  // The same note left alone is returned, so the filter is what refused it.
+  const quiet = new RoomClient();
+  const heard = quiet.waitForMention(defaultTags("beta"), new Map(), { timeoutMs: 5000, settleMs: 20, accept });
+  quiet.ingestRemote([note]);
+  assert.equal((await heard)?.id, "n1");
 });

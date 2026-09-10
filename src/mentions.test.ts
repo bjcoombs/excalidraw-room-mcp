@@ -1717,8 +1717,22 @@ test("root author kind and depth are copied down a chain", () => {
   assert.deepEqual(chainKeys(written), { kind: AGENT_AUTHOR_KIND, depth: 1 });
   assert.deepEqual(chainOf(written), { rootAuthorKind: AGENT_AUTHOR_KIND, depth: 1 });
   // A line built with no chain carries neither key, which is what every line
-  // written before this existed looks like: a root, at depth 0.
+  // written before this existed looks like. It still carries the back
+  // reference, so it is an answer to something and counts as one hop: reading
+  // it as a depth-0 root would let an implementation that writes the reference
+  // without the depth restart the count at every hop, and a mixed pair could
+  // then trade replies forever.
   const chainless = buildAttributedLine(bare, "beta: see chat", ctx(), "beta");
   assert.deepEqual(chainKeys(chainless), { kind: undefined, depth: undefined });
-  assert.deepEqual(chainOf(chainless), { rootAuthorKind: AGENT_AUTHOR_KIND, depth: 0 });
+  assert.deepEqual(chainOf(chainless), { rootAuthorKind: AGENT_AUTHOR_KIND, depth: 1 });
+  // At the default bound of 1 that reply is already past it, so the exchange
+  // stops instead of running on.
+  assert.equal(withinReplyDepth(mentionOf(chainless), DEFAULT_AGENT_REPLY_DEPTH), false);
+  // An element that answers nothing is still the root it looks like, and a
+  // reference that is not an id is not a reference.
+  assert.equal(chainOf({ ...bare, customData: { [REPLY_CUSTOM_DATA_KEY]: 7 } }).depth, 0);
+  assert.equal(chainOf(stampAuthor(bare, "beta")).depth, 0);
+  // An explicit depth always wins over the fallback, 0 included: a line this
+  // server wrote says where it sits and is believed.
+  assert.equal(chainOf({ ...chainless, customData: { ...(chainless.customData as object), [DEPTH_CUSTOM_DATA_KEY]: 0 } }).depth, 0);
 });

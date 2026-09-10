@@ -123,13 +123,22 @@ export interface ChainOrigin {
  * The two keys arrive from peers unsanitised, so each is read defensively and
  * falls back to what the element itself says: an unstamped note is a person's,
  * a stamped one is an agent's, and a note carrying no depth is the root of its
- * own chain. That fallback is what makes an ordinary note written in a browser,
- * or by an agent that knows nothing of this, the depth-0 root it is.
+ * own chain. That fallback is what makes an ordinary note written in a browser
+ * the depth-0 root it is.
+ *
+ * One exception, and it is the whole reason the fallback is not simply 0: an
+ * element carrying the back reference is by construction an answer to something
+ * else, so it is at least one hop from a root however it was written. Reading
+ * it as 0 would let a peer that writes the back reference without the depth
+ * restart the count at every hop, and a mixed pair of implementations could
+ * then trade replies forever. Missing metadata is read the bounded way in both
+ * fields: such a line counts as a hop, and an agent wrote it.
  */
 export function chainOf(el: ExcalidrawElement): ChainOrigin {
   const data = el.customData as Record<string, unknown> | undefined;
   const kind = data?.[ROOT_AUTHOR_KIND_CUSTOM_DATA_KEY];
   const depth = data?.[DEPTH_CUSTOM_DATA_KEY];
+  const answersSomething = typeof data?.[REPLY_CUSTOM_DATA_KEY] === "string";
   return {
     rootAuthorKind:
       kind === PERSON_AUTHOR || kind === AGENT_AUTHOR_KIND
@@ -137,7 +146,12 @@ export function chainOf(el: ExcalidrawElement): ChainOrigin {
         : elementAuthor(el) === null
           ? PERSON_AUTHOR
           : AGENT_AUTHOR_KIND,
-    depth: typeof depth === "number" && Number.isInteger(depth) ? Math.max(0, depth) : 0,
+    depth:
+      typeof depth === "number" && Number.isInteger(depth)
+        ? Math.max(0, depth)
+        : answersSomething
+          ? 1
+          : 0,
   };
 }
 

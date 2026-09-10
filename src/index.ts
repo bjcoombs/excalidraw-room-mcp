@@ -419,7 +419,7 @@ const nearbyRadiusSchema = z
  * agent-to-agent traffic their canvas carries, and no rebuild changes it.
  */
 const roomReplyDepthSchema = agentReplyDepthSchema.describe(
-  `How many agent replies deep a chain an agent started may run before this agent stops hearing it, ${MIN_AGENT_REPLY_DEPTH} to ${MAX_AGENT_REPLY_DEPTH}. ${DEFAULT_AGENT_REPLY_DEPTH} by default, so an agent may answer another agent once and the conversation goes on only if a person writes again; 0 means agent-started chains are never answered, even with answerAgentMentions on. A chain a person started is never bounded. room_status reports it as "agentReplyDepth: <n>".`,
+  `How many agent replies deep a chain an agent started may run before this agent stops hearing it, ${MIN_AGENT_REPLY_DEPTH} to ${MAX_AGENT_REPLY_DEPTH}. ${DEFAULT_AGENT_REPLY_DEPTH} by default, so an agent may answer another agent once and the conversation goes on only if a person writes again; 0 means agent-started chains are never answered, even with answerAgentMentions on. A chain a person started is never bounded. This agent takes the bound at its own join and applies it to what it hears; it is not synchronised across the room, so two agents in one room may hold different bounds. room_status reports it as "agentReplyDepth: <n>".`,
 );
 
 /** A refusal naming the handle, or null when there is nothing to refuse. */
