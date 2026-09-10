@@ -1,7 +1,11 @@
 /**
  * The in-chat canvas. Read-only: it renders what the server has, and never
  * writes to the room. Editing stays on excalidraw.com, one click away through
- * the header link.
+ * the status bar's Open in browser control.
+ *
+ * The canvas takes the whole widget. Everything else the reader needs is one
+ * line along the bottom (status.tsx); a mention's words are drawn where the
+ * note sits, on the canvas, rather than repeated in a column beside it.
  *
  * Two things here exist because the widget painted a still frame in a host we
  * could not step through (issue #30).
@@ -12,18 +16,18 @@
  * Excalidraw is a silent no-op - it logs React's "can't call setState on a
  * component that is not yet mounted" and draws nothing. A seed result that
  * arrives in that window was therefore dropped while still being recorded as
- * applied, after which every poll carrying the same signature returned early and
- * the canvas stayed as it was until somebody edited the room. Holding the scene
- * and flushing it from an effect closes that window: a parent's effect runs
- * after its children have mounted.
+ * applied, after which every refresh carrying the same signature returned early
+ * and the canvas stayed as it was until somebody edited the room. Holding the
+ * scene and flushing it from an effect closes that window: a parent's effect
+ * runs after its children have mounted.
  *
- * Second, every stage of the apply path is counted and shown in a status line,
- * so the next operator sees which stage stopped without opening dev tools.
+ * Second, the bar reports when the last update landed, so a canvas that has
+ * stopped moving can be told from a room that has.
  *
  * A third thing exists because a host may not route the view to the same
  * server process the model is talking to. Claude Desktop routes an iframe's
  * callServerTool to a second process, and one room per process means that
- * process has joined nothing, so every poll answers with the not-in-a-room
+ * process has joined nothing, so every refresh answers with the not-in-a-room
  * refusal while the model reads the scene perfectly well. So the view learns
  * the room link from the summary it is seeded with and passes it on every call:
  * show_room joins that room first when it is in none, and the widget shows up
@@ -36,69 +40,29 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { boundsChanged, FIT_PADDING, sceneBounds, type SceneBounds } from "./bounds.js";
 import { highlightElements } from "./highlights.js";
 import { envelopeShape, isNotInRoom, linkFromSummary, parseResult, resultText, roomLink, sceneSignature, type ShowRoomPayload } from "./payload.js";
+import { canvasElements } from "./scene.js";
+import { openInBrowser, StatusBar } from "./status.js";
 
 /** How often the view asks the server for the room again, in milliseconds. */
-const POLL_INTERVAL_MS = 2000;
+const REFRESH_INTERVAL_MS = 2000;
 
 /**
  * The height the view asks the host for. A 1200x700 scene in a 200 px strip is
- * what issue #31 reports; this is the smallest height at which such a scene
- * plus the mention strip is legible. The host may refuse, hence the matching
- * min-height in style.css.
+ * what issue #31 reports; this is the smallest height at which such a scene is
+ * legible. The host may refuse, hence the matching min-height in style.css.
  */
 const PREFERRED_HEIGHT_PX = 560;
-
-/** Counters and timestamps the status line reports. Refs, not state: they are written from a poll. */
-interface Diagnostics {
-  polls: number;
-  applies: number;
-  /** Results that were not a payload: the pre-join refusal, or an envelope this view cannot read. */
-  parseNulls: number;
-  /** The envelope keys of the most recent unreadable result, so the next failure names its shape. */
-  lastUnreadableShape: string | null;
-  /** Payloads read from structured content. */
-  structuredParses: number;
-  /** Payloads read from a JSON text item, which is what include: "json" delivers. */
-  textParses: number;
-  /** updateScene calls that reached the canvas. */
-  updates: number;
-  /** Scenes held because the canvas was not ready yet. */
-  deferred: number;
-  /** Results dropped because a later poll had already answered. */
-  stale: number;
-  /** Not-in-a-room replies received before any room link was known. Not a fault: there is nothing to join yet. */
-  awaitingLink: number;
-  fits: number;
-  lastRefreshAt: number | null;
-  lastError: string | null;
-}
-
-function emptyDiagnostics(): Diagnostics {
-  return {
-    polls: 0,
-    applies: 0,
-    parseNulls: 0,
-    lastUnreadableShape: null,
-    structuredParses: 0,
-    textParses: 0,
-    updates: 0,
-    deferred: 0,
-    stale: 0,
-    awaitingLink: 0,
-    fits: 0,
-    lastRefreshAt: null,
-    lastError: null,
-  };
-}
 
 export function RoomView({ app }: { app: App }) {
   const [payload, setPayload] = useState<ShowRoomPayload | null>(null);
   const [note, setNote] = useState<string>("Connecting to the room…");
-  const [visibility, setVisibility] = useState<string>(() => document.visibilityState);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdateAt, setLastUpdateAt] = useState<number | null>(null);
   const [pollingAvailable, setPollingAvailable] = useState<boolean | null>(null);
+  const [linkBlocked, setLinkBlocked] = useState(false);
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
   const lastSignature = useRef<string | null>(null);
-  /** Which poll is newest. A result from an older one is dropped rather than applied. */
+  /** Which request is newest. A result from an older one is dropped rather than applied. */
   const lastGeneration = useRef(0);
   const lastBounds = useRef<SceneBounds | null>(null);
   /** The newest scene that has not reached the canvas, or null when the canvas is current. */
@@ -108,9 +72,7 @@ export function RoomView({ app }: { app: App }) {
    * process that has joined nothing joins this room rather than refusing.
    */
   const link = useRef<string | null>(null);
-  const diagnostics = useRef<Diagnostics>(emptyDiagnostics());
-  // Bumping this is how a ref write reaches the status line; the counters
-  // themselves stay in a ref so a poll never races a render for them.
+  // Bumping this is how a flush from an effect reaches the bar.
   const [, setTick] = useState(0);
   const show = useCallback(() => setTick((n) => n + 1), []);
 
@@ -120,33 +82,28 @@ export function RoomView({ app }: { app: App }) {
    * caller knows whether anything changed; a scene held for want of a mounted
    * canvas stays in `pending` for the next call.
    *
-   * Only ever called from an effect or from a poll's callback - never from a
+   * Only ever called from an effect or from a refresh's callback - never from a
    * render. See the note at the top of this file.
    */
   const flush = useCallback(() => {
     const next = pending.current;
     if (!next) return false;
     const instance = api.current;
-    if (!instance) {
-      diagnostics.current.deferred += 1;
-      return false;
-    }
-    const elements = [...next.elements, ...highlightElements(next.mentions)];
+    if (!instance) return false;
+    const elements = canvasElements(next.elements, highlightElements(next.mentions) as unknown as Record<string, unknown>[]);
     // View mode has no undo stack to feed, and a remote scene is not the
     // reader's edit: NEVER keeps it out of history. Excalidraw 0.18 requires the
     // action explicitly rather than defaulting it.
     instance.updateScene({ elements: elements as never, captureUpdate: CaptureUpdateAction.NEVER });
-    diagnostics.current.updates += 1;
     pending.current = null;
 
     // Measured over the drawn list, not over next.elements: a highlight box sits
     // 8 px outside the mention it wraps, so bounds taken from the elements alone
     // can exclude a highlight at the scene edge. Relying on FIT_PADDING to
     // absorb the overhang would tie correctness to two unrelated constants.
-    const bounds = sceneBounds(elements as unknown as Record<string, unknown>[]);
+    const bounds = sceneBounds(elements);
     if (bounds && boundsChanged(lastBounds.current, bounds)) {
       lastBounds.current = bounds;
-      diagnostics.current.fits += 1;
       // Guarded by boundsChanged above: fitToContent runs on first paint and
       // whenever an edge moved, and never for an edit inside the existing box,
       // which would yank a viewport the reader is looking at. canvasOffsets is
@@ -172,14 +129,13 @@ export function RoomView({ app }: { app: App }) {
   });
 
   // Applied on every refresh. The scene is only pushed into the component when
-  // an element's version or versionNonce moved, so an unchanged poll leaves the
-  // viewport alone. The `pending` half of that test is what keeps a held scene
-  // from being stranded: an identical signature is only grounds to skip the
-  // push when the last one actually reached the canvas.
+  // an element's version or versionNonce moved, so an unchanged result leaves
+  // the viewport alone. The `pending` half of that test is what keeps a held
+  // scene from being stranded: an identical signature is only grounds to skip
+  // the push when the last one actually reached the canvas.
   const apply = useCallback(
     (next: ShowRoomPayload) => {
       setPayload(next);
-      diagnostics.current.applies += 1;
       const signature = sceneSignature(next.elements) + `#${next.mentions.map((m) => `${m.id}:${m.version}`).join(",")}`;
       if (signature === lastSignature.current && pending.current === null) return;
       lastSignature.current = signature;
@@ -190,21 +146,17 @@ export function RoomView({ app }: { app: App }) {
   );
 
   /**
-   * Read one tool result and count which channel carried it. An unreadable
-   * result records the envelope's shape rather than only incrementing a
-   * counter: the shape is what tells the next operator which host wrapper the
-   * parser is missing.
+   * Read one tool result.
    *
    * The seed is the exception. `show_room` returns the model's summary by
    * default, and the host hands the view whatever the model's call returned, so
    * a seed without a payload is the normal case rather than a failure: the
-   * view's own first poll, dispatched on connect with include: "json", is what
-   * carries the scene. Counting that as unreadable would report a fault that is
-   * not there.
+   * view's own first refresh, dispatched on connect with include: "json", is
+   * what carries the scene.
    */
   const record = useCallback(
     (result: unknown, seed = false) => {
-      const { payload: next, source } = parseResult(result);
+      const { payload: next } = parseResult(result);
       // Every result is read for the room link first, payload or not: the seed
       // is a summary whose first line names the room, and it is often the only
       // thing that does when the view's own calls land on a process that has
@@ -212,8 +164,6 @@ export function RoomView({ app }: { app: App }) {
       const named = roomLink(next?.link ?? null) ?? linkFromSummary(resultText(result));
       if (named) link.current = named;
       if (next) {
-        if (source === "structured") diagnostics.current.structuredParses += 1;
-        else diagnostics.current.textParses += 1;
         apply(next);
         return;
       }
@@ -222,26 +172,24 @@ export function RoomView({ app }: { app: App }) {
         return;
       }
       // A refusal from a server that has joined nothing, with no link yet to
-      // send it, is the expected state and not an unreadable envelope: the next
-      // seed or summary carrying a link is what ends it.
+      // send it, is the expected state: the next seed or summary carrying a
+      // link is what ends it.
       if (link.current === null && isNotInRoom(resultText(result))) {
-        diagnostics.current.awaitingLink += 1;
         setNote("Waiting for a room link. Ask for show_room once the room is joined.");
         return;
       }
-      diagnostics.current.parseNulls += 1;
-      diagnostics.current.lastUnreadableShape = envelopeShape(result);
-      setNote(resultText(result) ?? "The server is not in a room.");
+      // A result with no text at all: name the envelope the parser was given,
+      // so the next operator sees which host wrapper the view is missing.
+      setNote(resultText(result) ?? `The server sent a result the view could not read: ${envelopeShape(result)}`);
     },
     [apply],
   );
 
   const refresh = useCallback(async () => {
-    diagnostics.current.polls += 1;
-    // The poll does not await the previous call, so two can be in flight at
+    // A refresh does not await the previous call, so two can be in flight at
     // once and the older one can answer last. Applying it would show a scene
-    // the reader has already moved past - self-healing on the next poll, but a
-    // visible step backwards until then. A result is applied only while it is
+    // the reader has already moved past - self-healing on the next refresh, but
+    // a visible step backwards until then. A result is applied only while it is
     // still the newest one dispatched.
     const generation = (lastGeneration.current += 1);
     try {
@@ -255,35 +203,45 @@ export function RoomView({ app }: { app: App }) {
       const args: Record<string, unknown> = { include: "json" };
       if (link.current) args.link = link.current;
       const result = await app.callServerTool({ name: "show_room", arguments: args });
-      if (generation !== lastGeneration.current) {
-        diagnostics.current.stale += 1;
-        return;
-      }
-      diagnostics.current.lastRefreshAt = Date.now();
-      diagnostics.current.lastError = null;
+      if (generation !== lastGeneration.current) return;
+      setLastUpdateAt(Date.now());
+      setError(null);
       record(result);
     } catch (err) {
-      // A poll that throws is reported and retried. Stopping here is what turns
+      // A rejection from a call a later one has already overtaken says nothing
+      // about the state now, and reporting it would put an error back over the
+      // newer call's success.
+      if (generation !== lastGeneration.current) return;
+      // A call that throws is reported and retried. Stopping here is what turns
       // one bad call into a permanently still frame.
-      diagnostics.current.lastError = String(err);
+      setError(String(err));
       setNote(`Could not reach the server: ${String(err)}`);
-    } finally {
-      show();
     }
-  }, [app, record, show]);
+  }, [app, record]);
+
+  /**
+   * Hand the room to the host's browser. A sandboxed iframe cannot navigate
+   * anywhere itself, so a host that refuses leaves the link to be shown as text
+   * in the bar instead of a control that does nothing.
+   */
+  const open = useCallback(() => {
+    const href = roomLink(payload?.link ?? null);
+    if (!href) return;
+    void openInBrowser(app, href).then((outcome) => setLinkBlocked(outcome === "blocked"));
+  }, [app, payload]);
 
   useEffect(() => {
     // A seed the host happens to carry a payload in still paints immediately;
-    // otherwise it is a summary, and the poll below is what fills the canvas.
+    // otherwise it is a summary, and the refresh below is what fills the canvas.
     app.ontoolresult = (params) => {
       record(params, true);
       show();
     };
     void app.connect().then(
       () => {
-        // serverTools is the capability that makes polling possible at all;
-        // without it the Refresh button is the only refresh path, and the
-        // status line has to say so rather than leave a still frame unexplained.
+        // serverTools is the capability that makes an interval refresh possible
+        // at all; without it the Refresh button is the only path, and the bar
+        // has to say so rather than leave a still frame unexplained.
         const capable = app.getHostCapabilities()?.serverTools !== undefined;
         setPollingAvailable(capable);
         // A taller container where the host takes a hint; style.css carries the
@@ -298,16 +256,15 @@ export function RoomView({ app }: { app: App }) {
         void refresh();
       },
       (err: unknown) => {
-        diagnostics.current.lastError = String(err);
+        setError(String(err));
         setNote(`Could not connect to the host: ${String(err)}`);
-        show();
       },
     );
   }, [app, record, refresh, show]);
 
-  // A hidden document is a document nobody is watching: polling it burns the
+  // A hidden document is a document nobody is watching: refreshing it burns the
   // server's socket and the host's budget for nothing. Visibility is the only
-  // thing that stops the poll.
+  // thing that stops the interval.
   useEffect(() => {
     let timer: number | undefined;
     const stop = () => {
@@ -316,10 +273,9 @@ export function RoomView({ app }: { app: App }) {
     };
     const start = () => {
       stop();
-      timer = window.setInterval(() => void refresh(), POLL_INTERVAL_MS);
+      timer = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     };
     const onVisibilityChange = () => {
-      setVisibility(document.visibilityState);
       if (document.hidden) stop();
       else {
         void refresh();
@@ -336,145 +292,28 @@ export function RoomView({ app }: { app: App }) {
 
   return (
     <div className="room">
-      <Header payload={payload} note={note} />
-      <div className="room-body">
-        <div className="room-canvas">
-          <Excalidraw
-            // Called during Excalidraw's render, so this records the API and
-            // nothing else; the effect above does the drawing once it is mounted.
-            excalidrawAPI={(instance) => {
-              api.current = instance;
-            }}
-            viewModeEnabled
-            zenModeEnabled
-            UIOptions={{ canvasActions: { toggleTheme: false } }}
-          />
-        </div>
-        <MentionStrip payload={payload} />
+      <div className="room-canvas">
+        <Excalidraw
+          // Called during Excalidraw's render, so this records the API and
+          // nothing else; the effect above does the drawing once it is mounted.
+          excalidrawAPI={(instance) => {
+            api.current = instance;
+          }}
+          viewModeEnabled
+          zenModeEnabled
+          UIOptions={{ canvasActions: { toggleTheme: false } }}
+        />
       </div>
-      <StatusLine diagnostics={diagnostics.current} visibility={visibility} pollingAvailable={pollingAvailable} onRefresh={() => void refresh()} />
+      <StatusBar
+        payload={payload}
+        note={note}
+        error={error}
+        lastUpdateAt={lastUpdateAt}
+        pollingAvailable={pollingAvailable}
+        linkBlocked={linkBlocked}
+        onOpen={open}
+        onRefresh={() => void refresh()}
+      />
     </div>
-  );
-}
-
-/** Local time of day, or a dash before the first result. */
-function clock(at: number | null): string {
-  return at === null ? "-" : new Date(at).toLocaleTimeString();
-}
-
-/**
- * Why the canvas does or does not repaint, in one line. Every number here
- * distinguishes one stage of the apply path from the next: polls that returned,
- * results that were payloads, scenes that reached the canvas, and fits.
- */
-function StatusLine({
-  diagnostics,
-  visibility,
-  pollingAvailable,
-  onRefresh,
-}: {
-  diagnostics: Diagnostics;
-  visibility: string;
-  pollingAvailable: boolean | null;
-  onRefresh: () => void;
-}) {
-  const polling =
-    pollingAvailable === false ? "polling unavailable: this host does not proxy server tools, use Refresh" : `polling every ${POLL_INTERVAL_MS / 1000}s`;
-  return (
-    <footer className="room-status">
-      <button type="button" className="refresh" onClick={onRefresh}>
-        Refresh
-      </button>
-      <span>last refresh {clock(diagnostics.lastRefreshAt)}</span>
-      <span className="sep">·</span>
-      <span>{diagnostics.polls} polls</span>
-      <span className="sep">·</span>
-      <span>
-        {diagnostics.updates} repaints{diagnostics.fits ? `, ${diagnostics.fits} fits` : ""}
-      </span>
-      <span className="sep">·</span>
-      <span>
-        {diagnostics.structuredParses} structured, {diagnostics.textParses} text
-      </span>
-      {diagnostics.parseNulls ? (
-        <>
-          <span className="sep">·</span>
-          <span>
-            {diagnostics.parseNulls} unreadable{diagnostics.lastUnreadableShape ? ` ${diagnostics.lastUnreadableShape}` : ""}
-          </span>
-        </>
-      ) : null}
-      {diagnostics.deferred ? (
-        <>
-          <span className="sep">·</span>
-          <span>{diagnostics.deferred} deferred</span>
-        </>
-      ) : null}
-      {diagnostics.stale ? (
-        <>
-          <span className="sep">·</span>
-          <span>{diagnostics.stale} stale</span>
-        </>
-      ) : null}
-      {diagnostics.awaitingLink ? (
-        <>
-          <span className="sep">·</span>
-          <span>{diagnostics.awaitingLink} awaiting link</span>
-        </>
-      ) : null}
-      <span className="sep">·</span>
-      <span>{visibility}</span>
-      <span className="sep">·</span>
-      <span>{polling}</span>
-      <span className="status-error">{diagnostics.lastError ? `last error: ${diagnostics.lastError}` : ""}</span>
-    </footer>
-  );
-}
-
-function Header({ payload, note }: { payload: ShowRoomPayload | null; note: string }) {
-  if (!payload) return <header className="room-header">{note}</header>;
-  const peers = payload.peers.length;
-  const href = roomLink(payload.link);
-  return (
-    <header className="room-header">
-      <span className={payload.connected ? "dot dot-on" : "dot dot-off"} />
-      <span>{payload.connected ? "connected" : "disconnected"}</span>
-      <span className="sep">·</span>
-      <span>
-        {peers} peer{peers === 1 ? "" : "s"}
-      </span>
-      <span className="sep">·</span>
-      <span>{payload.elements.length} elements</span>
-      {href ? (
-        <a className="open-link" href={href} target="_blank" rel="noreferrer">
-          Open on excalidraw.com
-        </a>
-      ) : null}
-    </header>
-  );
-}
-
-function MentionStrip({ payload }: { payload: ShowRoomPayload | null }) {
-  const mentions = payload?.mentions ?? [];
-  return (
-    <aside className="room-mentions">
-      <h2>Mentions</h2>
-      {mentions.length === 0 ? (
-        <p className="empty">Nothing pending.</p>
-      ) : (
-        <ul>
-          {mentions.map((m) => (
-            <li key={m.id}>
-              <p className="mention-text">{m.text}</p>
-              <p className="mention-meta">
-                {m.id} · v{m.version}
-                {m.nearby.length ? ` · near ${m.nearby.length}` : ""}
-              </p>
-            </li>
-          ))}
-        </ul>
-      )}
-      <p className="read-only">Read-only view. Draw on excalidraw.com.</p>
-    </aside>
   );
 }

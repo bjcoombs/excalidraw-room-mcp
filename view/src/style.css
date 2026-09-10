@@ -23,21 +23,16 @@ body,
   min-height: 560px;
 }
 
-.room-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.3);
-}
-
-.room-header .sep {
-  opacity: 0.5;
-}
-
-.room-header .open-link {
-  margin-left: auto;
+/*
+ * The canvas takes the whole widget: there is no column beside it and no header
+ * above it, so a wide scene gets the full width it needs.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/64
+ */
+.room-canvas {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
 }
 
 .dot {
@@ -55,66 +50,10 @@ body,
   background: #e03131;
 }
 
-.room-body {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
-
-.room-canvas {
-  flex: 1;
-  min-width: 0;
-  position: relative;
-}
-
-.room-mentions {
-  width: 220px;
-  overflow-y: auto;
-  padding: 8px 10px;
-  font-size: 12px;
-  border-left: 1px solid rgba(128, 128, 128, 0.3);
-}
-
-.room-mentions h2 {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  opacity: 0.6;
-  margin: 0 0 6px;
-}
-
-.room-mentions ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.room-mentions li {
-  border-left: 3px solid #e03131;
-  padding: 4px 0 4px 8px;
-  margin-bottom: 8px;
-}
-
-.mention-text {
-  margin: 0;
-}
-
-.mention-meta,
-.empty,
-.read-only {
-  opacity: 0.6;
-  margin: 2px 0 0;
-}
-
-.read-only {
-  margin-top: 12px;
-}
-
 /*
- * The status line is diagnostics, not chrome: small, quiet, and one line, so it
- * costs the canvas as little height as possible while still answering "is this
- * thing refreshing?" without dev tools.
- * https://github.com/bjcoombs/excalidraw-room-mcp/issues/30
+ * The status bar is the view's only chrome: small, quiet, and one line, so it
+ * costs the canvas as little height as possible while still answering "what is
+ * this room doing?" without dev tools.
  */
 .room-status {
   display: flex;
@@ -131,7 +70,8 @@ body,
   opacity: 0.5;
 }
 
-.room-status .refresh {
+.room-status .refresh,
+.room-status .open-link {
   font: inherit;
   padding: 1px 8px;
   cursor: pointer;
@@ -141,7 +81,16 @@ body,
   color: inherit;
 }
 
+/* The link and the control that stands in for it both sit at the far end. */
+.room-status .open {
+  margin-left: auto;
+}
+
+/* Shown instead of the control when the host refuses to open a link. */
+.room-status .room-link {
+  word-break: break-all;
+}
+
 .room-status .status-error {
   color: #e03131;
-  margin-left: auto;
 }

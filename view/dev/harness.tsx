@@ -100,6 +100,13 @@ const app = {
     return { content: [{ type: "text", text: JSON.stringify(current) }] };
   },
   getHostCapabilities: () => ({ serverTools: {} }),
+  // What a host that allows the request does. `?openlink=refuse` stands in for
+  // one that does not, so the bar's link-as-text fallback can be seen.
+  openLink: async ({ url }: { url: string }) => {
+    if (new URLSearchParams(location.search).get("openlink") === "refuse") return { isError: true };
+    window.open(url, "_blank", "noreferrer");
+    return {};
+  },
   getHostContext: () => ({ displayMode: "inline", availableDisplayModes: ["inline", "fullscreen"] }),
   sendSizeChanged: (size: unknown) => void size,
 } as unknown as App;
