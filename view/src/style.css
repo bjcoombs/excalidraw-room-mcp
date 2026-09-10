@@ -108,3 +108,8 @@ body,
 .room-status .status-error {
   color: #e03131;
 }
+
+/* A menu action's result. Quieter than an error: nothing here is broken. */
+.room-status .status-hint {
+  color: #1971c2;
+}

@@ -29,6 +29,10 @@
     "view/src/status.tsx",
     "view/src/status.test.tsx",
     "view/src/announce.ts",
-    "view/src/announce.test.tsx"
+    "view/src/announce.test.tsx",
+    "view/src/menu.tsx",
+    "view/src/menu.test.tsx",
+    "view/src/snapshot.ts",
+    "view/src/snapshot.test.ts"
   ]
 }

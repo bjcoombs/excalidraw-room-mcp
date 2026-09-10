@@ -109,6 +109,13 @@ export interface StatusBarProps {
   linkBlocked: boolean;
   /** True once the host has refused an announcement, which puts the refusal next to the button. */
   announcementRefused?: boolean;
+  /**
+   * The last menu action's one-line result - a snapshot sent, copied to the
+   * clipboard, or refused everywhere. Null when there is nothing to say. The
+   * menu has no surface of its own once it closes, so this line is where its
+   * actions report.
+   */
+  hint?: string | null;
   onOpen: () => void;
   onRefresh: () => void;
   /** Send the announcement for everything pending. The only path to `ui/message` in this view. */
@@ -123,6 +130,7 @@ export function StatusBar({
   pollingAvailable,
   linkBlocked,
   announcementRefused = false,
+  hint = null,
   onOpen,
   onRefresh,
   onAnswer,
@@ -162,6 +170,7 @@ export function StatusBar({
         </>
       ) : null}
       <AnswerButton count={payload?.mentions.length ?? 0} refused={announcementRefused} onAnswer={onAnswer} />
+      {hint ? <span className="status-hint">{hint}</span> : null}
       {error ? <span className="status-error">last error: {error}</span> : null}
       <OpenControl href={href} linkBlocked={linkBlocked} onOpen={onOpen} />
     </footer>
