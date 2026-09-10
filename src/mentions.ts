@@ -153,18 +153,20 @@ export interface PreviousLine {
  * The server's own words back out of the element: the attribution prefix and
  * the fixed prompt line removed, so what is left is the status or the question
  * as it was given. This is what `formatMention` shows the agent when the person
- * has edited the note and the mention is pending again. The prompt line is what
- * tells the two apart - only a question carries it.
+ * has edited the note and the mention is pending again.
+ *
+ * The last line is what tells the two apart - only a question ends with the
+ * prompt - and only that one line is dropped. A question whose own text happens
+ * to carry the prompt line keeps it: `attributedReplyText` appends its own, so
+ * dropping every match would eat part of what was asked.
  */
 export function previousLine(el: ExcalidrawElement): PreviousLine {
-  const raw = el.text ?? "";
-  const body = raw
-    .split("\n")
-    .filter((line) => line !== REPLY_PROMPT_LINE)
-    .join("\n")
-    .trim();
+  const lines = (el.text ?? "").split("\n");
+  const kind = lines[lines.length - 1] === REPLY_PROMPT_LINE ? "reply" : "status";
+  if (kind === "reply") lines.pop();
+  const body = lines.join("\n").trim();
   return {
-    kind: raw.includes(REPLY_PROMPT_LINE) ? "reply" : "status",
+    kind,
     text: body.startsWith(ATTRIBUTION_PREFIX) ? body.slice(ATTRIBUTION_PREFIX.length) : body,
   };
 }

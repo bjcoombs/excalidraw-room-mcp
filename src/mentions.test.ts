@@ -521,6 +521,18 @@ test("previousLine gives back what the server wrote, and which of the two it was
     assert.deepEqual(previousLine(line(attributedStatusText(status), `s-${status}`)), { kind: "status", text: status });
   }
 
+  // Only the final prompt line is dropped: a question whose own words carry
+  // that line keeps them, because the server appends its own after them.
+  assert.deepEqual(previousLine(line(attributedReplyText(`ask again?\n${REPLY_PROMPT_LINE}`), "r6")), {
+    kind: "reply",
+    text: `ask again?\n${REPLY_PROMPT_LINE}`,
+  });
+  // And a status whose text happens to name the line is still a status.
+  assert.deepEqual(previousLine(line(`${REPLY_PROMPT_LINE}\nclaude: see chat`, "r7")), {
+    kind: "status",
+    text: `${REPLY_PROMPT_LINE}\nclaude: see chat`,
+  });
+
   // The prefix is stripped once, and only from the front.
   assert.equal(previousLine(line("claude: claude: odd", "r3")).text, "claude: odd");
   assert.equal(previousLine(line("no prefix here", "r4")).text, "no prefix here");
