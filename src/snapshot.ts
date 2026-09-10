@@ -57,8 +57,10 @@ export interface Bbox {
 export interface SnapshotRequest {
   /** Render only these elements (a container's bound label travels with it). */
   ids?: readonly string[];
-  /** Render this element and everything within the default mention radius of it. */
+  /** Render this element and everything within the neighbourhood radius of it. */
   near?: string;
+  /** How far `near` reaches, in scene units. Defaults to the room's radius. */
+  nearRadius?: number;
   /** Render this region of scene space, and the elements that intersect it. */
   bbox?: Bbox;
   scale?: number;
@@ -172,7 +174,7 @@ export function selectForSnapshot(
   if (!request.ids && !request.near) return { elements: [...live], unknownIds: [] };
   const { elements, unknownIds } = selectElements(live, {
     ids: request.ids,
-    near: request.near ? { id: request.near, radius: DEFAULT_NEARBY_RADIUS } : undefined,
+    near: request.near ? { id: request.near, radius: request.nearRadius ?? DEFAULT_NEARBY_RADIUS } : undefined,
   });
   return { elements: withBoundText(live, elements), unknownIds };
 }
