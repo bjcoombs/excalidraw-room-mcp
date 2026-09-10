@@ -8,7 +8,18 @@ import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { applyUpdate, buildElements, bump, randomId, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
+import {
+  applyUpdate,
+  buildElements,
+  bump,
+  elementAuthor,
+  PERSON_AUTHOR,
+  randomId,
+  stampAuthor,
+  summarise,
+  type ElementSpec,
+  type ExcalidrawElement,
+} from "./elements.js";
 import { defaultHandle, isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
@@ -294,6 +305,18 @@ function handleRefusal(handle: string | undefined): string | null {
   return `invalid handle ${JSON.stringify(handle)}: a handle is 1 to ${MAX_HANDLE_LENGTH} characters of lowercase letters, digits and hyphens`;
 }
 
+/**
+ * The elements written by any of `handles`, or all of them when no filter was
+ * given. `person` matches the elements carrying no author, which is what a
+ * browser writes: a facilitator asking what the room drew and an agent asking
+ * what it drew itself are the same question with a different handle.
+ */
+function filterByAuthor(elements: readonly ExcalidrawElement[], handles: string[] | undefined): ExcalidrawElement[] {
+  if (!handles?.length) return [...elements];
+  const wanted = new Set(handles);
+  return elements.filter((el) => wanted.has(elementAuthor(el) ?? PERSON_AUTHOR));
+}
+
 function statusText(): string {
   const s = room.status();
   const peers = s.peers.length
@@ -441,20 +464,29 @@ server.registerTool(
         })
         .optional()
         .describe("Return the named element and everything within the radius of it."),
+      by: z
+        .array(z.string())
+        .min(1)
+        .optional()
+        .describe(
+          `Return only elements written by these handles. "${PERSON_AUTHOR}" selects the elements nothing stamped, which is what a browser leaves, so by: ["${PERSON_AUTHOR}"] is what people in the room drew. Every summary line ends with "by <handle>" whether or not this is set.`,
+        ),
     },
   },
-  async ({ format, includeDeleted, ids, near }) => {
+  async ({ format, includeDeleted, ids, near, by }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
-    const { elements, unknownIds } = selectElements(room.getElements(includeDeleted), {
+    const selected = selectElements(room.getElements(includeDeleted), {
       ids,
       near: near && { id: near.id, radius: nearRadius(room.nearbyRadius, near.radius) },
     });
+    const { unknownIds } = selected;
+    const elements = filterByAuthor(selected.elements, by);
     const body =
       format === "json"
         ? JSON.stringify(elements)
         : elements.length
           ? summarise(elements)
-          : ids || near
+          : ids || near || by
             ? "(no matching elements)"
             : "(empty scene)";
     if (!unknownIds.length) return text(body);
@@ -565,10 +597,15 @@ server.registerTool(
       const current = el.customData as Record<string, unknown> | undefined;
       return { ...el, customData: { ...current, [CLUSTER_CUSTOM_DATA_KEY]: key } };
     });
-    const result = await room.commit([...clustered, ...updated]);
+    // Only the new elements are stamped, and after the cluster key is written
+    // so both keys reach the canvas. `updated` are elements that were already
+    // in the scene gaining a bound-element back reference, and whoever drew
+    // them is still their author.
+    const stamped = clustered.map((el) => stampAuthor(el, room.handle));
+    const result = await room.commit([...stamped, ...updated]);
     const lines = [
-      `added ${clustered.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}`,
-      ...clustered.map((e) => `${e.id} ${e.type}`),
+      `added ${stamped.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}`,
+      ...stamped.map((e) => `${e.id} ${e.type}`),
       ...placements.flatMap(({ id, result: placed }) => placementLines(id, placed)),
     ];
     return text(lines.join("\n"));
@@ -579,7 +616,7 @@ server.registerTool(
   "add_raw_elements",
   {
     description:
-      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent. Hosts cap tool-argument size, so keep each call's arguments under the limit in README Limits (4 KB on Claude Desktop, 16 KB on Claude Code) and send a large scene as several batches; a later batch may reference ids from an earlier one.",
+      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent. An element carrying customData is stamped with this server's handle as its author, keeping the keys it came with; an element with no customData is left unattributed, so a scene imported from a file still reads as the work of whoever drew it. Hosts cap tool-argument size, so keep each call's arguments under the limit in README Limits (4 KB on Claude Desktop, 16 KB on Claude Code) and send a large scene as several batches; a later batch may reference ids from an earlier one.",
     inputSchema: { elements: z.array(z.record(z.unknown())).min(1) },
   },
   async ({ elements }) => {
@@ -601,7 +638,13 @@ server.registerTool(
         last = generateKeyBetween(last, null);
         el.index = last;
       }
-      prepared.push(el);
+      // The verbatim path, and attribution follows that: an element carrying
+      // customData of the caller's own is the caller's construction and is
+      // stamped alongside its keys, while one carrying none is left exactly as
+      // it arrived. That is what lets a scene imported from an .excalidraw
+      // file, or a person's drawing replayed into a room, keep reading as a
+      // person's work rather than being claimed by whoever pasted it.
+      prepared.push(raw.customData === undefined ? el : stampAuthor(el, room.handle));
     }
     const result = await room.commit(prepared);
     return text(`added ${prepared.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}\n${prepared.map((e) => `${e.id} ${e.type}`).join("\n")}`);
@@ -759,7 +802,7 @@ server.registerTool(
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     // Decided before anything on the canvas is touched: a refusal must leave
     // the note exactly as the person wrote it.
-    const plan = planAcknowledgement({ keep, reply, status });
+    const plan = planAcknowledgement({ keep, reply, status }, DEFAULT_TAG, room.handle);
     if (plan.refusal) return errorText(plan.refusal);
     const current = room.getElement(id);
     if (!current || current.type !== "text") return text(`no text element with id ${id}`);
@@ -775,10 +818,15 @@ server.registerTool(
       // Placed under the note as it now reads: the check mark has already been
       // written, so `updated` carries the height the line has to clear.
       changed.push(
-        buildAttributedLine(updated, plan.line, {
-          existing: new Map(room.getElements(true).map((e) => [e.id, e])),
-          lastIndex: room.lastIndex(),
-        }),
+        buildAttributedLine(
+          updated,
+          plan.line,
+          {
+            existing: new Map(room.getElements(true).map((e) => [e.id, e])),
+            lastIndex: room.lastIndex(),
+          },
+          room.handle,
+        ),
       );
     }
     const result = await room.commit(changed);

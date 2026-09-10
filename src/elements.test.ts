@@ -2,13 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   applyUpdate,
+  authorLabel,
   buildElements,
   bump,
+  elementAuthor,
+  FALLBACK_AUTHOR,
+  keepAuthor,
   LABEL_PADDING,
   layoutBoundLabel,
   measureText,
   randomId,
   randomInteger,
+  stampAuthor,
   summarise,
   type Binding,
   type ExcalidrawElement,
@@ -140,8 +145,8 @@ test("summary folds labels into their container and samples freehand paths", () 
   const s = summarise(created);
   const lines = s.split("\n");
   assert.equal(lines.length, 2, s);
-  assert.match(lines[0], /^r rectangle @\(0,0\) 100x50 "Box"$/);
-  assert.match(lines[1], /^f freedraw 50 pts: \(0,0\) -> .* -> \(98,49\)$/);
+  assert.match(lines[0], /^r rectangle @\(0,0\) 100x50 "Box" by person$/);
+  assert.match(lines[1], /^f freedraw 50 pts: \(0,0\) -> .* -> \(98,49\) by person$/);
 });
 
 // ---------------------------------------------------------------------------
@@ -663,7 +668,11 @@ test("summary of a shape, an arrow and a line reads as one line each", () => {
   ]);
   assert.equal(
     s,
-    ["a rectangle @(0,1) 100x51", "ab arrow 2 pts: (10,20) -> (40,60) from a to b", "l line 3 pts: (1,2) -> (6,7) -> (11,2)"].join(
+    [
+      "a rectangle @(0,1) 100x51 by person",
+      "ab arrow 2 pts: (10,20) -> (40,60) from a to b by person",
+      "l line 3 pts: (1,2) -> (6,7) -> (11,2) by person",
+    ].join(
       "\n",
     ),
   );
@@ -671,7 +680,7 @@ test("summary of a shape, an arrow and a line reads as one line each", () => {
 
 test("summary omits bindings that are not set and points that are missing", () => {
   const s = summarise([raw({ id: "ab", type: "arrow", x: 10, y: 20 })]);
-  assert.equal(s, "ab arrow 0 pts: ");
+  assert.equal(s, "ab arrow 0 pts:  by person");
 });
 
 test("summary folds a bound label into its container and drops the label's own line", () => {
@@ -679,7 +688,7 @@ test("summary folds a bound label into its container and drops the label's own l
     raw({ id: "r", type: "rectangle", width: 100, height: 50 }),
     raw({ id: "t", type: "text", containerId: "r", text: "Box" }),
   ]);
-  assert.equal(s, 'r rectangle @(0,0) 100x50 "Box"');
+  assert.equal(s, 'r rectangle @(0,0) 100x50 "Box" by person');
 });
 
 test("summary shows an empty label for a bound text with no text", () => {
@@ -687,7 +696,7 @@ test("summary shows an empty label for a bound text with no text", () => {
     raw({ id: "r", type: "rectangle", width: 100, height: 50 }),
     raw({ id: "t", type: "text", containerId: "r" }),
   ]);
-  assert.equal(s, 'r rectangle @(0,0) 100x50 ""');
+  assert.equal(s, 'r rectangle @(0,0) 100x50 "" by person');
 });
 
 test("summary ignores a deleted label and its container keeps no label", () => {
@@ -695,7 +704,7 @@ test("summary ignores a deleted label and its container keeps no label", () => {
     raw({ id: "r", type: "rectangle", width: 100, height: 50 }),
     raw({ id: "t", type: "text", containerId: "r", text: "Box", isDeleted: true }),
   ]);
-  assert.equal(s, "r rectangle @(0,0) 100x50");
+  assert.equal(s, "r rectangle @(0,0) 100x50 by person");
 });
 
 test("summary drops deleted elements entirely", () => {
@@ -703,12 +712,12 @@ test("summary drops deleted elements entirely", () => {
     raw({ id: "gone", type: "rectangle", width: 10, height: 10, isDeleted: true }),
     raw({ id: "here", type: "ellipse", width: 20, height: 20 }),
   ]);
-  assert.equal(s, "here ellipse @(0,0) 20x20");
+  assert.equal(s, "here ellipse @(0,0) 20x20 by person");
 });
 
 test("summary keeps a bound text whose container is not in the scene", () => {
   const s = summarise([raw({ id: "t", type: "text", containerId: "missing", text: "orphan", width: 40, height: 25 })]);
-  assert.equal(s, 't text @(0,0) 40x25 "orphan"');
+  assert.equal(s, 't text @(0,0) 40x25 "orphan" by person');
 });
 
 test("summary only treats text elements as labels", () => {
@@ -717,7 +726,7 @@ test("summary only treats text elements as labels", () => {
     // A non-text element carrying a containerId is a normal element, not a label.
     raw({ id: "odd", type: "ellipse", width: 10, height: 10, containerId: "r", text: "ghost" }),
   ]);
-  assert.equal(s, ["r rectangle @(0,0) 100x50", "odd ellipse @(0,0) 10x10"].join("\n"));
+  assert.equal(s, ["r rectangle @(0,0) 100x50 by person", "odd ellipse @(0,0) 10x10 by person"].join("\n"));
 });
 
 test("summary quotes a standalone text element, empty text included", () => {
@@ -725,7 +734,7 @@ test("summary quotes a standalone text element, empty text included", () => {
     raw({ id: "t1", type: "text", width: 24, height: 25, text: "hi" }),
     raw({ id: "t2", type: "text", width: 12, height: 25 }),
   ]);
-  assert.equal(s, ['t1 text @(0,0) 24x25 "hi"', 't2 text @(0,0) 12x25 ""'].join("\n"));
+  assert.equal(s, ['t1 text @(0,0) 24x25 "hi" by person', 't2 text @(0,0) 12x25 "" by person'].join("\n"));
 });
 
 test("summary reports colours only when they differ from the defaults", () => {
@@ -733,18 +742,18 @@ test("summary reports colours only when they differ from the defaults", () => {
     raw({ id: "d", type: "rectangle", width: 10, height: 10, strokeColor: "#1e1e1e", backgroundColor: "transparent" }),
     raw({ id: "c", type: "rectangle", width: 10, height: 10, strokeColor: "#ff0000", backgroundColor: "#ffcccc" }),
   ]);
-  assert.equal(s, ["d rectangle @(0,0) 10x10", "c rectangle @(0,0) 10x10 stroke=#ff0000 fill=#ffcccc"].join("\n"));
+  assert.equal(s, ["d rectangle @(0,0) 10x10 by person", "c rectangle @(0,0) 10x10 stroke=#ff0000 fill=#ffcccc by person"].join("\n"));
 });
 
 test("summary samples a long path down to eight points and keeps the count", () => {
   const points = Array.from({ length: 20 }, (_, i) => [i, i * 2] as [number, number]);
   const s = summarise([raw({ id: "f", type: "freedraw", x: 0, y: 0, points })]);
-  assert.equal(s, "f freedraw 20 pts: (0,0) -> (3,6) -> (5,10) -> (8,16) -> (11,22) -> (14,28) -> (16,32) -> (19,38)");
+  assert.equal(s, "f freedraw 20 pts: (0,0) -> (3,6) -> (5,10) -> (8,16) -> (11,22) -> (14,28) -> (16,32) -> (19,38) by person");
 });
 
 test("summary of a path at or below eight points is not resampled", () => {
   const s = summarise([raw({ id: "p", type: "arrow", x: 0, y: 0, points: [[0, 0], [10, 10], [20, 0]] })]);
-  assert.equal(s, "p arrow 3 pts: (0,0) -> (10,10) -> (20,0)");
+  assert.equal(s, "p arrow 3 pts: (0,0) -> (10,10) -> (20,0) by person");
 });
 
 test("text spec carries link through", () => {
@@ -979,4 +988,80 @@ test("a label bound to a line re-centres without resizing the line", () => {
   const laid = layoutBoundLabel(line, label);
   assert.equal(laid.container.width, line.width, "a line's box comes from its points");
   assert.equal(laid.container.height, line.height);
+});
+
+// ---------------------------------------------------------------------------
+// Attribution: who wrote an element. https://github.com/bjcoombs/excalidraw-room-mcp/issues/82
+
+test("every agent write stamps author and authorKind and keeps other customData", () => {
+  // The two create paths: specs through buildElements, and a complete element
+  // handed to add_raw_elements with customData of the caller's own.
+  const { created } = buildElements(
+    [{ type: "rectangle", id: "r", x: 0, y: 0, width: 100, height: 50, label: "A" }],
+    ctx(),
+  );
+  const stamped = created.map((el) => stampAuthor(el, "alpha"));
+  assert.equal(stamped.length, 2, "the shape and its bound label");
+  for (const el of stamped) {
+    assert.equal((el.customData as Record<string, unknown>).author, "alpha");
+    assert.equal((el.customData as Record<string, unknown>).authorKind, "agent");
+    assert.equal(elementAuthor(el), "alpha");
+  }
+
+  const verbatim = stampAuthor(raw({ id: "w", type: "rectangle", customData: { tag: "keep-me" } }), "alpha");
+  assert.deepEqual(verbatim.customData, { tag: "keep-me", author: "alpha", authorKind: "agent" });
+
+  // Outside a room there is no handle to stamp, and the element is still ours.
+  assert.equal(elementAuthor(stampAuthor(raw({ id: "n", type: "rectangle" }), null)), FALLBACK_AUTHOR);
+  assert.equal(elementAuthor(stampAuthor(raw({ id: "e", type: "rectangle" }), "")), FALLBACK_AUTHOR);
+});
+
+test("an update never overwrites the original author", () => {
+  const mine = stampAuthor(raw({ id: "r", type: "rectangle", width: 100, height: 50 }), "alpha");
+
+  // A second agent recolours it and patches customData, which replaces the
+  // whole object: the stamp has to survive both.
+  const [patched] = applyUpdate(mine, { backgroundColor: "#ff0000", customData: { note: "x" } }, () => undefined);
+  assert.equal(patched.backgroundColor, "#ff0000");
+  assert.deepEqual(patched.customData, { note: "x", author: "alpha", authorKind: "agent" });
+
+  // Nor can a caller claim someone else's element by naming an author.
+  const [claimed] = applyUpdate(mine, { customData: { author: "beta", authorKind: "agent" } }, () => undefined);
+  assert.equal(elementAuthor(claimed), "alpha");
+
+  // A person's element gains no author from an update, whatever it sets.
+  const theirs = raw({ id: "p", type: "rectangle", width: 10, height: 10 });
+  const [stillTheirs] = applyUpdate(theirs, { customData: { author: "beta" }, strokeColor: "#ff0000" }, () => undefined);
+  assert.equal(elementAuthor(stillTheirs), null);
+  assert.equal(authorLabel(stillTheirs), "person");
+  assert.equal(stillTheirs.strokeColor, "#ff0000");
+
+  // An update touching nothing about customData leaves the element without one.
+  const [untouched] = applyUpdate(theirs, { strokeColor: "#00ff00" }, () => undefined);
+  assert.equal(untouched.customData, undefined);
+  assert.equal(keepAuthor(theirs, untouched).customData, undefined);
+});
+
+test("summary names the author of every line, and person for what nothing stamped", () => {
+  const s = summarise([
+    stampAuthor(raw({ id: "a", type: "rectangle", width: 10, height: 10 }), "alpha"),
+    raw({ id: "h", type: "rectangle", width: 10, height: 10 }),
+    raw({ id: "b", type: "rectangle", width: 10, height: 10, customData: { author: "beta", authorKind: "agent" } }),
+    // An author that is not a handle is not an author: the field is free-form
+    // and a peer may write anything into it.
+    raw({ id: "x", type: "rectangle", width: 10, height: 10, customData: { author: 7 } }),
+    raw({ id: "y", type: "rectangle", width: 10, height: 10, customData: { author: "" } }),
+  ]);
+  assert.deepEqual(s.split("\n").map((l) => l.split(" ").slice(-2).join(" ")), [
+    "by alpha",
+    "by person",
+    "by beta",
+    "by person",
+    "by person",
+  ]);
+});
+
+test("the author is the last thing on a line, after the reason it is listed", () => {
+  const el = stampAuthor(raw({ id: "a", type: "rectangle", width: 10, height: 10 }), "alpha");
+  assert.equal(summarise([el], new Map([["a", "via group"]])), "a rectangle @(0,0) 10x10 via group by alpha");
 });

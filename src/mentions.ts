@@ -9,11 +9,24 @@
  * tool results and in the server instructions, where the model reads mentions -
  * never in the chat announcement, which a person reads. And the server never
  * writes into a person's own text: it marks their note seen or acknowledged and
- * puts its own words on a separate line below, prefixed `claude: `, so the
- * canvas never reads as one sentence written by two authors.
+ * puts its own words on a separate line below, prefixed with the handle it took
+ * in the room, so the canvas never reads as one sentence written by two
+ * authors and a room with two agents in it says which of them wrote which line.
  */
 import { z } from "zod";
-import { buildElements, bump, measureText, summarise, type BuildContext, type ExcalidrawElement, type SummaryReasons } from "./elements.js";
+import {
+  buildElements,
+  bump,
+  elementAuthor,
+  FALLBACK_AUTHOR,
+  measureText,
+  PERSON_AUTHOR,
+  stampAuthor,
+  summarise,
+  type BuildContext,
+  type ExcalidrawElement,
+  type SummaryReasons,
+} from "./elements.js";
 
 export const DEFAULT_TAG = "@claude";
 export const DEFAULT_NEARBY_RADIUS = 250;
@@ -84,13 +97,34 @@ export const REPLY_PROMPT_LINE = "edit the note above to answer";
 export const ATTRIBUTED_LINE_GAP = 8;
 
 /**
- * Who wrote the words. Every word the server draws on the canvas carries this
- * prefix on its first line, because the alternative - appending the status to
- * the person's own sentence - left "@claude review my calendar out of scope"
- * on the canvas with nothing marking which half is whose, misattributing both.
+ * The prefix when there is no handle to name, which is also the one every line
+ * carried before handles existed. {@link attributionPrefix} is what actually
+ * writes one.
+ *
+ * Every word the server draws on the canvas carries a prefix on its first
+ * line, because the alternative - appending the status to the person's own
+ * sentence - left "@claude review my calendar out of scope" on the canvas with
+ * nothing marking which half is whose, misattributing both.
  * https://github.com/bjcoombs/excalidraw-room-mcp/issues/77
  */
-export const ATTRIBUTION_PREFIX = "claude: ";
+export const ATTRIBUTION_PREFIX = `${FALLBACK_AUTHOR}: `;
+
+/**
+ * The prefix for a given handle. Two agents in one room both write under the
+ * note, so "claude:" alone no longer says which of them wrote it; the handle
+ * a server took in the room does. With no handle the historic prefix stands.
+ */
+export function attributionPrefix(handle?: string | null): string {
+  return handle ? `${handle}: ` : ATTRIBUTION_PREFIX;
+}
+
+/**
+ * A leading `<handle>: `, in the handle grammar, so {@link previousLine} can
+ * take back off whatever prefix wrote the line - which is not necessarily this
+ * process's own handle, since the line may have been written by an earlier
+ * session or another agent.
+ */
+const ATTRIBUTION_PREFIX_PATTERN = /^[a-z0-9-]{1,32}: /;
 
 /**
  * Where the reply element records which mention it answers. `customData`
@@ -134,13 +168,13 @@ export function replyTagText(tag: string = DEFAULT_TAG): string {
 }
 
 /** The attributed line for a status: the prefix and the fixed words, nothing else. */
-export function attributedStatusText(status: MentionStatus): string {
-  return `${ATTRIBUTION_PREFIX}${status}`;
+export function attributedStatusText(status: MentionStatus, handle?: string | null): string {
+  return `${attributionPrefix(handle)}${status}`;
 }
 
 /** The attributed line for a question: the attributed question, then the fixed prompt. */
-export function attributedReplyText(reply: string): string {
-  return `${ATTRIBUTION_PREFIX}${reply.trim()}\n${REPLY_PROMPT_LINE}`;
+export function attributedReplyText(reply: string, handle?: string | null): string {
+  return `${attributionPrefix(handle)}${reply.trim()}\n${REPLY_PROMPT_LINE}`;
 }
 
 /** What the server last wrote under a mention, and which of the two it was. */
@@ -167,7 +201,7 @@ export function previousLine(el: ExcalidrawElement): PreviousLine {
   const body = lines.join("\n").trim();
   return {
     kind,
-    text: body.startsWith(ATTRIBUTION_PREFIX) ? body.slice(ATTRIBUTION_PREFIX.length) : body,
+    text: body.replace(ATTRIBUTION_PREFIX_PATTERN, ""),
   };
 }
 
@@ -190,7 +224,12 @@ export function findAttributedLine(elements: readonly ExcalidrawElement[], menti
  * Built through `buildElements` so it is a complete Excalidraw element with a
  * fractional index, then given the note's own font and the back reference.
  */
-export function buildAttributedLine(mention: ExcalidrawElement, lineText: string, ctx: BuildContext): ExcalidrawElement {
+export function buildAttributedLine(
+  mention: ExcalidrawElement,
+  lineText: string,
+  ctx: BuildContext,
+  handle?: string | null,
+): ExcalidrawElement {
   const fontSize = Number(mention.fontSize ?? 20);
   const { created } = buildElements(
     [
@@ -206,11 +245,18 @@ export function buildAttributedLine(mention: ExcalidrawElement, lineText: string
     ctx,
   );
   const el = created[0];
-  return {
-    ...el,
-    fontFamily: mention.fontFamily ?? el.fontFamily,
-    customData: { [REPLY_CUSTOM_DATA_KEY]: mention.id },
-  };
+  // Stamped like any other element this server writes, and after the back
+  // reference is set: the line is the agent's own words on the canvas, so a
+  // later reader filtering by author must find it under the handle that wrote
+  // it rather than as a person's text.
+  return stampAuthor(
+    {
+      ...el,
+      fontFamily: mention.fontFamily ?? el.fontFamily,
+      customData: { [REPLY_CUSTOM_DATA_KEY]: mention.id },
+    },
+    handle,
+  );
 }
 
 /** Remove every seen marker, wherever a later edit left it. */
@@ -312,13 +358,17 @@ export interface AcknowledgePlan {
  * Either one keeps the note: the attributed line under it only makes sense
  * read together with the words it answers.
  */
-export function planAcknowledgement(req: AcknowledgeRequest, tag: string = DEFAULT_TAG): AcknowledgePlan {
+export function planAcknowledgement(
+  req: AcknowledgeRequest,
+  tag: string = DEFAULT_TAG,
+  handle?: string | null,
+): AcknowledgePlan {
   const untouched = { kept: false, replies: false };
   if (req.status !== undefined && req.reply !== undefined) return { refusal: STATUS_WITH_REPLY_TEXT, ...untouched };
   if (req.status !== undefined && !isMentionStatus(req.status)) return { refusal: statusUnknownText(req.status), ...untouched };
   if (req.reply !== undefined && replyIsMention(req.reply, tag)) return { refusal: replyTagText(tag), ...untouched };
-  if (req.status !== undefined) return { line: attributedStatusText(req.status), kept: true, replies: false };
-  if (req.reply !== undefined) return { line: attributedReplyText(req.reply), kept: true, replies: true };
+  if (req.status !== undefined) return { line: attributedStatusText(req.status, handle), kept: true, replies: false };
+  if (req.reply !== undefined) return { line: attributedReplyText(req.reply, handle), kept: true, replies: true };
   return { kept: req.keep === true, replies: false };
 }
 
@@ -351,6 +401,12 @@ export interface Mention {
   height: number;
   /** Shape the text is bound inside, if any. */
   containerId: string | null;
+  /**
+   * The handle that wrote the note, or null when nothing stamped it - which is
+   * what a browser leaves, so a null here is a person. A receiving agent needs
+   * this to tell a facilitator's request from another agent's.
+   */
+  author: string | null;
 }
 
 /** id -> version already dealt with. A newer version of the same text is a new mention. */
@@ -380,6 +436,7 @@ export function findMentions(
       width: el.width,
       height: el.height,
       containerId: el.containerId ?? null,
+      author: elementAuthor(el),
     });
   }
   return out;
@@ -415,6 +472,7 @@ export function findHandledMentions(
       width: el.width,
       height: el.height,
       containerId: el.containerId ?? null,
+      author: elementAuthor(el),
     });
   }
   return out;
@@ -619,6 +677,10 @@ export function formatMention(
   const quoted = opts.previous ? `${mention.text}\nprevious ${opts.previous.kind}: ${opts.previous.text}` : mention.text;
   const lines = [
     `mention ${mention.id} v${mention.version} ${opts.handled ? "handled " : ""}${where}:`,
+    // Above the untrusted block on purpose: who wrote the words is this
+    // server's own statement about them, and a reader has to have it before
+    // reading them rather than after.
+    `from: ${mention.author ?? PERSON_AUTHOR}`,
     untrustedBlock(quoted),
     "",
     nearby.length ? `nearby (${nearby.length}):` : "nearby: none",

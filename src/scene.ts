@@ -6,7 +6,7 @@
  * or for a neighbourhood around one of them, reusing the same proximity rule
  * mentions use.
  */
-import { type ExcalidrawElement } from "./elements.js";
+import { elementAuthor, type ExcalidrawElement } from "./elements.js";
 import { nearbyElements, type Mention } from "./mentions.js";
 
 export interface NearFilter {
@@ -40,6 +40,7 @@ function asAnchor(el: ExcalidrawElement): Mention {
     width: el.width,
     height: el.height,
     containerId: el.containerId ?? null,
+    author: elementAuthor(el),
   };
 }
 

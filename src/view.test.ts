@@ -55,7 +55,7 @@ function element(over: Partial<ExcalidrawElement> = {}): ExcalidrawElement {
 }
 
 function mention(over: Partial<Mention> = {}): Mention {
-  return { id: "text-1", version: 5, text: "@claude add a cache here", x: 20, y: 20, width: 200, height: 25, containerId: null, ...over };
+  return { id: "text-1", version: 5, text: "@claude add a cache here", x: 20, y: 20, width: 200, height: 25, containerId: null, author: null, ...over };
 }
 
 test("buildShowRoomPayload carries link, connection state, peers, elements and mentions", () => {

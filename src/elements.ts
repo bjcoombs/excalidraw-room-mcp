@@ -511,6 +511,78 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
   return { created, updated };
 }
 
+/**
+ * Attribution, written into `customData` because that object is free-form,
+ * survives an excalidraw.com round trip and is the only per-element place a
+ * peer will not strip. A browser writes no `customData` at all, so its absence
+ * is what identifies a person's work: there is nothing to stamp on their side
+ * and nothing to migrate on ours.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/82
+ */
+export const AUTHOR_KEY = "author";
+/** What kind of writer the author was. Only agents stamp, so only "agent" is written. */
+export const AUTHOR_KIND_KEY = "authorKind";
+export const AGENT_AUTHOR_KIND = "agent";
+/** How an element carrying no author reads: somebody drew it in a browser. */
+export const PERSON_AUTHOR = "person";
+/**
+ * The author stamped when the room has no handle. `join` always takes one, so
+ * this is the shape of a server driven outside a room rather than a case a
+ * caller meets; it matches the historic attribution prefix.
+ */
+export const FALLBACK_AUTHOR = "claude";
+
+/** The handle recorded on an element, or null when nothing recorded one. */
+export function elementAuthor(el: ExcalidrawElement): string | null {
+  const data = el.customData as Record<string, unknown> | undefined;
+  const author = data?.[AUTHOR_KEY];
+  return typeof author === "string" && author.length > 0 ? author : null;
+}
+
+/** The author as a reader sees it: the handle that wrote it, or `person`. */
+export function authorLabel(el: ExcalidrawElement): string {
+  return elementAuthor(el) ?? PERSON_AUTHOR;
+}
+
+/**
+ * The element with this server's handle recorded on it. Applied on create
+ * only - `add_elements`, `add_raw_elements` and the attributed lines
+ * `acknowledge_mention` writes - so the stamp says who first drew a thing
+ * rather than who last touched it. Other `customData` keys are preserved,
+ * including a caller's own on the raw path.
+ */
+export function stampAuthor(el: ExcalidrawElement, handle: string | null | undefined): ExcalidrawElement {
+  const data = (el.customData ?? {}) as Record<string, unknown>;
+  return {
+    ...el,
+    customData: { ...data, [AUTHOR_KEY]: handle || FALLBACK_AUTHOR, [AUTHOR_KIND_KEY]: AGENT_AUTHOR_KIND },
+  };
+}
+
+/**
+ * `next` with the author it had before the patch, whatever the patch said.
+ *
+ * An update is not authorship: a second agent recolouring a box does not
+ * become the person who drew it, and a `customData` patch replaces the whole
+ * object, so without this the stamp disappears the first time anyone sets one
+ * other key on it. The author fields are therefore taken from `current` and
+ * from nowhere else - an element a person drew stays unattributed however the
+ * caller patches it.
+ */
+export function keepAuthor(current: ExcalidrawElement, next: ExcalidrawElement): ExcalidrawElement {
+  const before = current.customData as Record<string, unknown> | undefined;
+  const after = next.customData as Record<string, unknown> | undefined;
+  const author = before?.[AUTHOR_KEY];
+  const kind = before?.[AUTHOR_KIND_KEY];
+  if (after === undefined && author === undefined && kind === undefined) return next;
+  const data: Record<string, unknown> = { ...after };
+  delete data[AUTHOR_KEY];
+  delete data[AUTHOR_KIND_KEY];
+  if (author !== undefined) data[AUTHOR_KEY] = author;
+  if (kind !== undefined) data[AUTHOR_KIND_KEY] = kind;
+  return { ...next, customData: data };
+}
+
 /** Smallest gap kept between a bound label's box and its container's edge, in px. */
 export const LABEL_PADDING = 10;
 
@@ -562,7 +634,7 @@ export function applyUpdate(
   set: Record<string, unknown>,
   lookup: (id: string) => ExcalidrawElement | undefined,
 ): ExcalidrawElement[] {
-  let next = { ...current, ...set, id: current.id } as ExcalidrawElement;
+  let next = keepAuthor(current, { ...current, ...set, id: current.id } as ExcalidrawElement);
   const reflowed = next.type === "text" && ("text" in set || "fontSize" in set);
   if (reflowed) {
     if ("text" in set) next = { ...next, originalText: next.text };
@@ -648,5 +720,9 @@ function summaryLine(el: ExcalidrawElement, label: string | undefined, reason: s
   if (el.strokeColor && el.strokeColor !== "#1e1e1e") parts.push(`stroke=${el.strokeColor}`);
   if (el.backgroundColor && el.backgroundColor !== "transparent") parts.push(`fill=${el.backgroundColor}`);
   if (reason !== undefined) parts.push(reason);
+  // Last, so the line reads as a sentence and the reason keeps its place: the
+  // author is who wrote the element, and `by person` is a browser's element,
+  // which carries no attribution to read.
+  parts.push(`by ${authorLabel(el)}`);
   return parts.join(" ");
 }

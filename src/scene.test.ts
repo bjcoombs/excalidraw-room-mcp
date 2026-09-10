@@ -104,5 +104,5 @@ test("legacy focus and gap bindings load without error", () => {
   const arrow = merged.find((e) => e.id === "hub-near1")!;
   assert.equal(arrow.startBinding!.elementId, "hub");
   assert.equal(arrow.endBinding!.elementId, "near1");
-  assert.match(summarise(merged), /^hub-near1 arrow .* from hub to near1$/m);
+  assert.match(summarise(merged), /^hub-near1 arrow .* from hub to near1 by person$/m);
 });
