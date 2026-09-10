@@ -11,28 +11,28 @@ import { z } from "zod";
 import { buildElements, bump, measureText, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
-  buildReply,
+  buildAttributedLine,
   DEFAULT_NEARBY_RADIUS,
   DEFAULT_TAG,
+  findAttributedLine,
   findHandledMentions,
   findMentions,
-  findReply,
   formatMention,
   markAcknowledged,
   markRemoved,
   markSeen,
-  MAX_NOTE_LENGTH,
   acknowledgementText,
   planAcknowledgement,
   MAX_REPLY_LENGTH,
+  MENTION_STATUSES,
   nearbyElements,
-  noteSchema,
-  REPLY_NOTE,
-  replyQuestion,
+  previousLine,
   replySchema,
+  statusSchema,
   withScopeRule,
   type HandledVersions,
   type Mention,
+  type PreviousLine,
 } from "./mentions.js";
 import { openRoom } from "./open.js";
 import { buildPollPayload, pollText } from "./poll.js";
@@ -90,13 +90,13 @@ function handledMentionsOnCanvas(tag: string, elements = room.getElements()): Me
 }
 
 /**
- * The question the agent last asked about a mention, or null when the room
- * holds no reply for it. Read from the scene rather than remembered, so a
- * reply written by an earlier process still shows up.
+ * What the agent last wrote under a mention, or null when the room holds no
+ * attributed line for it. Read from the scene rather than remembered, so a
+ * line written by an earlier process still shows up.
  */
-function previousReplyFor(id: string, elements = room.getElements()): string | null {
-  const reply = findReply(elements, id);
-  return reply ? replyQuestion(reply) : null;
+function previousLineFor(id: string, elements = room.getElements()): PreviousLine | null {
+  const line = findAttributedLine(elements, id);
+  return line ? previousLine(line) : null;
 }
 
 /**
@@ -530,7 +530,7 @@ server.registerTool(
     if (!mention) return text(`no mention of ${tag} within ${timeoutSeconds}s`);
     const elements = room.getElements();
     const out = formatMention(mention, nearbyElements(elements, mention, radius), {
-      previousReply: previousReplyFor(mention.id, elements),
+      previous: previousLineFor(mention.id, elements),
     });
     if (autoSeen) await commitSeen(mention);
     return text(withScopeRule(out));
@@ -564,7 +564,7 @@ server.registerTool(
     if (!pending.length && !handled.length) return text(`no pending mentions of ${tag}`);
     const blocks = [
       ...pending.map((m) =>
-        formatMention(m, nearbyElements(all, m, radius), { previousReply: previousReplyFor(m.id, all) }),
+        formatMention(m, nearbyElements(all, m, radius), { previous: previousLineFor(m.id, all) }),
       ),
       ...handled.map((m) => formatMention(m, nearbyElements(all, m, radius), { handled: true })),
     ];
@@ -580,42 +580,52 @@ server.registerTool(
   "acknowledge_mention",
   {
     description:
-      "Mark a mention as handled so it is not returned again. By default the note is removed from the canvas (soft-deleted): the seen marker already told the person it landed and the drawing is the evidence it was done. Reply about the work in chat, not on the canvas - artefacts of the work belong on the canvas, prose about it does not. Pass a short note (up to " +
-      `${MAX_NOTE_LENGTH} characters) to keep the note instead, greyed with that note as its only suffix, when the person has to read the outcome where they wrote the request ("declined", "see chat"). Pass keep true to keep it greyed with a check mark for an audit trail. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: the note is kept and greyed with "${REPLY_NOTE}" and the question is drawn on the canvas directly below it, so the person answers where they asked. Editing the note makes the mention pending again and the reply comes back with it. If the person edits the text again it becomes pending again.`,
-    inputSchema: {
-      id: z.string().describe("The mention's element id from wait_for_mention or list_mentions."),
-      note: noteSchema
-        .optional()
-        .describe(
-          `Keep the note on the canvas with this as its only suffix, at most ${MAX_NOTE_LENGTH} characters. For a status the person must see there, not a reply: reply in chat instead.`,
-        ),
-      keep: z.boolean().default(false).describe("Keep the note on the canvas, greyed with a single check mark, instead of removing it."),
-      reply: replySchema
-        .optional()
-        .describe(
-          `A question to draw under the note, at most ${MAX_REPLY_LENGTH} characters, for a request you cannot act on as written. Excludes note. Must not contain the tag, or the reply would itself read as a mention.`,
-        ),
-    },
+      "Mark a mention as handled so it is not returned again. By default the text element is removed from the canvas (soft-deleted): the seen marker already told the person it landed and the drawing is the evidence it was done. Say what you did in chat, not on the canvas - artefacts of the work belong there, prose about it does not. " +
+      `Pass status ${MENTION_STATUSES.map((v) => `"${v}"`).join(" or ")} to keep the element instead, greyed with one check mark, and draw that status under it on its own grey line reading "claude: <status>" - use it when the person has to read the outcome where they wrote the request. Pass keep true to keep it greyed with a check mark and draw nothing. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: your question is drawn on the same line under it, as "claude: <question>", so the person answers where they asked. Whatever you were given, the person's own words are left exactly as they wrote them. status and reply exclude each other. Editing the text makes the mention pending again and your question comes back with it.`,
+    inputSchema: z
+      .object({
+        id: z.string().describe("The mention's element id from wait_for_mention or list_mentions."),
+        keep: z.boolean().default(false).describe("Keep the text element on the canvas, greyed with a single check mark, instead of removing it."),
+        reply: replySchema
+          .optional()
+          .describe(
+            `A question to draw underneath, at most ${MAX_REPLY_LENGTH} characters, for a request you cannot act on as written. Excludes status. Must not contain the tag, or your question would itself read as a mention.`,
+          ),
+        status: statusSchema
+          .optional()
+          .describe(
+            "The outcome to draw underneath, attributed to you. \"out of scope\" for anything that is not a change to the drawing; \"see chat\" for work whose account is in the chat reply. Excludes reply.",
+          ),
+      })
+      // Strict on purpose: `note` was this tool's free-text status until 0.7.0,
+      // and a caller still passing it must be told the argument is gone rather
+      // than have its words silently dropped.
+      .strict(),
   },
-  async ({ id, note, keep, reply }) => {
+  async ({ id, keep, reply, status }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     // Decided before anything on the canvas is touched: a refusal must leave
     // the note exactly as the person wrote it.
-    const plan = planAcknowledgement({ note, keep, reply });
+    const plan = planAcknowledgement({ keep, reply, status });
     if (plan.refusal) return errorText(plan.refusal);
     const current = room.getElement(id);
     if (!current || current.type !== "text") return text(`no text element with id ${id}`);
     // Either way the post-bump version is recorded, so our own edit never
     // reads back as a new mention.
-    const updated = plan.kept ? markAcknowledged(current, { note: plan.status }) : markRemoved(current);
-    // Whatever this acknowledgement does, the question the last one asked is
-    // answered: the old reply element goes, replaced when a new reply is given.
-    const stale = findReply(room.getElements(), id);
+    const updated = plan.kept ? markAcknowledged(current) : markRemoved(current);
+    // Whatever this acknowledgement does, whatever the last one wrote is spent:
+    // the old attributed line goes, replaced when this one writes its own.
+    const stale = findAttributedLine(room.getElements(), id);
     const changed: ExcalidrawElement[] = [updated];
     if (stale) changed.push(markRemoved(stale));
-    if (reply !== undefined) {
+    if (plan.line !== undefined) {
+      // Placed under the note as it now reads: the check mark has already been
+      // written, so `updated` carries the height the line has to clear.
       changed.push(
-        buildReply(current, reply, { existing: new Map(room.getElements(true).map((e) => [e.id, e])), lastIndex: room.lastIndex() }),
+        buildAttributedLine(updated, plan.line, {
+          existing: new Map(room.getElements(true).map((e) => [e.id, e])),
+          lastIndex: room.lastIndex(),
+        }),
       );
     }
     const result = await room.commit(changed);

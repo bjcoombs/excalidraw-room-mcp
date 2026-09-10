@@ -20,8 +20,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 type Tool = { name: string; description?: string; inputSchema: unknown };
 
-/** One `tools/list` round trip against the built server over stdio. */
-async function listTools(): Promise<Tool[]> {
+type ToolResult = { isError?: boolean; content?: { type: string; text?: string }[] };
+
+/** One connected client against the built server over stdio, for the body of `use`. */
+async function use<T>(body: (client: Client) => Promise<T>): Promise<T> {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [path.join(here, "index.js")],
@@ -29,10 +31,20 @@ async function listTools(): Promise<Tool[]> {
   const client = new Client({ name: "schema-test", version: "0" });
   await client.connect(transport);
   try {
-    return (await client.listTools()).tools as Tool[];
+    return await body(client);
   } finally {
     await client.close();
   }
+}
+
+/** One `tools/list` round trip against the built server over stdio. */
+async function listTools(): Promise<Tool[]> {
+  return use(async (client) => (await client.listTools()).tools as Tool[]);
+}
+
+/** The concatenated text of a tool result. */
+function resultText(result: ToolResult): string {
+  return (result.content ?? []).map((c) => c.text ?? "").join("");
 }
 
 /** Every value stored under a key named `items`, at any depth. */
@@ -100,4 +112,40 @@ test("snapshot_scene takes only the six selector and size arguments, none of the
   // moment, so the two cases it exists for are pinned here.
   assert.match(snapshot.description ?? "", /hand-drawn/);
   assert.match(snapshot.description ?? "", /overlap/);
+});
+
+test("acknowledge_mention takes id, keep, reply and status, and refuses anything else by name", async () => {
+  const ack = tools.find((t) => t.name === "acknowledge_mention");
+  assert.ok(ack, "acknowledge_mention is not in tools/list");
+  const schema = ack.inputSchema as {
+    properties: Record<string, { enum?: string[] }>;
+    required?: string[];
+    additionalProperties?: boolean;
+  };
+  assert.deepEqual(Object.keys(schema.properties).sort(), ["id", "keep", "reply", "status"]);
+  assert.deepEqual(schema.properties.status.enum, ["out of scope", "see chat"]);
+  assert.deepEqual(schema.required ?? [], ["id"]);
+  // Strict, so `note` - the free-text status this tool took until 0.7.0 - is
+  // refused by name rather than silently dropped.
+  // https://github.com/bjcoombs/excalidraw-room-mcp/issues/77
+  assert.equal(schema.additionalProperties, false);
+
+  // The description is what the model reads before it picks the argument, so
+  // it names the status and no longer names the argument that is gone.
+  assert.match(ack.description ?? "", /status/);
+  assert.ok(!/note/.test(ack.description ?? ""), ack.description);
+
+  // Over stdio, both refusals come back as tool results the model can read,
+  // not as protocol errors, and each names what it refused.
+  const refusals = await use(async (client) => ({
+    note: (await client.callTool({ name: "acknowledge_mention", arguments: { id: "m", note: "x" } })) as ToolResult,
+    status: (await client.callTool({
+      name: "acknowledge_mention",
+      arguments: { id: "m", status: "declined" },
+    })) as ToolResult,
+  }));
+  assert.equal(refusals.note.isError, true, resultText(refusals.note));
+  assert.match(resultText(refusals.note), /note/);
+  assert.equal(refusals.status.isError, true, resultText(refusals.status));
+  assert.match(resultText(refusals.status), /status/);
 });

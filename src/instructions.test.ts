@@ -43,7 +43,12 @@ test("instructions tell the agent to snapshot hand-drawn content and to check a 
   );
 });
 
-test("instructions carry the scope rule verbatim", () => {
+test("instructions carry the scope rule verbatim, and it names the status not a note", () => {
   assert.ok(SERVER_INSTRUCTIONS.includes(MENTION_SCOPE_RULE), SERVER_INSTRUCTIONS);
-  assert.ok(MENTION_SCOPE_RULE.includes('"out of scope"'), MENTION_SCOPE_RULE);
+  assert.ok(MENTION_SCOPE_RULE.includes('the status "out of scope"'), MENTION_SCOPE_RULE);
+  assert.ok(!MENTION_SCOPE_RULE.includes("the note"), MENTION_SCOPE_RULE);
+  // `note` was acknowledge_mention's free-text status until 0.7.0. Nothing the
+  // model is told at initialize may still point at it.
+  assert.ok(!SERVER_INSTRUCTIONS.includes("with the note"), SERVER_INSTRUCTIONS);
+  assert.ok(SERVER_INSTRUCTIONS.includes('status "out of scope" or "see chat"'), SERVER_INSTRUCTIONS);
 });
