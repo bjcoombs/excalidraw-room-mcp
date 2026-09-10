@@ -28,8 +28,6 @@ export interface PollState {
   status: RoomStatus;
   /** Every mention not yet acknowledged, whether or not an agent has seen it. */
   pending: readonly Mention[];
-  /** Ids already announced into the chat by a canvas widget. */
-  announced?: ReadonlySet<string>;
 }
 
 export interface PollPayload {
@@ -40,7 +38,7 @@ export interface PollPayload {
   peers: string[];
   pendingCount: number;
   /** Pending mentions, shortened to fit the size bound; pendingCount is the true total. */
-  pendingMentions: { id: string; text: string; announced: boolean }[];
+  pendingMentions: { id: string; text: string }[];
   /** False only when sinceVersion was given and the scene version still equals it. */
   changedSince: boolean;
 }
@@ -89,7 +87,7 @@ function assemble(state: PollState, sinceVersion: number | undefined, detail: De
     pendingCount: pending.length,
     pendingMentions: pending
       .slice(0, detail.mentionCap)
-      .map((m) => ({ id: m.id, text: shorten(oneLine(m.text), detail.textBudget), announced: state.announced?.has(m.id) === true })),
+      .map((m) => ({ id: m.id, text: shorten(oneLine(m.text), detail.textBudget) })),
     changedSince: sinceVersion === undefined || status.sceneVersion !== sinceVersion,
   };
 }
@@ -99,18 +97,17 @@ function assemble(state: PollState, sinceVersion: number | undefined, detail: De
  * part the size bound governs: it grows with the room, so it is the part that
  * can be traded away.
  *
- * The mention lines carry the id, whether a widget has already announced the
- * mention into the chat, and the note's words - all inside the untrusted block,
- * because a line of that list is mostly someone else's text. `oneLine` has
- * already flattened the text, so a note can neither add a line of its own nor
- * forge the closing marker.
+ * The mention lines carry the id and the note's words, both inside the
+ * untrusted block, because a line of that list is mostly someone else's text.
+ * `oneLine` has already flattened the text, so a note can neither add a line
+ * of its own nor forge the closing marker.
  */
 export function pollBody(payload: PollPayload): string {
   const { pendingMentions, ...counters } = payload;
   const lines = [JSON.stringify(counters)];
   if (pendingMentions.length) {
     lines.push(UNTRUSTED_OPEN);
-    for (const m of pendingMentions) lines.push(`mention ${m.id} announced: ${m.announced} - ${m.text}`);
+    for (const m of pendingMentions) lines.push(`mention ${m.id} - ${m.text}`);
     lines.push(UNTRUSTED_CLOSE);
   }
   return lines.join("\n");

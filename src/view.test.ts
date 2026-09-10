@@ -191,7 +191,7 @@ test("the summary names every pending mention with the ids around it, and stays 
 
 test("a mention next to a crowd lists the first ids and counts the rest", () => {
   const crowd = Array.from({ length: SUMMARY_NEARBY_LIMIT + 4 }, (_, i) => `id-${i}`);
-  const line = formatShowRoomMention({ id: "note", version: 2, text: "@claude here", x: 0, y: 0, width: 10, height: 10, containerId: null, nearby: crowd, announced: false });
+  const line = formatShowRoomMention({ id: "note", version: 2, text: "@claude here", x: 0, y: 0, width: 10, height: 10, containerId: null, nearby: crowd });
 
   assert.match(line, new RegExp(`nearby \\(${crowd.length}\\): id-0`));
   assert.match(line, /\+4 more/);
@@ -199,7 +199,7 @@ test("a mention next to a crowd lists the first ids and counts the rest", () => 
 });
 
 test("a mention bound inside a shape says so, and one with nothing around it says none", () => {
-  const inside = formatShowRoomMention({ id: "label", version: 1, text: "@claude rename", x: 5, y: 5, width: 10, height: 10, containerId: "box", nearby: [], announced: false });
+  const inside = formatShowRoomMention({ id: "label", version: 1, text: "@claude rename", x: 5, y: 5, width: 10, height: 10, containerId: "box", nearby: [] });
   assert.match(inside, /^mention label v1 inside box:/);
   assert.match(inside, /nearby: none/);
 });

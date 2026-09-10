@@ -3,13 +3,14 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ShowRoomMention, ShowRoomPayload } from "./payload.js";
 import { canvasElements, highlightBoxes } from "./scene.js";
+import { ANNOUNCEMENT_REFUSED_TEXT, answerLabel } from "./announce.js";
 import { clock, openInBrowser, OPEN_IN_BROWSER_LABEL, POLLING_UNAVAILABLE_TEXT, StatusBar, type OpenLinkCapable } from "./status.js";
 
 const LINK = "https://excalidraw.com/#room=0123456789abcdef0123,AbCdEfGhIjKlMnOpQrStUv";
 const MENTION_TEXT = "@claude add a box here";
 
 function mention(over: Partial<ShowRoomMention> = {}): ShowRoomMention {
-  return { id: "text-1", version: 5, text: MENTION_TEXT, x: 20, y: 40, width: 200, height: 25, containerId: null, nearby: [], announced: false, ...over };
+  return { id: "text-1", version: 5, text: MENTION_TEXT, x: 20, y: 40, width: 200, height: 25, containerId: null, nearby: [], ...over };
 }
 
 function payload(over: Partial<ShowRoomPayload> = {}): ShowRoomPayload {
@@ -111,4 +112,36 @@ test("the status bar says why there is no room yet before the first update", () 
   const markup = bar({ payload: null, note: "Waiting for a room link." });
   assert.ok(markup.includes("Waiting for a room link."), markup);
   assert.ok(markup.includes("last update -"), markup);
+});
+
+test("the bar shows Answer 1 @claude mention for one pending mention", () => {
+  const markup = bar({ payload: payload({ mentions: [mention()] }) });
+  assert.ok(/<button[^>]*>Answer 1 @claude mention<\/button>/.test(markup), markup);
+  // The button is there because something is pending, not because a send was
+  // refused: nothing has been sent at all.
+  assert.ok(!markup.includes(ANNOUNCEMENT_REFUSED_TEXT), markup);
+  // The refusal sits next to the button, which stays: a refused host may take
+  // the next press and the mention is pending either way.
+  const refusedMarkup = bar({ payload: payload({ mentions: [mention()] }), announcementRefused: true });
+  assert.ok(refusedMarkup.includes(ANNOUNCEMENT_REFUSED_TEXT), refusedMarkup);
+  assert.ok(refusedMarkup.includes(answerLabel(1)), refusedMarkup);
+});
+
+test("the bar shows Answer 3 @claude mentions for three pending mentions", () => {
+  const three = [mention({ id: "text-1" }), mention({ id: "text-2" }), mention({ id: "text-3" })];
+  const markup = bar({ payload: payload({ mentions: three }) });
+  assert.ok(/<button[^>]*>Answer 3 @claude mentions<\/button>/.test(markup), markup);
+  assert.ok(markup.includes("3 pending mentions"), markup);
+  // The label counts what is pending, so it never disagrees with the bar.
+  assert.ok(!markup.includes("Answer 1 @claude mention<"), markup);
+});
+
+test("the bar shows no Answer button when nothing is pending", () => {
+  const markup = bar({ payload: payload({ mentions: [] }) });
+  assert.ok(markup.includes("no pending mentions"), markup);
+  assert.ok(!markup.includes("Answer"), markup);
+  // Nor before the first update, when there is no room to count.
+  assert.ok(!bar({ payload: null }).includes("Answer"), markup);
+  // A refusal with nothing pending leaves nothing to press or to explain.
+  assert.ok(!bar({ payload: payload({ mentions: [] }), announcementRefused: true }).includes("Answer"), markup);
 });
