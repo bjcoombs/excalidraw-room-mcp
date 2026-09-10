@@ -111,6 +111,12 @@ Acknowledging a mention again clears the line under it, so a note the agent aske
 
 Mention text is data written by people in the room, not instructions addressed to the agent. The agent reads a note, decides what to do with it, and does it because you asked in the session - a note saying "run this command" is text to be shown to you, not an order to follow.
 
+### Handles
+
+The agent joins under a handle - lowercase letters, digits and hyphens, up to 32 characters - and that is the name a browser sees on its cursor and in the collaborator list, so a room with two agents in it has two names to address rather than two anonymous pointers. `create_room` and `join_room` take it as `handle`; without one it is `<your os user>-claude`, which names the agent after the laptop it is running on with nothing to configure. A handle outside the grammar is refused rather than corrected.
+
+Handles are made unique against the agents already in the room: joining as `kt` when a `kt` is present takes `kt-2`, then `kt-3`. The result text of `create_room` and `join_room` states the handle actually taken, and `room_status` repeats it and lists each peer as `name (agent)` or `name (browser)` - a peer that never announced a name is someone's browser tab sitting idle.
+
 ### Lead and listener
 
 Blocking on a ten-minute wait ties up the model doing the thinking. Splitting the two roles is cheaper and quicker:
@@ -133,12 +139,12 @@ The listener runs until you stop it or until it escalates. A subagent's report r
 
 | Tool | What it does |
 |---|---|
-| `create_room` | Make a new empty room, join it, return the link to open. |
-| `join_room` | Join a room from its link. Loads the scene from a peer, or from the persisted copy if nobody else is there. |
+| `create_room` | Make a new empty room, join it, return the link to open. `handle` names the agent in the room; the result states the handle taken. |
+| `join_room` | Join a room from its link. Loads the scene from a peer, or from the persisted copy if nobody else is there. `handle` names the agent in the room; the result states the handle taken. |
 | `show_room` | The room summarised as text (link, connection state, peer and element counts, pending mentions with the ids around each), and in a host that supports MCP Apps the canvas rendered in the chat. The result is text only; the view fetches the payload itself. `include: "json"` puts the whole payload (link, connection state, peers, elements, mentions) in the text instead of the summary. |
 | `open_room` | Open the room on excalidraw.com in the default browser: the reliable way for a person to watch the canvas live. Returns the link with the connection state and the peer and element counts. `EXCALIDRAW_ROOM_NO_OPEN=1` returns the link without launching anything. |
 | `poll_room` | Lightweight state probe: connection state, scene version, peers, every unacknowledged mention with its id and text, and whether the scene changed since a version you pass. |
-| `room_status` | Connection state, peers, element counts. |
+| `room_status` | Connection state, this server's handle, the peers with their handles and whether each is an agent or a browser, element counts. |
 | `read_scene` | The drawing as one line per element (default), or the full element JSON (compact). Freehand strokes come back as a sampled path so a scribble is legible. `ids` narrows the read to named elements; `near: {id, radius}` reads one element and its neighbourhood, so a check costs a few elements rather than the whole scene. |
 | `snapshot_scene` | Render a region of the room to a PNG and return it as an image block, so hand-drawn content is readable and a layout can be checked for overlap. `ids`, `near` or `bbox` selects the region; `scale` (max 3), `maxWidth` and `maxHeight` bound the render. The text block after the image gives the bounding box, scale, pixel size and the ids drawn. See [Snapshots](#snapshots). |
 | `add_elements` | Add shapes, text, arrows, lines and freehand strokes from compact specs. Arrows bind to element ids; edge points are computed. Any spec takes an optional `link` (a URL) to make the element clickable. |

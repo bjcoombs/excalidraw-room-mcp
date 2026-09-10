@@ -9,6 +9,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { applyUpdate, buildElements, bump, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
+import { defaultHandle, isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
   buildAttributedLine,
@@ -218,14 +219,32 @@ function canvasResult(s: string, isError = false) {
   return { ...text(s), _meta: CANVAS_META, ...(isError ? { isError: true } : {}) };
 }
 
+/**
+ * The handle argument of create_room and join_room. Optional: absent means
+ * the default derived from the os user.
+ */
+const handleSchema = z
+  .string()
+  .optional()
+  .describe(
+    `Name to appear as in the room: lowercase letters, digits and hyphens, 1 to ${MAX_HANDLE_LENGTH} characters. Made unique against the agents already in the room by appending -2, -3, and the result text states the handle taken. Defaults to ${defaultHandle()}.`,
+  );
+
+/** A refusal naming the handle, or null when there is nothing to refuse. */
+function handleRefusal(handle: string | undefined): string | null {
+  if (handle === undefined || isValidHandle(handle)) return null;
+  return `invalid handle ${JSON.stringify(handle)}: a handle is 1 to ${MAX_HANDLE_LENGTH} characters of lowercase letters, digits and hyphens`;
+}
+
 function statusText(): string {
   const s = room.status();
   const peers = s.peers.length
-    ? s.peers.map((p) => p.username ?? p.socketId).join(", ")
+    ? s.peers.map((p) => `${p.username ?? p.socketId} (${p.kind})`).join(", ")
     : "none";
   return [
     `connected: ${s.connected}`,
     `room: ${s.link ?? "-"}`,
+    `handle: ${s.handle ?? "-"}`,
     `peers: ${peers}`,
     `elements: ${s.elementCount} (${s.deletedCount} deleted)`,
     `sceneVersion: ${s.sceneVersion}`,
@@ -245,12 +264,14 @@ server.registerTool(
   "create_room",
   {
     description:
-      "Create a new empty live-collaboration room, join it, and return the excalidraw.com link for a person to open. The link contains the encryption key; share it only with people who should see the drawing.",
-    inputSchema: {},
+      "Create a new empty live-collaboration room, join it, and return the excalidraw.com link for a person to open. The link contains the encryption key; share it only with people who should see the drawing. The result states the handle this server took in the room.",
+    inputSchema: { handle: handleSchema },
   },
-  async () => {
+  async ({ handle }) => {
+    const refusal = handleRefusal(handle);
+    if (refusal) return errorText(refusal);
     const link = await RoomClient.createLink();
-    await room.join(link, { initTimeoutMs: 1500 });
+    await room.join(link, { initTimeoutMs: 1500, handle });
     return text(`${link}\n\n${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
@@ -259,15 +280,18 @@ server.registerTool(
   "join_room",
   {
     description:
-      "Join an existing excalidraw.com live-collaboration room from its link (the URL with #room=<id>,<key>). Loads the current scene from a connected peer, or from the room's persisted copy if nobody else is present.",
+      "Join an existing excalidraw.com live-collaboration room from its link (the URL with #room=<id>,<key>). Loads the current scene from a connected peer, or from the room's persisted copy if nobody else is present. The result states the handle this server took in the room.",
     inputSchema: {
       link: z.string().describe("Collaboration link, e.g. https://excalidraw.com/#room=abc...,key..."),
+      handle: handleSchema,
       serverUrl: z.string().optional().describe("Relay URL. Defaults to excalidraw.com's public relay."),
       origin: z.string().optional().describe("Origin header to present to the relay. Defaults to https://excalidraw.com, which the public relay requires."),
     },
   },
-  async ({ link, serverUrl, origin }) => {
-    await room.join(link, { serverUrl, origin });
+  async ({ link, serverUrl, origin, handle }) => {
+    const refusal = handleRefusal(handle);
+    if (refusal) return errorText(refusal);
+    await room.join(link, { serverUrl, origin, handle });
     return text(`${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
@@ -333,7 +357,11 @@ server.registerTool(
 
 server.registerTool(
   "room_status",
-  { description: "Connection state, peers, and scene counters for the current room.", inputSchema: {} },
+  {
+    description:
+      "Connection state, the handle this server took in the room, the peers with their handles and whether each is an agent or a browser, and scene counters for the current room.",
+    inputSchema: {},
+  },
   async () => text(statusText()),
 );
 

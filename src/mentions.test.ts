@@ -513,6 +513,7 @@ function pollStatus() {
     connected: true,
     roomId: "room1",
     link: "https://excalidraw.com/#room=room1,0123456789abcdefghijkl",
+    handle: "kt",
     peers: [],
     elementCount: 1,
     deletedCount: 0,
