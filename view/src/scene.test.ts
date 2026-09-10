@@ -4,7 +4,7 @@ import type { ShowRoomMention } from "./payload.js";
 import { canvasElements, HIGHLIGHT_ID_PREFIX, HIGHLIGHT_PADDING, highlightBoxes } from "./scene.js";
 
 function mention(over: Partial<ShowRoomMention> = {}): ShowRoomMention {
-  return { id: "text-1", version: 5, text: "@claude add a box here", x: 20, y: 40, width: 200, height: 25, containerId: null, nearby: [], ...over };
+  return { id: "text-1", version: 5, text: "@claude add a box here", x: 20, y: 40, width: 200, height: 25, containerId: null, nearby: [], announced: false, ...over };
 }
 
 test("a pending mention element is highlighted on the canvas", () => {

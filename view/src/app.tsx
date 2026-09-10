@@ -37,6 +37,7 @@ import { CaptureUpdateAction, Excalidraw } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { announceMentions, retryAnnouncement, type AnnounceResult } from "./announce.js";
 import { boundsChanged, FIT_PADDING, sceneBounds, type SceneBounds } from "./bounds.js";
 import { highlightElements } from "./highlights.js";
 import { envelopeShape, isNotInRoom, linkFromSummary, parseResult, resultText, roomLink, sceneSignature, type ShowRoomPayload } from "./payload.js";
@@ -60,7 +61,16 @@ export function RoomView({ app }: { app: App }) {
   const [lastUpdateAt, setLastUpdateAt] = useState<number | null>(null);
   const [pollingAvailable, setPollingAvailable] = useState<boolean | null>(null);
   const [linkBlocked, setLinkBlocked] = useState(false);
+  /** Ids claimed for an announcement the host refused. Empty when there is nothing to press. */
+  const [blockedIds, setBlockedIds] = useState<string[]>([]);
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
+  /**
+   * True while an announcement is in flight. The poll runs every two seconds
+   * and a `sendMessage` round trip can outlast that, so without this the same
+   * mention would be claimed twice - the second claim losing, harmlessly, but
+   * only by luck of the server's ordering.
+   */
+  const announcing = useRef(false);
   const lastSignature = useRef<string | null>(null);
   /** Which request is newest. A result from an older one is dropped rather than applied. */
   const lastGeneration = useRef(0);
@@ -133,16 +143,50 @@ export function RoomView({ app }: { app: App }) {
   // the viewport alone. The `pending` half of that test is what keeps a held
   // scene from being stranded: an identical signature is only grounds to skip
   // the push when the last one actually reached the canvas.
+  /** Record what an attempt did: the button appears only for a host that refused. */
+  const recordAnnouncement = useCallback((result: AnnounceResult) => {
+    setBlockedIds(result.outcome === "blocked" ? result.ids : []);
+  }, []);
+
+  /**
+   * Announce whatever this poll shows as unannounced, in the background.
+   *
+   * Deliberately not awaited and deliberately not able to throw: this is
+   * called from the same function that redraws the canvas, and a host with no
+   * `ui/message` must cost the reader nothing but the button.
+   */
+  const announce = useCallback(
+    (mentions: readonly { id: string; announced: boolean }[]) => {
+      if (announcing.current) return;
+      if (!mentions.some((m) => !m.announced)) return;
+      announcing.current = true;
+      void announceMentions(app, mentions)
+        .then(recordAnnouncement)
+        .finally(() => {
+          announcing.current = false;
+        });
+    },
+    [app, recordAnnouncement],
+  );
+
+  /** The Answer button: claim the released ids back and send the same message. */
+  const answer = useCallback(() => {
+    const ids = blockedIds;
+    if (!ids.length) return;
+    void retryAnnouncement(app, ids).then(recordAnnouncement);
+  }, [app, blockedIds, recordAnnouncement]);
+
   const apply = useCallback(
     (next: ShowRoomPayload) => {
       setPayload(next);
+      announce(next.mentions);
       const signature = sceneSignature(next.elements) + `#${next.mentions.map((m) => `${m.id}:${m.version}`).join(",")}`;
       if (signature === lastSignature.current && pending.current === null) return;
       lastSignature.current = signature;
       pending.current = next;
       flush();
     },
-    [flush],
+    [announce, flush],
   );
 
   /**
@@ -311,8 +355,10 @@ export function RoomView({ app }: { app: App }) {
         lastUpdateAt={lastUpdateAt}
         pollingAvailable={pollingAvailable}
         linkBlocked={linkBlocked}
+        blockedAnnouncement={blockedIds.length}
         onOpen={open}
         onRefresh={() => void refresh()}
+        onAnswer={answer}
       />
     </div>
   );

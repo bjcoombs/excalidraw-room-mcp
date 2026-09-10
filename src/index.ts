@@ -11,6 +11,7 @@ import { z } from "zod";
 import { buildElements, bump, measureText, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
+  AnnouncementClaims,
   DEFAULT_NEARBY_RADIUS,
   DEFAULT_TAG,
   findMentions,
@@ -21,6 +22,7 @@ import {
   MAX_NOTE_LENGTH,
   nearbyElements,
   noteSchema,
+  withScopeRule,
   type HandledVersions,
   type Mention,
 } from "./mentions.js";
@@ -48,11 +50,38 @@ if (process.argv[2] === "install-agent") {
 }
 
 const room = new RoomClient();
-/** Mentions already acted on, by element id -> version. Reset on join. */
+/**
+ * Mentions already surfaced to an agent, by element id -> version. Reset on
+ * join. This is what stops wait_for_mention returning the same note twice in a
+ * row; it is deliberately not what "pending" means.
+ */
 let handledMentions: HandledVersions = new Map();
+/**
+ * Mentions an agent has answered, by element id -> version. Reset on join.
+ *
+ * Pending means unacknowledged, not unseen. A note an agent has looked at but
+ * not acted on is still an open request: the canvas widget has to be able to
+ * announce it, list_mentions has to be able to show it again, and poll_room
+ * has to keep reporting it. Only acknowledge_mention closes a mention.
+ */
+let acknowledgedMentions: HandledVersions = new Map();
+/** Which mentions a widget has already announced into the chat. Reset on join. */
+const announcementClaims = new AnnouncementClaims();
 room.on("joined", () => {
   handledMentions = new Map();
+  acknowledgedMentions = new Map();
+  announcementClaims.reset();
 });
+
+/** Every mention of `tag` that has not been acknowledged, seen or not. */
+function pendingMentions(tag: string, elements = room.getElements()): Mention[] {
+  return findMentions(elements, tag, acknowledgedMentions);
+}
+
+/** Which of these mentions a widget has already announced. */
+function announcedIds(mentions: readonly Mention[]): Set<string> {
+  return new Set(mentions.filter((m) => announcementClaims.has(m.id)).map((m) => m.id));
+}
 
 /**
  * Commit the "seen" state for a mention the moment it is surfaced, so the
@@ -238,8 +267,8 @@ registerAppTool(
     const { error } = await ensureJoined(room, link);
     if (!room.isConnected) return canvasResult(error ? `${NOT_IN_ROOM_TEXT}\n${error}` : NOT_IN_ROOM_TEXT, true);
     const elements = room.getElements();
-    const pending = findMentions(elements, tag, handledMentions);
-    const payload = buildShowRoomPayload(room.status(), elements, pending, radius);
+    const pending = pendingMentions(tag, elements);
+    const payload = buildShowRoomPayload(room.status(), elements, pending, radius, announcedIds(pending));
     // Text only, deliberately: a host that inlines structuredContent into the
     // model-visible transcript charges the reader for the element array on
     // every call, which is what a split payload was meant to avoid. The view
@@ -434,7 +463,7 @@ server.registerTool(
     if (!mention) return text(`no mention of ${tag} within ${timeoutSeconds}s`);
     const out = formatMention(mention, nearbyElements(room.getElements(), mention, radius));
     if (autoSeen) await commitSeen(mention);
-    return text(out);
+    return text(withScopeRule(out));
   },
 );
 
@@ -451,13 +480,13 @@ server.registerTool(
   async ({ tag, radius, autoSeen }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     const all = room.getElements();
-    const pending = findMentions(all, tag, handledMentions);
+    const pending = pendingMentions(tag, all);
     if (!pending.length) return text(`no pending mentions of ${tag}`);
     const out = pending.map((m) => formatMention(m, nearbyElements(all, m, radius))).join("\n\n---\n\n");
     if (autoSeen) {
       for (const m of pending) await commitSeen(m);
     }
-    return text(out);
+    return text(withScopeRule(out));
   },
 );
 
@@ -493,6 +522,10 @@ server.registerTool(
     const updated = kept ? markAcknowledged(current, { note: status }) : markRemoved(current);
     const result = await room.commit([updated]);
     handledMentions.set(id, updated.version);
+    acknowledgedMentions.set(id, updated.version);
+    // The claim goes with it. If the person edits the note again it is a new
+    // request, and a widget has to be free to announce it.
+    announcementClaims.release([id]);
     const what = kept ? `acknowledged ${id}` : `acknowledged and removed ${id} from the canvas`;
     return text(`${what}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
   },
@@ -510,8 +543,30 @@ server.registerTool(
   },
   async ({ sinceVersion, tag }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
-    const pending = findMentions(room.getElements(), tag, handledMentions);
-    return text(pollText(buildPollPayload({ status: room.status(), pending }, sinceVersion)));
+    const pending = pendingMentions(tag);
+    return text(pollText(buildPollPayload({ status: room.status(), pending, announced: announcedIds(pending) }, sinceVersion)));
+  },
+);
+
+
+server.registerTool(
+  "claim_mention_announcement",
+  {
+    description:
+      "For the in-chat canvas view, not for an agent to call. Claim the right to announce mentions into the chat: the first caller for an id gets it back in the result, later callers get nothing, so several open widgets against one server produce one message rather than several. Pass release true to give ids back after a failed announcement, which lets a later attempt win them. Claims are dropped when the mention is acknowledged and when the server joins a room.",
+    inputSchema: {
+      ids: z.array(z.string()).min(1).describe("Mention element ids, as poll_room and show_room report them."),
+      release: z
+        .boolean()
+        .default(false)
+        .describe("Give these ids back instead of claiming them. For a widget whose host refused the message."),
+    },
+  },
+  async ({ ids, release }) => {
+    const changed = release ? announcementClaims.release(ids) : announcementClaims.claim(ids);
+    const verb = release ? "released" : "won";
+    const header = `announcement claim: ${verb} ${changed.length} of ${ids.length}`;
+    return text(changed.length ? `${header}\n${changed.join("\n")}` : header);
   },
 );
 

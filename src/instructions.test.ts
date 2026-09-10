@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
+import { MENTION_SCOPE_RULE } from "./mentions.js";
 
 test("instructions name the listen loop and both of its tools", () => {
   assert.match(SERVER_INSTRUCTIONS, /wait_for_mention/);
@@ -28,4 +29,9 @@ test("the tip carries the tool, the timeout and the tag", () => {
 test("instructions point a person at the browser after a room is opened", () => {
   assert.match(SERVER_INSTRUCTIONS, /open_room/);
   assert.match(SERVER_INSTRUCTIONS, /excalidraw\.com/);
+});
+
+test("instructions carry the scope rule verbatim", () => {
+  assert.ok(SERVER_INSTRUCTIONS.includes(MENTION_SCOPE_RULE), SERVER_INSTRUCTIONS);
+  assert.ok(MENTION_SCOPE_RULE.includes('"out of scope"'), MENTION_SCOPE_RULE);
 });

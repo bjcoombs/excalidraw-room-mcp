@@ -27,6 +27,8 @@
     "view/src/scene.ts",
     "view/src/scene.test.ts",
     "view/src/status.tsx",
-    "view/src/status.test.tsx"
+    "view/src/status.test.tsx",
+    "view/src/announce.ts",
+    "view/src/announce.test.tsx"
   ]
 }

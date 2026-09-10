@@ -9,7 +9,7 @@ const LINK = "https://excalidraw.com/#room=0123456789abcdef0123,AbCdEfGhIjKlMnOp
 const MENTION_TEXT = "@claude add a box here";
 
 function mention(over: Partial<ShowRoomMention> = {}): ShowRoomMention {
-  return { id: "text-1", version: 5, text: MENTION_TEXT, x: 20, y: 40, width: 200, height: 25, containerId: null, nearby: [], ...over };
+  return { id: "text-1", version: 5, text: MENTION_TEXT, x: 20, y: 40, width: 200, height: 25, containerId: null, nearby: [], announced: false, ...over };
 }
 
 function payload(over: Partial<ShowRoomPayload> = {}): ShowRoomPayload {

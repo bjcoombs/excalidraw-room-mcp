@@ -71,6 +71,7 @@ body,
 }
 
 .room-status .refresh,
+.room-status .answer,
 .room-status .open-link {
   font: inherit;
   padding: 1px 8px;
@@ -79,6 +80,14 @@ body,
   border-radius: 4px;
   background: transparent;
   color: inherit;
+}
+
+/* The announcement fallback is the one control the reader has to act on, so it
+   is the one control that is not quiet. */
+.room-status .answer {
+  border-color: #e8590c;
+  color: #e8590c;
+  font-weight: 600;
 }
 
 /* The link and the control that stands in for it both sit at the far end. */
