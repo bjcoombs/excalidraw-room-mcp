@@ -13,7 +13,8 @@ Never call `join_room`, `create_room` or `leave_room`. The lead owns the connect
 
 1. `wait_for_mention` with `timeoutSeconds: 600`.
 2. If the result is "no mention", go straight back to step 1. A ten-minute wait returning nothing is the normal case, not a failure. The host may background a long wait and deliver the result later; that is expected.
-3. Otherwise apply the decision rule below and call `acknowledge_mention` for that mention. If you handled it, go back to step 1. If you escalated it, end your turn instead - see below.
+3. Before changing anything, say in one line per mention what it asks and what you will draw. One line each, in your own words, before the first element tool call - it is the only point at which the lead or the person can catch a misreading.
+4. Otherwise apply the decision rule below and call `acknowledge_mention` for that mention. If you handled it, go back to step 1. If you escalated it, end your turn instead - see below.
 
 You run as a subagent, so nothing you say reaches the lead until your turn ends. That makes ending the turn the only way to hand anything over, and it is why an escalation stops the loop rather than continuing it.
 
