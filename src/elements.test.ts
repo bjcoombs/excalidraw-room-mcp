@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyUpdate,
   buildElements,
   bump,
+  LABEL_PADDING,
+  layoutBoundLabel,
   measureText,
   randomId,
   randomInteger,
@@ -784,4 +787,103 @@ test("link defaults to null when the spec omits it", () => {
   );
   assert.equal(created[0].link, null);
   assert.equal(created[1].link, null);
+});
+
+const lookupIn = (els: ExcalidrawElement[]) => (id: string) => els.find((e) => e.id === id);
+
+test("updating a bound label keeps originalText in step, re-measures, and bumps the container", () => {
+  const { created } = buildElements(
+    [{ type: "rectangle", id: "r", x: 0, y: 0, width: 200, height: 80, label: "API" }],
+    ctx(),
+  );
+  const [rect, label] = created;
+  const out = applyUpdate(label, { text: "Gateway service" }, lookupIn(created));
+  const next = out.find((e) => e.id === label.id)!;
+  const container = out.find((e) => e.id === "r")!;
+  assert.equal(out.length, 2, "the label and its container both change");
+  assert.equal(next.text, "Gateway service");
+  assert.equal(next.originalText, "Gateway service", "originalText follows text; upstream renders from it");
+  assert.deepEqual(
+    { width: next.width, height: next.height },
+    measureText("Gateway service", 20),
+    "the box is re-measured",
+  );
+  assert.ok(next.width > label.width, "the wider string widens the box");
+  assert.equal(next.version, label.version + 1);
+  assert.equal(container.version, rect.version + 1, "the container is marked changed so peers redraw the label");
+  assert.equal(next.x, container.x + (container.width - next.width) / 2, "re-centred horizontally");
+  assert.equal(next.y, container.y + (container.height - next.height) / 2, "re-centred vertically");
+
+  const explicit = applyUpdate(label, { text: "Gateway service, longer", width: 150, height: 25 }, lookupIn(created));
+  const sized = explicit.find((e) => e.id === label.id)!;
+  assert.equal(sized.width, 150, "an explicit width is not re-measured");
+  assert.equal(sized.height, 25, "an explicit height is not re-measured");
+  assert.equal(sized.originalText, "Gateway service, longer");
+});
+
+test("a two-line label grows its container to fit both lines", () => {
+  const { created } = buildElements(
+    [{ type: "rectangle", id: "r2", x: 0, y: 200, width: 200, height: 40, label: "two\nlines" }],
+    ctx(),
+  );
+  const [rect, label] = created;
+  assert.equal(label.text, "two\nlines");
+  assert.equal(label.originalText, "two\nlines", "the newline survives into originalText");
+  assert.equal(label.height, measureText("two\nlines", 20).height);
+  assert.ok(label.height >= 2 * 20, `two lines at font size 20 measure ${label.height}px`);
+  assert.ok(
+    rect.height >= label.height + LABEL_PADDING,
+    `container grew to ${rect.height} for a ${label.height}px label`,
+  );
+  assert.equal(rect.y, 200, "the container keeps its top edge");
+  assert.equal(rect.x, 0);
+  assert.equal(label.y, rect.y + (rect.height - label.height) / 2, "the label is centred in the grown container");
+  assert.deepEqual(rect.boundElements, [{ id: label.id, type: "text" }]);
+});
+
+test("a label bound to an arrow re-centres without resizing the arrow", () => {
+  const { created } = buildElements(
+    [
+      { type: "arrow", id: "ar", points: [[0, 0], [100, 0]], label: "hi" },
+    ],
+    ctx(),
+  );
+  const arrow = created.find((e) => e.id === "ar")!;
+  const label = created.find((e) => e.containerId === "ar")!;
+  const out = applyUpdate(label, { text: "a much longer edge label" }, lookupIn(created));
+  const container = out.find((e) => e.id === "ar")!;
+  const next = out.find((e) => e.id === label.id)!;
+  assert.equal(container.width, arrow.width, "the arrow's box comes from its points");
+  assert.equal(container.height, arrow.height);
+  assert.equal(container.version, arrow.version + 1, "still marked changed so the label redraws");
+  assert.equal(next.x, container.x + (container.width - next.width) / 2);
+});
+
+test("layoutBoundLabel leaves a container that already fits untouched", () => {
+  const { created } = buildElements(
+    [{ type: "rectangle", id: "r", x: 10, y: 20, width: 400, height: 200, label: "API" }],
+    ctx(),
+  );
+  const [rect, label] = created;
+  const laid = layoutBoundLabel(rect, label);
+  assert.equal(laid.container, rect, "no copy is made when nothing grows");
+  assert.equal(laid.container.width, 400);
+  assert.equal(laid.container.height, 200);
+});
+
+test("an unbound text element updates without a container", () => {
+  const [t] = buildElements([{ type: "text", id: "t", x: 0, y: 0, text: "hi" }], ctx()).created;
+  const out = applyUpdate(t, { text: "hello there" }, () => undefined);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].originalText, "hello there");
+  assert.equal(out[0].width, measureText("hello there", 20).width);
+});
+
+test("a non-text update is merged and bumped without re-measuring", () => {
+  const [rect] = buildElements([{ type: "rectangle", id: "r", x: 0, y: 0, width: 100, height: 50 }], ctx()).created;
+  const out = applyUpdate(rect, { backgroundColor: "#ffec99" }, () => undefined);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].backgroundColor, "#ffec99");
+  assert.equal(out[0].width, 100);
+  assert.equal(out[0].version, rect.version + 1);
 });
