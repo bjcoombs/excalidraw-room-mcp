@@ -37,6 +37,15 @@ import {
   statusUnknownText,
   acknowledgedText,
   boxDistance,
+  BROADCAST_TAG,
+  defaultTags,
+  handleTag,
+  isAgentAuthored,
+  isMentionText,
+  ownAuthor,
+  resolveTags,
+  tagsText,
+  visibleMentions,
   DEFAULT_NEARBY_RADIUS,
   findMentions,
   formatMention,
@@ -897,4 +906,138 @@ test("the attributed line is written under the handle that wrote it", () => {
     kind: "reply",
     text: "Which one?",
   });
+});
+
+/**
+ * Three notes addressed three ways, all written by `author`: one to beta, one
+ * to the broadcast tag, one to alpha. Addressing and author filtering are read
+ * off the same scene, because the two rules compose and a test that fixes one
+ * has to hold the other still.
+ */
+function addressed(author: string | null): ExcalidrawElement[] {
+  const els = buildElements(
+    [
+      { type: "text", id: "x1", x: 0, y: 0, text: "@beta do this" },
+      { type: "text", id: "x2", x: 0, y: 60, text: "@claude everyone" },
+      { type: "text", id: "x3", x: 0, y: 120, text: "@alpha self note" },
+    ],
+    ctx(),
+  ).created;
+  return author === null ? els : els.map((el) => stampAuthor(el, author));
+}
+
+const ids = (mentions: readonly Mention[]) => mentions.map((m) => m.id);
+
+test("the default tag is the handle and @claude is heard by everyone", () => {
+  // The address of one agent, and the address of all of them.
+  assert.equal(handleTag("beta"), "@beta");
+  assert.equal(handleTag(null), BROADCAST_TAG);
+  assert.equal(handleTag(), BROADCAST_TAG);
+  assert.deepEqual(defaultTags("beta"), ["@beta", BROADCAST_TAG]);
+  // An agent with no handle, and one whose handle is the broadcast word, each
+  // answer to the one tag rather than to it twice.
+  assert.deepEqual(defaultTags(null), [BROADCAST_TAG]);
+  assert.deepEqual(defaultTags("claude"), [BROADCAST_TAG]);
+  assert.equal(tagsText(defaultTags("beta")), "@beta or @claude");
+
+  // No tag from the caller means the defaults; a tag means exactly that tag.
+  assert.deepEqual(resolveTags(undefined, "beta"), ["@beta", BROADCAST_TAG]);
+  assert.deepEqual(resolveTags("@only", "beta"), ["@only"]);
+
+  // Several tags match if any of them does, case-insensitively, and the empty
+  // text is nobody's mention.
+  assert.equal(isMentionText("hey @BETA look", ["@beta", BROADCAST_TAG]), true);
+  assert.equal(isMentionText("hey @gamma look", ["@beta", BROADCAST_TAG]), false);
+  assert.equal(isMentionText(undefined, ["@beta"]), false);
+  assert.equal(isMentionText("@beta", "@beta"), true);
+
+  const els = addressed(null);
+  // beta hears its own note and the broadcast; alpha hears the broadcast and
+  // its own. Neither hears the note addressed to the other.
+  assert.deepEqual(ids(findMentions(els, defaultTags("beta"))), ["x1", "x2"]);
+  assert.deepEqual(ids(findMentions(els, defaultTags("alpha"))), ["x2", "x3"]);
+  // An explicit tag is the old behaviour, unchanged: that text and nothing else.
+  assert.deepEqual(ids(findMentions(els, "@beta")), ["x1"]);
+  assert.deepEqual(ids(findMentions(els, BROADCAST_TAG)), ["x2"]);
+  // The handled-note listing addresses the same way.
+  const acked = new Map(els.map((el) => [el.id, el.version]));
+  assert.deepEqual(ids(findHandledMentions(els, defaultTags("beta"), acked)), ["x1", "x2"]);
+
+  // A reply may not carry any tag the agent answers to, or it would come back
+  // as a mention of its own; the refusal names both.
+  assert.equal(replyIsMention("ping @beta", defaultTags("beta")), true);
+  assert.equal(replyIsMention("ping @claude", defaultTags("beta")), true);
+  assert.equal(replyIsMention("which box?", defaultTags("beta")), false);
+  assert.match(replyTagText(defaultTags("beta")), /@beta or @claude/);
+  assert.match(replyTagText("@beta"), /@beta/);
+  assert.equal(planAcknowledgement({ reply: "ping @beta" }, defaultTags("beta")).refusal, replyTagText(defaultTags("beta")));
+});
+
+test("agent-authored mentions are hidden unless answerAgentMentions is on", async () => {
+  const fromAlpha = findMentions(addressed("alpha"), defaultTags("beta"));
+  assert.deepEqual(ids(fromAlpha), ["x1", "x2"]);
+
+  // Default: beta is told nothing about notes alpha wrote, however they are
+  // addressed - two listeners would otherwise answer each other's notes.
+  assert.deepEqual(ids(visibleMentions(fromAlpha, "beta")), []);
+  assert.deepEqual(ids(visibleMentions(fromAlpha, "beta", false)), []);
+  // Opted in: all of them, still carrying who wrote them.
+  assert.deepEqual(ids(visibleMentions(fromAlpha, "beta", true)), ["x1", "x2"]);
+  assert.match(formatMention(visibleMentions(fromAlpha, "beta", true)[0], []), /^from: alpha$/m);
+
+  // A person's note (nothing stamps a browser's writing) is always returned.
+  const fromPerson = findMentions(addressed(null), defaultTags("beta"));
+  assert.deepEqual(ids(visibleMentions(fromPerson, "beta")), ["x1", "x2"]);
+
+  // So is the agent's own note: addressing yourself is not another agent.
+  const own = findMentions(addressed("alpha"), defaultTags("alpha"));
+  assert.deepEqual(ids(own), ["x2", "x3"]);
+  assert.deepEqual(ids(visibleMentions(own, "alpha")), ["x2", "x3"]);
+  // With no handle, the fallback author is what our own writes carry.
+  assert.deepEqual(ids(visibleMentions(findMentions(addressed("claude"), defaultTags(null)), null)), ["x2"]);
+
+  // The wait applies the same filter before it settles anything: another
+  // agent's note must not end a wait and must not be reported as a mention.
+  const room = new RoomClient();
+  const accept = (m: Mention) => visibleMentions([m], "beta").length > 0;
+  const [note] = addressed("alpha");
+  const quiet = room.waitForMention(defaultTags("beta"), new Map(), { timeoutMs: 120, settleMs: 5, accept });
+  setTimeout(() => room.ingestRemote([note]), 10);
+  assert.equal(await quiet, null);
+
+  const heard = room.waitForMention(defaultTags("beta"), new Map(), { timeoutMs: 2000, settleMs: 10, accept });
+  const [person] = addressed(null);
+  setTimeout(() => room.ingestRemote([person]), 10);
+  const got = await heard;
+  assert.equal(got?.id, "x1");
+  assert.equal(got?.author, null);
+});
+
+test("a mention names its author or person", () => {
+  // Three authors, one rule: null is a person, our own handle is us, anything
+  // else is another agent in the room.
+  const [person] = findMentions(addressed(null), "@beta");
+  const [mine] = findMentions(addressed("beta"), "@beta");
+  const [theirs] = findMentions(addressed("alpha"), "@beta");
+
+  assert.equal(person.author, null);
+  assert.equal(mine.author, "beta");
+  assert.equal(theirs.author, "alpha");
+
+  assert.equal(ownAuthor("beta"), "beta");
+  assert.equal(ownAuthor(null), "claude");
+  assert.equal(ownAuthor(), "claude");
+
+  assert.equal(isAgentAuthored(person, "beta"), false);
+  assert.equal(isAgentAuthored(mine, "beta"), false);
+  assert.equal(isAgentAuthored(theirs, "beta"), true);
+  // With no handle of our own, the fallback stamp is still our own work.
+  assert.equal(isAgentAuthored({ ...mine, author: "claude" }, null), false);
+  assert.equal(isAgentAuthored(theirs, null), true);
+
+  // What the model reads: the server's own statement of who wrote the words,
+  // above the block that quotes them.
+  assert.match(formatMention(person, []), /^from: person$/m);
+  assert.match(formatMention(mine, []), /^from: beta$/m);
+  assert.match(formatMention(theirs, []), /^from: alpha$/m);
 });

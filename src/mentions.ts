@@ -29,7 +29,84 @@ import {
 } from "./elements.js";
 
 export const DEFAULT_TAG = "@claude";
+
+/**
+ * The tag every agent in the room hears, whatever handle it took. A person
+ * addressing the room rather than one agent writes this one, so it stays
+ * matchable alongside a handle tag and is never filtered away by addressing.
+ */
+export const BROADCAST_TAG = DEFAULT_TAG;
+
 export const DEFAULT_NEARBY_RADIUS = 250;
+
+/**
+ * The tag that addresses one agent: `@` and the handle it took in the room.
+ * With no handle there is nothing to address, so the broadcast tag stands -
+ * which is also the behaviour every caller had before handles existed.
+ */
+export function handleTag(handle?: string | null): string {
+  return handle ? `@${handle}` : BROADCAST_TAG;
+}
+
+/**
+ * What an agent answers to when the caller names no tag: its own handle and
+ * the broadcast tag. Two tags rather than one is the whole of per-handle
+ * addressing - `@beta do this` reaches beta alone, `@claude everyone` reaches
+ * both - and an agent whose handle is literally `claude` answers to the one
+ * tag rather than to it twice.
+ */
+export function defaultTags(handle?: string | null): string[] {
+  const own = handleTag(handle);
+  return own === BROADCAST_TAG ? [BROADCAST_TAG] : [own, BROADCAST_TAG];
+}
+
+/**
+ * The tags a mention tool matches on. An explicit `tag` is honoured exactly as
+ * it always was - a caller that names one is addressing something specific -
+ * and its absence means the defaults above.
+ */
+export function resolveTags(tag: string | undefined, handle?: string | null): string[] {
+  return tag === undefined ? defaultTags(handle) : [tag];
+}
+
+/** The tags as prose, for the one-line "nothing pending" results. */
+export function tagsText(tags: readonly string[]): string {
+  return tags.join(" or ");
+}
+
+/**
+ * The author string this server's own writes carry: its handle, or the
+ * fallback that {@link stampAuthor} uses when it has none. Own notes read back
+ * through this, so an agent addressing itself is never mistaken for another.
+ */
+export function ownAuthor(handle?: string | null): string {
+  return handle || FALLBACK_AUTHOR;
+}
+
+/**
+ * True for a note another agent in the room wrote. A null author is what a
+ * browser leaves, so it is a person; our own handle is our own note. Neither
+ * is another agent, and both are answered by default.
+ */
+export function isAgentAuthored(mention: Mention, handle?: string | null): boolean {
+  return mention.author !== null && mention.author !== ownAuthor(handle);
+}
+
+/**
+ * The mentions an agent should act on. Agent-authored notes are dropped unless
+ * the caller opted in: two agents listening in one room would otherwise answer
+ * each other's requests and each other's answers, and nothing in the text of a
+ * note says which of the two wrote it. Opting in returns them all, each still
+ * carrying the `from:` line that names the author.
+ */
+export function visibleMentions(
+  mentions: readonly Mention[],
+  handle?: string | null,
+  answerAgentMentions: boolean = false,
+): Mention[] {
+  if (answerAgentMentions) return [...mentions];
+  return mentions.filter((m) => !isAgentAuthored(m, handle));
+}
 
 /**
  * The two states the server paints onto a mention's text. Both are appended to
@@ -158,13 +235,14 @@ export const replySchema = z
  * would be found by `findMentions` on the next pass and the agent would answer
  * its own question forever, so it is refused rather than silently rewritten.
  */
-export function replyIsMention(reply: string, tag: string = DEFAULT_TAG): boolean {
+export function replyIsMention(reply: string, tag: string | readonly string[] = DEFAULT_TAG): boolean {
   return isMentionText(reply, tag);
 }
 
 /** Why a reply naming the tag was refused. */
-export function replyTagText(tag: string = DEFAULT_TAG): string {
-  return `reply must not contain ${tag}: a reply carrying the tag would itself be read as a pending mention.`;
+export function replyTagText(tag: string | readonly string[] = DEFAULT_TAG): string {
+  const named = typeof tag === "string" ? tag : tagsText(tag);
+  return `reply must not contain ${named}: a reply carrying the tag would itself be read as a pending mention.`;
 }
 
 /** The attributed line for a status: the prefix and the fixed words, nothing else. */
@@ -360,7 +438,7 @@ export interface AcknowledgePlan {
  */
 export function planAcknowledgement(
   req: AcknowledgeRequest,
-  tag: string = DEFAULT_TAG,
+  tag: string | readonly string[] = DEFAULT_TAG,
   handle?: string | null,
 ): AcknowledgePlan {
   const untouched = { kept: false, replies: false };
@@ -412,13 +490,16 @@ export interface Mention {
 /** id -> version already dealt with. A newer version of the same text is a new mention. */
 export type HandledVersions = Map<string, number>;
 
-export function isMentionText(text: string | undefined, tag: string): boolean {
-  return !!text && text.toLowerCase().includes(tag.toLowerCase());
+export function isMentionText(text: string | undefined, tag: string | readonly string[]): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  const tags = typeof tag === "string" ? [tag] : tag;
+  return tags.some((one) => lower.includes(one.toLowerCase()));
 }
 
 export function findMentions(
   elements: readonly ExcalidrawElement[],
-  tag: string = DEFAULT_TAG,
+  tag: string | readonly string[] = DEFAULT_TAG,
   handled: HandledVersions = new Map(),
 ): Mention[] {
   const out: Mention[] = [];
@@ -454,7 +535,7 @@ export function findMentions(
  */
 export function findHandledMentions(
   elements: readonly ExcalidrawElement[],
-  tag: string = DEFAULT_TAG,
+  tag: string | readonly string[] = DEFAULT_TAG,
   acknowledged: HandledVersions = new Map(),
 ): Mention[] {
   const out: Mention[] = [];

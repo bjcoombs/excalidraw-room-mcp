@@ -25,8 +25,8 @@ import { defaultHandle, isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
   buildAttributedLine,
+  BROADCAST_TAG,
   DEFAULT_NEARBY_RADIUS,
-  DEFAULT_TAG,
   findAttributedLine,
   findHandledMentions,
   findMentions,
@@ -41,7 +41,10 @@ import {
   MENTION_STATUSES,
   previousLine,
   replySchema,
+  resolveTags,
   statusSchema,
+  tagsText,
+  visibleMentions,
   withRequestPreamble,
   withScopeRule,
   type HandledVersions,
@@ -107,14 +110,28 @@ room.on("joined", () => {
   acknowledgedMentions = new Map();
 });
 
-/** Every mention of `tag` that has not been acknowledged, seen or not. */
-function pendingMentions(tag: string, elements = room.getElements()): Mention[] {
-  return findMentions(elements, tag, acknowledgedMentions);
+/**
+ * Every mention of any of `tags` that has not been acknowledged, seen or not,
+ * as this agent should see it: another agent's note is dropped unless the
+ * caller asked for it. Both the addressing (which tags) and the filtering
+ * (which authors) are applied in one place, so `list_mentions`, `poll_room`,
+ * `wait_for_mention` and `show_room` cannot disagree about what is pending.
+ */
+function pendingMentions(
+  tags: readonly string[],
+  elements = room.getElements(),
+  answerAgentMentions = false,
+): Mention[] {
+  return visibleMentions(findMentions(elements, tags, acknowledgedMentions), room.handle, answerAgentMentions);
 }
 
-/** Every mention of `tag` this process has acknowledged and left on the canvas. */
-function handledMentionsOnCanvas(tag: string, elements = room.getElements()): Mention[] {
-  return findHandledMentions(elements, tag, acknowledgedMentions);
+/** Every mention of any of `tags` this process has acknowledged and left on the canvas. */
+function handledMentionsOnCanvas(
+  tags: readonly string[],
+  elements = room.getElements(),
+  answerAgentMentions = false,
+): Mention[] {
+  return visibleMentions(findHandledMentions(elements, tags, acknowledgedMentions), room.handle, answerAgentMentions);
 }
 
 /**
@@ -216,6 +233,29 @@ function guardNote(refusals: readonly Refusal[], force: boolean): string {
   const lines = refusalLines(refusals);
   return force ? `\n${forcedLine(refusals)}\n${lines}` : `\n${lines}\npass force: true to edit them anyway`;
 }
+
+/**
+ * No default, deliberately: the default is not a constant but this server's
+ * own handle, which is only known once it is in a room. An explicit tag still
+ * behaves exactly as it did.
+ */
+const tagSchema = z
+  .string()
+  .optional()
+  .describe(
+    `Text a note must contain to count as a mention. Omit it and this server answers to its own handle - "@<handle>", the handle room_status reports - and to "${BROADCAST_TAG}", the broadcast tag every agent in the room hears; matching is case-insensitive. Pass a tag to match that text alone, which is how you read notes addressed to someone else.`,
+  );
+
+/**
+ * Off by default: two agents listening in one room would otherwise answer each
+ * other's requests, and each other's answers, without either being asked.
+ */
+const answerAgentMentionsSchema = z
+  .boolean()
+  .default(false)
+  .describe(
+    "Also return notes written by another agent in the room. False by default: a note stamped with another agent's handle is dropped, while notes people wrote (nothing stamps them) and this server's own notes are always returned. True returns them all, each with the 'from: <handle>' line naming its author.",
+  );
 
 /**
  * An [x, y] pair. Deliberately an array-with-length rather than a zod tuple:
@@ -425,9 +465,9 @@ registerAppTool(
   {
     _meta: CANVAS_META,
     description:
-      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending @claude mentions with the ids of the elements around each. The canvas view fetches the elements for itself, so they never pass through this result unless you ask: pass include: \"json\" only if you need the element array in the text; read_scene with ids or near is the cheaper way to inspect elements. Pass link only to point this server at a room it is not in; without it the current room is used, which is what you want. The in-chat view depends on the host; prefer open_room to watch the canvas.",
+      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending mentions addressed to this agent with the ids of the elements around each. The canvas view fetches the elements for itself, so they never pass through this result unless you ask: pass include: \"json\" only if you need the element array in the text; read_scene with ids or near is the cheaper way to inspect elements. Pass link only to point this server at a room it is not in; without it the current room is used, which is what you want. The in-chat view depends on the host; prefer open_room to watch the canvas.",
     inputSchema: {
-      tag: z.string().default(DEFAULT_TAG),
+      tag: tagSchema,
       link: z
         .string()
         .optional()
@@ -448,7 +488,7 @@ registerAppTool(
     const { error } = await ensureJoined(room, link);
     if (!room.isConnected) return canvasResult(error ? `${NOT_IN_ROOM_TEXT}\n${error}` : NOT_IN_ROOM_TEXT, true);
     const elements = room.getElements();
-    const pending = pendingMentions(tag, elements);
+    const pending = pendingMentions(resolveTags(tag, room.handle), elements);
     const payload = buildShowRoomPayload(room.status(), elements, pending, nearRadius(room.nearbyRadius, radius));
     // Text only, deliberately: a host that inlines structuredContent into the
     // model-visible transcript charges the reader for the element array on
@@ -763,18 +803,23 @@ server.registerTool(
   "wait_for_mention",
   {
     description:
-      "Block until someone writes a text element containing the tag (default '@claude') on the canvas, then return it with the elements around it. Returns 'no mention' after timeoutSeconds so the caller can loop. A mention is reported once it has stopped changing for about 1.5s. Returning it also marks it seen on the canvas (amber stroke and a marker) so the person knows the note landed; pass autoSeen false to poll without touching the drawing. Acknowledge it with acknowledge_mention when done, which removes the handled note from the canvas; reply about the work in chat.",
+      "Block until someone writes a text element addressed to this agent on the canvas, then return it with the elements around it. With no tag it answers to its own handle and to the '@claude' broadcast tag. Returns 'no mention' after timeoutSeconds so the caller can loop. A mention is reported once it has stopped changing for about 1.5s. Returning it also marks it seen on the canvas (amber stroke and a marker) so the person knows the note landed; pass autoSeen false to poll without touching the drawing. Acknowledge it with acknowledge_mention when done, which removes the handled note from the canvas; reply about the work in chat.",
     inputSchema: {
-      tag: z.string().default(DEFAULT_TAG),
+      tag: tagSchema,
       timeoutSeconds: z.number().min(1).max(600).default(60),
       radius: z.number().min(0).optional().describe("How far around the mention to look for related elements, in canvas px. Defaults to the room's nearbyRadius."),
       autoSeen: autoSeenSchema,
+      answerAgentMentions: answerAgentMentionsSchema,
     },
   },
-  async ({ tag, timeoutSeconds, radius, autoSeen }) => {
+  async ({ tag, timeoutSeconds, radius, autoSeen, answerAgentMentions }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
-    const mention = await room.waitForMention(tag, handledMentions, { timeoutMs: timeoutSeconds * 1000 });
-    if (!mention) return text(`no mention of ${tag} within ${timeoutSeconds}s`);
+    const tags = resolveTags(tag, room.handle);
+    const mention = await room.waitForMention(tags, handledMentions, {
+      timeoutMs: timeoutSeconds * 1000,
+      accept: (m) => visibleMentions([m], room.handle, answerAgentMentions).length > 0,
+    });
+    if (!mention) return text(`no mention of ${tags[0]} within ${timeoutSeconds}s`);
     const elements = room.getElements();
     const out = mentionBlock(mention, elements, nearRadius(room.nearbyRadius, radius), {
       previous: previousLineFor(mention.id, elements),
@@ -787,11 +832,12 @@ server.registerTool(
 server.registerTool(
   "list_mentions",
   {
-    description: "List every pending (unacknowledged) mention of the tag on the canvas right now, each with its nearby elements. Mentions surfaced here are marked seen on the canvas as wait_for_mention does; pass autoSeen false to look without touching the drawing. Pass includeHandled true to also list the notes this server acknowledged and left on the canvas, marked handled, so they can be found and cleaned up.",
+    description: "List every pending (unacknowledged) mention addressed to this agent on the canvas right now, each with its nearby elements. With no tag it answers to its own handle and to the '@claude' broadcast tag. Mentions surfaced here are marked seen on the canvas as wait_for_mention does; pass autoSeen false to look without touching the drawing. Pass includeHandled true to also list the notes this server acknowledged and left on the canvas, marked handled, so they can be found and cleaned up.",
     inputSchema: {
-      tag: z.string().default(DEFAULT_TAG),
+      tag: tagSchema,
       radius: z.number().min(0).optional().describe("How far around each mention to look for related elements, in canvas px. Defaults to the room's nearbyRadius."),
       autoSeen: autoSeenSchema,
+      answerAgentMentions: answerAgentMentionsSchema,
       includeHandled: z
         .boolean()
         .default(false)
@@ -800,15 +846,18 @@ server.registerTool(
         ),
     },
   },
-  async ({ tag, radius, autoSeen, includeHandled }) => {
+  async ({ tag, radius, autoSeen, includeHandled, answerAgentMentions }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     const all = room.getElements();
-    const pending = pendingMentions(tag, all);
+    const tags = resolveTags(tag, room.handle);
+    const pending = pendingMentions(tags, all, answerAgentMentions);
     // Handled notes come after the pending ones, deliberately: the pending
     // list is the work and the handled list is the tidying, and an agent
     // reading top to bottom should meet the request before the housekeeping.
-    const handled = includeHandled ? handledMentionsOnCanvas(tag, all) : [];
-    if (!pending.length && !handled.length) return text(`no pending mentions of ${tag}`);
+    const handled = includeHandled ? handledMentionsOnCanvas(tags, all, answerAgentMentions) : [];
+    // The first tag is this agent's own address, so the empty result names
+    // what the caller is listening on rather than every tag it matched.
+    if (!pending.length && !handled.length) return text(`no pending mentions of ${tags[0]}`);
     const reach = nearRadius(room.nearbyRadius, radius);
     const blocks = [
       ...pending.map((m) =>
@@ -837,7 +886,7 @@ server.registerTool(
         reply: replySchema
           .optional()
           .describe(
-            `A question to draw underneath, at most ${MAX_REPLY_LENGTH} characters, for a request you cannot act on as written. Excludes status. Must not contain the tag, or your question would itself read as a mention.`,
+            `A question to draw underneath, at most ${MAX_REPLY_LENGTH} characters, for a request you cannot act on as written. Excludes status. Must not contain a tag this agent answers to (its own handle or ${BROADCAST_TAG}), or your question would itself read as a mention.`,
           ),
         status: statusSchema
           .optional()
@@ -854,7 +903,7 @@ server.registerTool(
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     // Decided before anything on the canvas is touched: a refusal must leave
     // the note exactly as the person wrote it.
-    const plan = planAcknowledgement({ keep, reply, status }, DEFAULT_TAG, room.handle);
+    const plan = planAcknowledgement({ keep, reply, status }, resolveTags(undefined, room.handle), room.handle);
     if (plan.refusal) return errorText(plan.refusal);
     const current = room.getElement(id);
     if (!current || current.type !== "text") return text(`no text element with id ${id}`);
@@ -892,15 +941,16 @@ server.registerTool(
   "poll_room",
   {
     description:
-      "Cheap state probe: connection state, sceneVersion, the peers, the pending mention ids and text, and whether the scene moved since a version you pass. Use it while you are working in a turn to notice a change without a full show_room; use wait_for_mention when you are handing the turn back to a person.",
+      "Cheap state probe: connection state, sceneVersion, the peers, the ids and text of the pending mentions addressed to this agent, and whether the scene moved since a version you pass. Use it while you are working in a turn to notice a change without a full show_room; use wait_for_mention when you are handing the turn back to a person.",
     inputSchema: {
       sinceVersion: z.number().optional().describe("A sceneVersion from an earlier call. changedSince is false only if the scene version still equals it."),
-      tag: z.string().default(DEFAULT_TAG),
+      tag: tagSchema,
+      answerAgentMentions: answerAgentMentionsSchema,
     },
   },
-  async ({ sinceVersion, tag }) => {
+  async ({ sinceVersion, tag, answerAgentMentions }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
-    const pending = pendingMentions(tag);
+    const pending = pendingMentions(resolveTags(tag, room.handle), room.getElements(), answerAgentMentions);
     return text(pollText(buildPollPayload({ status: room.status(), pending }, sinceVersion)));
   },
 );
