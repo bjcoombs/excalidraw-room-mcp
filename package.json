@@ -1,6 +1,6 @@
 {
   "name": "excalidraw-room-mcp",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "MCP server that joins a live Excalidraw collaboration room so an AI agent can read and write the drawing",
   "license": "MIT",
   "repository": {
