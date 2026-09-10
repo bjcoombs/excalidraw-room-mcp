@@ -78,6 +78,17 @@ function AnswerButton({ count, refused, onAnswer }: { count: number; refused: bo
   );
 }
 
+/**
+ * A menu action's one-line result. Its own component for the reason
+ * AnswerButton and OpenControl are: the bar's function is already at the
+ * complexity ceiling the lint config sets, and a conditional piece of it
+ * belongs beside the others rather than inside the footer.
+ */
+function Hint({ text }: { text?: string | null }) {
+  if (!text) return null;
+  return <span className="status-hint">{text}</span>;
+}
+
 /** The way out to the browser, or the link as text where the host refused it. */
 function OpenControl({ href, linkBlocked, onOpen }: { href: string | null; linkBlocked: boolean; onOpen: () => void }) {
   if (!href) return null;
@@ -130,7 +141,7 @@ export function StatusBar({
   pollingAvailable,
   linkBlocked,
   announcementRefused = false,
-  hint = null,
+  hint,
   onOpen,
   onRefresh,
   onAnswer,
@@ -170,7 +181,7 @@ export function StatusBar({
         </>
       ) : null}
       <AnswerButton count={payload?.mentions.length ?? 0} refused={announcementRefused} onAnswer={onAnswer} />
-      {hint ? <span className="status-hint">{hint}</span> : null}
+      <Hint text={hint} />
       {error ? <span className="status-error">last error: {error}</span> : null}
       <OpenControl href={href} linkBlocked={linkBlocked} onOpen={onOpen} />
     </footer>
