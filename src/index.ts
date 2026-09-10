@@ -20,6 +20,7 @@ import {
   type ElementSpec,
   type ExcalidrawElement,
 } from "./elements.js";
+import { forcedLine, protectedBy, refusalLines, type Refusal } from "./guard.js";
 import { defaultHandle, isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
@@ -176,6 +177,45 @@ const autoSeenSchema = z
   .boolean()
   .default(true)
   .describe("Mark the mention seen on the canvas (amber stroke plus a marker) as soon as it is returned. Set false for silent polling.");
+
+/**
+ * The ownership guard's override. Off by default, so the safe behaviour is the
+ * one an agent gets without thinking about it; the noisy path is the one it has
+ * to ask for.
+ */
+const forceSchema = z
+  .boolean()
+  .default(false)
+  .describe("Edit elements another agent in the room drew anyway. Without it those ids are skipped and reported as refused, so the agent still working on them keeps a true picture of the scene.");
+
+/**
+ * Splits requested ids into the ones this server may edit and the ones another
+ * present agent owns. `force` keeps every id in `allowed` and still reports the
+ * refusals, which is what lets the result text say whose work was written over.
+ */
+function guardIds(ids: readonly string[], force: boolean): { allowed: string[]; refusals: Refusal[] } {
+  const present = room.agentHandles();
+  const allowed: string[] = [];
+  const refusals: Refusal[] = [];
+  for (const id of ids) {
+    const el = room.getElement(id);
+    const owner = el ? protectedBy(el, present, room.handle) : null;
+    if (owner === null) {
+      allowed.push(id);
+      continue;
+    }
+    refusals.push({ id, owner });
+    if (force) allowed.push(id);
+  }
+  return { allowed, refusals };
+}
+
+/** The guard's report, appended to a result text: nothing when nothing was owned. */
+function guardNote(refusals: readonly Refusal[], force: boolean): string {
+  if (!refusals.length) return "";
+  const lines = refusalLines(refusals);
+  return force ? `\n${forcedLine(refusals)}\n${lines}` : `\n${lines}\npass force: true to edit them anyway`;
+}
 
 /**
  * An [x, y] pair. Deliberately an array-with-length rather than a zod tuple:
@@ -655,19 +695,24 @@ server.registerTool(
   "update_elements",
   {
     description:
-      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. 'set' accepts any element field, including link (a URL, or null to remove it). Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given, keeps originalText in step, and, for a label bound to a shape, re-centres it and grows the shape to fit so the canvas redraws the new label.",
+      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. 'set' accepts any element field, including link (a URL, or null to remove it). Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given, keeps originalText in step, and, for a label bound to a shape, re-centres it and grows the shape to fit so the canvas redraws the new label. An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded.",
     inputSchema: {
       updates: z.array(z.object({ id: z.string(), set: z.record(z.unknown()) })).min(1),
+      force: forceSchema,
     },
   },
-  async ({ updates }) => {
+  async ({ updates, force }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const { allowed, refusals } = guardIds(updates.map((u) => u.id), force);
+    const editable = new Set(allowed);
+    const guard = guardNote(refusals, force);
     // Keyed by id: one update may also change the container its text is bound
     // to, and two updates in a batch may reach the same element.
     const changed = new Map<string, ExcalidrawElement>();
     const missing: string[] = [];
     let matched = 0;
     for (const { id, set } of updates) {
+      if (!editable.has(id)) continue;
       const current = changed.get(id) ?? room.getElement(id);
       if (!current) {
         missing.push(id);
@@ -678,32 +723,39 @@ server.registerTool(
         changed.set(el.id, el);
       }
     }
-    if (!matched) return text(`no elements updated; unknown ids: ${missing.join(", ")}`);
+    const unknown = missing.length ? `; unknown ids: ${missing.join(", ")}` : "";
+    if (!matched) return text(`no elements updated${unknown}${guard}`);
     const result = await room.commit([...changed.values()]);
     const note = missing.length ? `\nunknown ids: ${missing.join(", ")}` : "";
-    return text(`updated ${matched} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}${note}`);
+    return text(`updated ${matched} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}${note}${guard}`);
   },
 );
 
 server.registerTool(
   "delete_elements",
   {
-    description: "Soft-delete elements by id (Excalidraw keeps tombstones so peers converge).",
-    inputSchema: { ids: z.array(z.string()).min(1) },
+    description:
+      "Soft-delete elements by id (Excalidraw keeps tombstones so peers converge). An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded.",
+    inputSchema: { ids: z.array(z.string()).min(1), force: forceSchema },
   },
-  async ({ ids }) => {
+  async ({ ids, force }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const { allowed, refusals } = guardIds(ids, force);
+    const deletable = new Set(allowed);
+    const guard = guardNote(refusals, force);
     const changed: ExcalidrawElement[] = [];
     const missing: string[] = [];
     for (const id of ids) {
+      if (!deletable.has(id)) continue;
       const current = room.getElement(id);
       if (!current) missing.push(id);
       else if (!current.isDeleted) changed.push(bump({ ...current, isDeleted: true }));
     }
-    if (!changed.length) return text(`nothing deleted; unknown ids: ${missing.join(", ")}`);
+    const unknown = missing.length ? `; unknown ids: ${missing.join(", ")}` : "";
+    if (!changed.length) return text(`nothing deleted${unknown}${guard}`);
     const result = await room.commit(changed);
     const note = missing.length ? `\nunknown ids: ${missing.join(", ")}` : "";
-    return text(`deleted ${changed.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}${note}`);
+    return text(`deleted ${changed.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}${note}${guard}`);
   },
 );
 
