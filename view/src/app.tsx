@@ -143,9 +143,24 @@ export function RoomView({ app }: { app: App }) {
   // the viewport alone. The `pending` half of that test is what keeps a held
   // scene from being stranded: an identical signature is only grounds to skip
   // the push when the last one actually reached the canvas.
+  /**
+   * Mentions this host has already refused to announce. A refusal releases the
+   * claim server-side, so without this the next poll would win the same id and
+   * be refused again, every two seconds for as long as the note is up. The
+   * button is the retry; the interval is not.
+   */
+  const refused = useRef(new Set<string>());
+
   /** Record what an attempt did: the button appears only for a host that refused. */
   const recordAnnouncement = useCallback((result: AnnounceResult) => {
-    setBlockedIds(result.outcome === "blocked" ? result.ids : []);
+    if (result.outcome === "blocked") {
+      for (const id of result.ids) refused.current.add(id);
+      setBlockedIds((prev) => [...new Set([...prev, ...result.ids])]);
+      return;
+    }
+    if (result.outcome !== "sent") return;
+    for (const id of result.ids) refused.current.delete(id);
+    setBlockedIds((prev) => prev.filter((id) => !result.ids.includes(id)));
   }, []);
 
   /**
@@ -158,9 +173,10 @@ export function RoomView({ app }: { app: App }) {
   const announce = useCallback(
     (mentions: readonly { id: string; announced: boolean }[]) => {
       if (announcing.current) return;
-      if (!mentions.some((m) => !m.announced)) return;
+      const fresh = mentions.filter((m) => !m.announced && !refused.current.has(m.id));
+      if (!fresh.length) return;
       announcing.current = true;
-      void announceMentions(app, mentions)
+      void announceMentions(app, fresh)
         .then(recordAnnouncement)
         .finally(() => {
           announcing.current = false;

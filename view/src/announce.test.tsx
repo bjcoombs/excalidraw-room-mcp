@@ -146,6 +146,13 @@ test("a rejected announcement shows the Answer button and a later claim for the 
   const retried = await retryAnnouncement(accepting, ["note-2"]);
   assert.equal(retried.outcome, "sent");
   assert.deepEqual(accepting.sent, [announcementText(1)]);
+
+  // A button pressed after another widget got there first sends nothing and
+  // still reports the ids answered for, so the control clears rather than
+  // inviting a second message.
+  const late = await retryAnnouncement(refusing, ["note-2"]);
+  assert.deepEqual(late, { outcome: "sent", ids: ["note-2"] });
+  assert.equal(accepting.sent.length, 1);
 });
 
 test("the Answer button label contains Answer and the mention count", () => {

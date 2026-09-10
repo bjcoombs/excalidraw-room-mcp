@@ -152,8 +152,9 @@ export async function retryAnnouncement(app: AnnouncerHost, ids: readonly string
   if (!ids.length) return NOTHING;
   try {
     const won = await claimIds(app, ids);
-    // Another widget got there first, so the chat has the message already.
-    if (!won.length) return { outcome: "sent", ids: [] };
+    // Another widget got there first, so the chat has the message already and
+    // these ids are answered for. Reported as sent, so the button clears.
+    if (!won.length) return { outcome: "sent", ids: [...ids] };
     return await sendClaimed(app, won);
   } catch {
     return { outcome: "blocked", ids: [...ids] };
