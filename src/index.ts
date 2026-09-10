@@ -43,7 +43,6 @@ import {
   replySchema,
   resolveTags,
   statusSchema,
-  tagsText,
   visibleMentions,
   withRequestPreamble,
   withScopeRule,
