@@ -11,6 +11,7 @@
  * it renders under Node with renderToStaticMarkup and the bar's content is
  * pinned by test rather than by screenshot.
  */
+import { answerLabel } from "./announce.js";
 import { roomLink, type ShowRoomPayload } from "./payload.js";
 
 /**
@@ -57,6 +58,35 @@ export function pendingText(count: number): string {
   return `${count} pending mention${count === 1 ? "" : "s"}`;
 }
 
+/**
+ * The fallback the reader presses when the host would not take the
+ * announcement. Nothing to press when nothing was refused.
+ */
+function AnswerButton({ count, onAnswer }: { count: number; onAnswer?: () => void }) {
+  if (count <= 0) return null;
+  return (
+    <button type="button" className="answer" onClick={onAnswer}>
+      {answerLabel(count)}
+    </button>
+  );
+}
+
+/** The way out to the browser, or the link as text where the host refused it. */
+function OpenControl({ href, linkBlocked, onOpen }: { href: string | null; linkBlocked: boolean; onOpen: () => void }) {
+  if (!href) return null;
+  return (
+    <span className="open">
+      {linkBlocked ? (
+        <span className="room-link">{href}</span>
+      ) : (
+        <button type="button" className="open-link" onClick={onOpen}>
+          {OPEN_IN_BROWSER_LABEL}
+        </button>
+      )}
+    </span>
+  );
+}
+
 export interface StatusBarProps {
   /** The room as the last update described it, or null before the first one. */
   payload: ShowRoomPayload | null;
@@ -70,11 +100,30 @@ export interface StatusBarProps {
   pollingAvailable: boolean | null;
   /** True once the host has refused to open the link, which makes the bar show it as text. */
   linkBlocked: boolean;
+  /**
+   * How many mentions were claimed but could not be announced, because the
+   * host would not take the message. Zero means there is nothing to press: the
+   * announcement went through, or there was none to make.
+   */
+  blockedAnnouncement?: number;
   onOpen: () => void;
   onRefresh: () => void;
+  /** Send the announcement the host refused, from a click the host will accept. */
+  onAnswer?: () => void;
 }
 
-export function StatusBar({ payload, note, error = null, lastUpdateAt, pollingAvailable, linkBlocked, onOpen, onRefresh }: StatusBarProps) {
+export function StatusBar({
+  payload,
+  note,
+  error = null,
+  lastUpdateAt,
+  pollingAvailable,
+  linkBlocked,
+  blockedAnnouncement = 0,
+  onOpen,
+  onRefresh,
+  onAnswer,
+}: StatusBarProps) {
   const peers = payload?.peers.length ?? 0;
   const href = roomLink(payload?.link ?? null);
   return (
@@ -109,18 +158,9 @@ export function StatusBar({ payload, note, error = null, lastUpdateAt, pollingAv
           </button>
         </>
       ) : null}
+      <AnswerButton count={blockedAnnouncement} onAnswer={onAnswer} />
       {error ? <span className="status-error">last error: {error}</span> : null}
-      {href ? (
-        <span className="open">
-          {linkBlocked ? (
-            <span className="room-link">{href}</span>
-          ) : (
-            <button type="button" className="open-link" onClick={onOpen}>
-              {OPEN_IN_BROWSER_LABEL}
-            </button>
-          )}
-        </span>
-      ) : null}
+      <OpenControl href={href} linkBlocked={linkBlocked} onOpen={onOpen} />
     </footer>
   );
 }
