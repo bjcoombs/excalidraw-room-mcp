@@ -417,7 +417,7 @@ export class RoomClient extends EventEmitter {
   }
 
   /**
-   * Resolve with the first pending mention of `tag` (one tag or any of
+   * Resolve with the first pending mention of `tags` (one tag or any of
    * several), or null after `timeoutMs`. `accept` narrows which mentions
    * count, by author.
    * A mention counts once it has been quiet for `settleMs` (Excalidraw
@@ -425,7 +425,7 @@ export class RoomClient extends EventEmitter {
    * the instruction is typed).
    */
   async waitForMention(
-    tag: string | readonly string[],
+    tags: string | readonly string[],
     handled: HandledVersions,
     opts: { timeoutMs?: number; settleMs?: number; accept?: (mention: Mention) => boolean } = {},
   ): Promise<Mention | null> {
@@ -438,15 +438,15 @@ export class RoomClient extends EventEmitter {
       for (;;) {
         await new Promise((r) => setTimeout(r, settleMs));
         const now = this.elements.get(candidate.id);
-        if (!now || now.isDeleted || !isMentionText(now.text, tag)) return null;
+        if (!now || now.isDeleted || !isMentionText(now.text, tags)) return null;
         if (now.version === candidate.version) return candidate;
-        candidate = findMentions([now], tag, handled)[0] ?? candidate;
+        candidate = findMentions([now], tags, handled)[0] ?? candidate;
         if (Date.now() > deadline) return candidate;
       }
     };
 
     for (;;) {
-      const all = findMentions(this.getElements(), tag, handled);
+      const all = findMentions(this.getElements(), tags, handled);
       // The caller decides which authors it answers, and a note it does not
       // answer must not end the wait: dropping it after the settle would
       // return "no mention" while another agent's note sat unread, so the

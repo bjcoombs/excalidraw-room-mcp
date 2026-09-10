@@ -998,16 +998,21 @@ test("agent-authored mentions are hidden unless answerAgentMentions is on", asyn
 
   // The wait applies the same filter before it settles anything: another
   // agent's note must not end a wait and must not be reported as a mention.
-  const room = new RoomClient();
+  // A room per case, deliberately: the two notes share an id, and a second
+  // ingest of the same id into the same room is a reconcile between two
+  // version-1 elements rather than the arrival this is testing.
   const accept = (m: Mention) => visibleMentions([m], "beta").length > 0;
-  const [note] = addressed("alpha");
-  const quiet = room.waitForMention(defaultTags("beta"), new Map(), { timeoutMs: 120, settleMs: 5, accept });
-  setTimeout(() => room.ingestRemote([note]), 10);
-  assert.equal(await quiet, null);
 
-  const heard = room.waitForMention(defaultTags("beta"), new Map(), { timeoutMs: 2000, settleMs: 10, accept });
-  const [person] = addressed(null);
-  setTimeout(() => room.ingestRemote([person]), 10);
+  const ignoring = new RoomClient();
+  const [fromAgent] = addressed("alpha");
+  const quiet = ignoring.waitForMention(defaultTags("beta"), new Map(), { timeoutMs: 200, settleMs: 5, accept });
+  setTimeout(() => ignoring.ingestRemote([fromAgent]), 10);
+  assert.equal(await quiet, null, "another agent's note does not end the wait");
+
+  const listening = new RoomClient();
+  const heard = listening.waitForMention(defaultTags("beta"), new Map(), { timeoutMs: 5000, settleMs: 10, accept });
+  const [fromPersonEl] = addressed(null);
+  setTimeout(() => listening.ingestRemote([fromPersonEl]), 10);
   const got = await heard;
   assert.equal(got?.id, "x1");
   assert.equal(got?.author, null);
