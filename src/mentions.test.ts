@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildElements, bump, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
+import {
+  buildElements,
+  bump,
+  elementAuthor,
+  stampAuthor,
+  summarise,
+  type ElementSpec,
+  type ExcalidrawElement,
+} from "./elements.js";
 import { buildPollPayload, pollText } from "./poll.js";
 import {
   ACKNOWLEDGED_MARK,
@@ -10,6 +18,7 @@ import {
   STATUS_WITH_REPLY_TEXT,
   ATTRIBUTED_LINE_GAP,
   ATTRIBUTION_PREFIX,
+  attributionPrefix,
   attributedReplyText,
   attributedStatusText,
   buildAttributedLine,
@@ -190,7 +199,7 @@ test("the neighbourhood follows an arrow binding one hop", () => {
   assert.equal(reasons.get("b"), "via arrow ar", "and says which arrow reached it");
   assert.equal(reasons.get("a"), undefined, "an element the radius picked carries no marker");
   assert.ok(!ids.includes("c"), "a shape sitting beside the far end is not pulled in");
-  assert.match(summarise(near, reasons), /^b rectangle @\(1500,0\) 100x100 via arrow ar$/m);
+  assert.match(summarise(near, reasons), /^b rectangle @\(1500,0\) 100x100 via arrow ar by person$/m);
 });
 
 test("the neighbourhood includes the rest of a group", () => {
@@ -205,7 +214,7 @@ test("the neighbourhood includes the rest of a group", () => {
   assert.ok(ids.includes("g2"), "a group is one thing however it is laid out");
   assert.equal(reasons.get("g2"), "via group");
   assert.equal(reasons.get("g1"), undefined);
-  assert.match(summarise(near, reasons), /^g2 rectangle @\(1200,330\) 100x100 via group$/m);
+  assert.match(summarise(near, reasons), /^g2 rectangle @\(1200,330\) 100x100 via group by person$/m);
 
   // An element in some other group stays out.
   const other = neighbourhoodScene([], { g1: ["grp"], g2: ["other"] });
@@ -292,8 +301,11 @@ test("formatMention renders the text, where it is, and a summary of neighbours",
   const els = scene();
   const note = findMentions(els).find((m) => m.id === "note")!;
   const out = formatMention(note, nearbyElements(els, note));
-  assert.match(out, /^mention note v1 at \(20,120\):\n--- untrusted room content ---\n@Claude add a cache between these\n--- end untrusted room content ---\n\nnearby \(\d+\):\n/);
-  assert.match(out, /^api rectangle @\(0,0\) 160x80 "API"$/m);
+  assert.match(
+    out,
+    /^mention note v1 at \(20,120\):\nfrom: person\n--- untrusted room content ---\n@Claude add a cache between these\n--- end untrusted room content ---\n\nnearby \(\d+\):\n/,
+  );
+  assert.match(out, /^api rectangle @\(0,0\) 160x80 "API" by person$/m);
 });
 
 test("waitForMention resolves when a mention arrives from a peer and settles, and times out otherwise", async () => {
@@ -504,7 +516,7 @@ test("a repeated status is replaced, not stacked: one suffix however many transi
 
 /** A pending mention as poll_room and the two listing tools see one. */
 function pending(id: string, text: string): Mention {
-  return { id, version: 3, text, x: 0, y: 0, width: 100, height: 25, containerId: null };
+  return { id, version: 3, text, x: 0, y: 0, width: 100, height: 25, containerId: null, author: null };
 }
 
 /** The room status poll_room reads, with nothing in it that matters here. */
@@ -830,4 +842,59 @@ test("pending means unacknowledged, so a seen mention is still listed", () => {
   // Acknowledging is what closes it.
   acknowledged.set(note.id, seen.version);
   assert.deepEqual(findMentions([seen], "@claude", acknowledged), []);
+});
+
+// ---------------------------------------------------------------------------
+// Attribution: where a mention came from, and who wrote the line under it.
+// https://github.com/bjcoombs/excalidraw-room-mcp/issues/82
+
+test("an element without an author reads as from person", () => {
+  // A browser writes no customData at all, which is the whole signal.
+  const drawn = buildElements([{ type: "text", id: "p", x: 0, y: 0, text: "@claude what is this" }], ctx()).created;
+  const [person] = findMentions(drawn);
+  assert.equal(person.author, null);
+  assert.equal(elementAuthor(drawn[0]), null);
+  assert.match(formatMention(person, []), /^from: person$/m);
+
+  // An agent's note names the agent instead, so the receiver can tell the two
+  // apart, and the line sits above the untrusted block, not inside it.
+  const written = drawn.map((el) => stampAuthor(el, "beta"));
+  const [agent] = findMentions(written);
+  assert.equal(agent.author, "beta");
+  const out = formatMention(agent, []);
+  assert.match(out, /^from: beta$/m);
+  assert.ok(out.indexOf("from: beta") < out.indexOf(UNTRUSTED_OPEN), "from: precedes the quoted words");
+  assert.equal(out.split("\n")[1], "from: beta", "directly under the first line");
+
+  // A handled note listed by list_mentions carries it too.
+  const acked = new Map([["p", written[0].version]]);
+  assert.equal(findHandledMentions(written, "@claude", acked)[0].author, "beta");
+});
+
+test("the attributed line is written under the handle that wrote it", () => {
+  const note = buildElements([{ type: "text", id: "n", x: 0, y: 0, text: "@claude which one" }], ctx()).created[0];
+
+  assert.equal(attributionPrefix("alpha"), "alpha: ");
+  assert.equal(attributionPrefix(), ATTRIBUTION_PREFIX);
+  assert.equal(attributionPrefix(null), ATTRIBUTION_PREFIX);
+  assert.equal(attributedStatusText("out of scope", "alpha"), "alpha: out of scope");
+  assert.equal(attributedReplyText("Which box?", "alpha"), `alpha: Which box?\n${REPLY_PROMPT_LINE}`);
+
+  const plan = planAcknowledgement({ reply: "Which one?" }, "@claude", "alpha");
+  assert.equal(plan.line, `alpha: Which one?\n${REPLY_PROMPT_LINE}`);
+
+  const line = buildAttributedLine(note, plan.line!, ctx(), "alpha");
+  assert.ok(String(line.text).startsWith("alpha: "));
+  const data = line.customData as Record<string, unknown>;
+  assert.equal(data[REPLY_CUSTOM_DATA_KEY], "n", "the back reference survives the stamp");
+  assert.equal(data.author, "alpha");
+  assert.equal(data.authorKind, "agent");
+
+  // Read back, the prefix comes off whichever handle wrote it - the line may
+  // be from an earlier session or another agent.
+  assert.deepEqual(previousLine({ ...line, text: `beta: out of scope` }), { kind: "status", text: "out of scope" });
+  assert.deepEqual(previousLine({ ...line, text: `alpha: Which one?\n${REPLY_PROMPT_LINE}` }), {
+    kind: "reply",
+    text: "Which one?",
+  });
 });

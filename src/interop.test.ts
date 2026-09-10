@@ -97,7 +97,7 @@ test("a freehand stroke drawn by a person is summarised as a legible path", asyn
   for (const s of strokes) {
     const line = summary.split("\n").find((l) => l.startsWith(s.id));
     assert.ok(line, `no summary line for ${s.id}`);
-    assert.match(line!, new RegExp(`^${s.id} freedraw ${s.points!.length} pts: \\(-?\\d+,-?\\d+\\)( -> \\(-?\\d+,-?\\d+\\)){7}$`));
+    assert.match(line!, new RegExp(`^${s.id} freedraw ${s.points!.length} pts: \\(-?\\d+,-?\\d+\\)( -> \\(-?\\d+,-?\\d+\\)){7} by person$`));
   }
   // bound labels fold into their container rather than appearing as separate lines
   assert.match(summary, /^api rectangle @\(100,100\) 180x90 "API"/m);

@@ -23,7 +23,7 @@ function status(over: Partial<RoomStatus> = {}): RoomStatus {
 }
 
 function mention(id: string, text: string): Mention {
-  return { id, version: 4, text, x: 0, y: 0, width: 100, height: 25, containerId: null };
+  return { id, version: 4, text, x: 0, y: 0, width: 100, height: 25, containerId: null, author: null };
 }
 
 function state(over: Partial<PollState> = {}): PollState {
