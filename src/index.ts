@@ -24,6 +24,7 @@ import {
   type HandledVersions,
   type Mention,
 } from "./mentions.js";
+import { openRoom } from "./open.js";
 import { buildPollPayload, pollText } from "./poll.js";
 import { RoomClient } from "./room.js";
 import { selectElements, unknownIdsText } from "./scene.js";
@@ -202,7 +203,7 @@ registerAppTool(
   {
     _meta: CANVAS_META,
     description:
-      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending @claude mentions with the ids of the elements around each. The canvas view fetches the elements for itself, so they never pass through this result unless you ask: pass include: \"json\" only if you need the element array in the text; read_scene with ids or near is the cheaper way to inspect elements. Pass link only to point this server at a room it is not in; without it the current room is used, which is what you want.",
+      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending @claude mentions with the ids of the elements around each. The canvas view fetches the elements for itself, so they never pass through this result unless you ask: pass include: \"json\" only if you need the element array in the text; read_scene with ids or near is the cheaper way to inspect elements. Pass link only to point this server at a room it is not in; without it the current room is used, which is what you want. The in-chat view depends on the host; prefer open_room to watch the canvas.",
     inputSchema: {
       tag: z.string().default(DEFAULT_TAG),
       link: z
@@ -236,6 +237,24 @@ registerAppTool(
 );
 
 registerCanvasResource(server, canvasHtmlUrl());
+
+server.registerTool(
+  "open_room",
+  {
+    description:
+      "Open the room on excalidraw.com in the default browser; the primary way for a person to watch the canvas live. Returns the link, the connection state, and the peer and element counts. Pass link only to open a room this server is not in - it is joined first; without it the current room is used.",
+    inputSchema: {
+      link: z
+        .string()
+        .optional()
+        .describe("Collaboration link to join before opening, if this server is in no room or in a different one. Leave it unset to open the room already joined."),
+    },
+  },
+  async ({ link }) => {
+    const result = await openRoom(room, link);
+    return result.isError ? errorText(result.text) : text(result.text);
+  },
+);
 
 server.registerTool(
   "room_status",
