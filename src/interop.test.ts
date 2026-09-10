@@ -29,7 +29,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { decryptJson, generateRoomKey, IV_LENGTH_BYTES } from "./crypto.js";
-import { buildElements, summarise, type ExcalidrawElement } from "./elements.js";
+import { buildElements, summarise, type Binding, type ExcalidrawElement } from "./elements.js";
 import { orderByIndex, reconcile } from "./reconcile.js";
 import { RoomClient } from "./room.js";
 
@@ -78,9 +78,9 @@ test("every field the web app writes is one our builders also emit", async () =>
   };
   // This check compares top-level keys only, so it tolerates a change inside a
   // binding object by design; the binding's inner shape is pinned field by field
-  // in "upstream persists arrow bindings as the fixed-point orbit shape" below.
-  // We emit the legacy {elementId, focus, gap, fixedPoint: null} binding, which the
-  // app accepts and normalises to the fixed-point shape it now writes.
+  // in "upstream persists arrow bindings as the fixed-point orbit shape" below,
+  // and ours is compared against the fixture's in "server-built bindings share
+  // the key set of the fixture bindings".
   for (const el of els) {
     const mine = oursByType.get(el.type);
     if (!mine) continue;
@@ -187,9 +187,9 @@ test("upstream persists arrow bindings as the fixed-point orbit shape", async ()
       // focus/gap were the whole of the pre-fixedPoint PointBinding and were
       // removed upstream in c141960ada4869ee6a3bb8a665e75c0c18ad7f19
       // ("feat: Non-elbow arrow snapping and behavior changes", #9670,
-      // 2025-11-25). We still emit them (src/elements.ts) and the app
-      // normalises them away, so their reappearance in a persisted scene would
-      // mean upstream reverted, not that our writer changed.
+      // 2025-11-25). We no longer emit them either (src/elements.ts writes the
+      // fixed-point shape), so their reappearance in a persisted scene would
+      // mean upstream reverted.
       assert.equal("focus" in binding!, false, `${arrow.id}.${end} carries the removed focus field`);
       assert.equal("gap" in binding!, false, `${arrow.id}.${end} carries the removed gap field`);
     }
@@ -243,4 +243,39 @@ test("reconcile resolves a version tie the way upstream's rule says", async () =
   assert.equal(pick(arrow, newerRemote), newerRemote.versionNonce);
   const newerLocal = { ...arrow, version: arrow.version + 1, versionNonce: arrow.versionNonce + 1000 };
   assert.equal(pick(newerLocal, arrow), newerLocal.versionNonce);
+});
+
+test("server-built bindings share the key set of the fixture bindings", async () => {
+  // The fixture is the reference: whatever key set excalidraw.com persisted for
+  // its own bound arrows is the key set our writer has to produce.
+  const els = await load();
+  const fixtureKeySets = els
+    .filter((e) => e.type === "arrow")
+    .flatMap((a) => [a.startBinding, a.endBinding])
+    .filter((b) => b !== null && b !== undefined)
+    .map((b) => Object.keys(b!).sort().join(","));
+  assert.ok(fixtureKeySets.length >= 2, "fixture has bound arrows to compare against");
+  assert.equal(new Set(fixtureKeySets).size, 1, "the fixture's bindings do not agree on a key set");
+  const expected = fixtureKeySets[0];
+
+  const ours = buildElements(
+    [
+      { type: "rectangle", id: "r", x: 0, y: 0, width: 100, height: 50 },
+      { type: "rectangle", id: "e", x: 300, y: 0, width: 100, height: 50 },
+      { type: "arrow", id: "a", start: "r", end: "e" },
+    ],
+    { existing: new Map(), lastIndex: null },
+  ).created;
+  const arrow = ours.find((el) => el.id === "a")!;
+  for (const end of ["startBinding", "endBinding"] as const) {
+    const binding = arrow[end] as Binding | null;
+    assert.ok(binding, `our arrow has no ${end}`);
+    assert.equal(
+      Object.keys(binding!).sort().join(","),
+      expected,
+      `our ${end} is not the key set upstream persists`,
+    );
+    assert.equal(binding!.mode, "orbit");
+    assert.ok(Array.isArray(binding!.fixedPoint) && binding!.fixedPoint.length === 2);
+  }
 });

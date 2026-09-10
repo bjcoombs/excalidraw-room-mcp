@@ -7,6 +7,7 @@ import {
   randomId,
   randomInteger,
   summarise,
+  type Binding,
   type ExcalidrawElement,
 } from "./elements.js";
 
@@ -383,8 +384,50 @@ test("an arrow between two shapes stops a 4px gap outside each edge", () => {
   assert.deepEqual(arrow.points, [[0, 0], [192, 0]]);
   assert.equal(arrow.width, 192);
   assert.equal(arrow.height, 0);
-  assert.deepEqual(arrow.startBinding, { elementId: "a", focus: 0, gap: 4, fixedPoint: null });
-  assert.deepEqual(arrow.endBinding, { elementId: "b", focus: 0, gap: 4, fixedPoint: null });
+  // The fixedPoint is the point on the bound element's outline the arrow leaves
+  // from, as a ratio of that element's box: a's right edge halfway down, b's
+  // left edge halfway down. 0.5 exactly is nudged to 0.5001 as upstream does.
+  assert.deepEqual(arrow.startBinding, { elementId: "a", fixedPoint: [1, 0.5001], mode: "orbit" });
+  assert.deepEqual(arrow.endBinding, { elementId: "b", fixedPoint: [0, 0.5001], mode: "orbit" });
+});
+
+test("a bound arrow carries the upstream binding keys elementId, fixedPoint and mode", () => {
+  const { created } = buildElements(
+    [
+      { type: "rectangle", id: "a", x: 0, y: 0, width: 100, height: 50 },
+      { type: "rectangle", id: "b", x: 300, y: 0, width: 100, height: 50 },
+      { type: "arrow", id: "ar", start: "a", end: "b" },
+    ],
+    ctx(),
+  );
+  const arrow = created.find((e) => e.id === "ar")!;
+  for (const end of ["startBinding", "endBinding"] as const) {
+    const binding = arrow[end] as Binding | null;
+    assert.ok(binding, `arrow has no ${end}`);
+    // The exact key set upstream's FixedPointBinding carries: nothing wider,
+    // and no leftover focus or gap.
+    assert.deepEqual(Object.keys(binding!).sort(), ["elementId", "fixedPoint", "mode"]);
+    assert.equal(binding!.mode, "orbit");
+    assert.equal(binding!.fixedPoint.length, 2);
+    for (const ratio of binding!.fixedPoint) {
+      assert.equal(typeof ratio, "number");
+      assert.ok(Number.isFinite(ratio), `fixedPoint ratio ${ratio} is not finite`);
+    }
+  }
+  const start = arrow.startBinding as Binding;
+  const finish = arrow.endBinding as Binding;
+  assert.equal(start.elementId, "a");
+  assert.equal(finish.elementId, "b");
+  // a is left of b at the same height, so the ratios follow the geometry: the
+  // arrow leaves a's right edge and arrives at b's left edge, both halfway down.
+  assert.ok(start.fixedPoint[0] >= 0.9, `start x ratio ${start.fixedPoint[0]}`);
+  assert.ok(finish.fixedPoint[0] <= 0.1, `end x ratio ${finish.fixedPoint[0]}`);
+  for (const ratio of [start.fixedPoint[1], finish.fixedPoint[1]]) {
+    assert.ok(Math.abs(ratio - 0.5) <= 0.1, `y ratio ${ratio} is not near the middle`);
+  }
+  for (const ratio of [...start.fixedPoint, ...finish.fixedPoint]) {
+    assert.ok(ratio >= -0.1 && ratio <= 1.1, `ratio ${ratio} is outside the element box`);
+  }
 });
 
 test("a vertical arrow leaves through the horizontal edges", () => {
@@ -470,7 +513,7 @@ test("an arrow bound at the start only replaces its first point", () => {
   assert.equal(arrow.x, 104);
   assert.equal(arrow.y, 25);
   assert.deepEqual(arrow.points, [[0, 0], [196, 0]]);
-  assert.deepEqual(arrow.startBinding, { elementId: "a", focus: 0, gap: 4, fixedPoint: null });
+  assert.deepEqual(arrow.startBinding, { elementId: "a", fixedPoint: [1, 0.5001], mode: "orbit" });
   assert.equal(arrow.endBinding, null);
 });
 
@@ -487,7 +530,7 @@ test("an arrow bound at the end only replaces its last point", () => {
   assert.equal(arrow.y, 25);
   assert.deepEqual(arrow.points, [[0, 0], [100, 35], [296, 0]]);
   assert.equal(arrow.startBinding, null);
-  assert.deepEqual(arrow.endBinding, { elementId: "b", focus: 0, gap: 4, fixedPoint: null });
+  assert.deepEqual(arrow.endBinding, { elementId: "b", fixedPoint: [0, 0.5001], mode: "orbit" });
 });
 
 test("an arrow label sits on the midpoint of the middle segment", () => {
@@ -610,8 +653,8 @@ test("summary of a shape, an arrow and a line reads as one line each", () => {
       x: 10,
       y: 20,
       points: [[0, 0], [30, 40]],
-      startBinding: { elementId: "a", focus: 0, gap: 4, fixedPoint: null },
-      endBinding: { elementId: "b", focus: 0, gap: 4, fixedPoint: null },
+      startBinding: { elementId: "a", fixedPoint: [1, 0.5001], mode: "orbit" },
+      endBinding: { elementId: "b", fixedPoint: [0, 0.5001], mode: "orbit" },
     }),
     raw({ id: "l", type: "line", x: 1, y: 2, points: [[0, 0], [5, 5], [10, 0]] }),
   ]);
