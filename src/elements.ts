@@ -20,19 +20,36 @@ export type ExcalidrawElement = ElementLike & {
   containerId?: string | null;
   text?: string;
   points?: [number, number][];
-  startBinding?: Binding | null;
-  endBinding?: Binding | null;
+  startBinding?: StoredBinding | null;
+  endBinding?: StoredBinding | null;
   strokeColor?: string;
   backgroundColor?: string;
   link?: string | null;
 };
 
+/** BindMode, packages/element/src/types.ts: how the arrow meets the shape. */
+export type BindMode = "inside" | "orbit" | "skip";
+
+/**
+ * The arrow binding upstream writes (FixedPointBinding): the bound element, the
+ * binding point as a ratio of that element's box, and the bind mode. Storing a
+ * ratio rather than a resolved point is what lets the app re-derive the arrow
+ * end after the shape is moved or resized, including across a reload.
+ */
 export interface Binding {
   elementId: string;
-  focus: number;
-  gap: number;
-  fixedPoint: null;
+  fixedPoint: [number, number];
+  mode: BindMode;
 }
+
+/**
+ * A binding as it may arrive in a scene. Clients older than upstream's move to
+ * fixedPoint wrote a `focus`/`gap` pair with a null fixedPoint instead, and a
+ * scene carrying those must still load here, so everything past `elementId` -
+ * the only field this server reads - is left as an open record rather than
+ * named and validated.
+ */
+export type StoredBinding = Binding | { elementId: string; fixedPoint: null; [older: string]: unknown };
 
 export type ShapeType = "rectangle" | "ellipse" | "diamond";
 export type LinearType = "arrow" | "line";
@@ -166,8 +183,14 @@ function centre(el: ExcalidrawElement): [number, number] {
   return [el.x + el.width / 2, el.y + el.height / 2];
 }
 
-/** Point just outside the bounding box of `el`, `gap` px beyond where a line from its centre towards `target` exits. */
-function edgePoint(el: ExcalidrawElement, target: [number, number], gap: number): [number, number] {
+/** How far outside a bound shape's outline an arrow end stops, in px. */
+const EDGE_OUTSET = 4;
+
+/**
+ * Point on the bounding box of `el`, pushed `outset` px further out, where a
+ * line from its centre towards `target` exits.
+ */
+function edgePoint(el: ExcalidrawElement, target: [number, number], outset: number): [number, number] {
   const [cx, cy] = centre(el);
   let dx = target[0] - cx;
   let dy = target[1] - cy;
@@ -181,9 +204,53 @@ function edgePoint(el: ExcalidrawElement, target: [number, number], gap: number)
   const tx = dx !== 0 ? el.width / 2 / Math.abs(dx) : Infinity;
   const ty = dy !== 0 ? el.height / 2 / Math.abs(dy) : Infinity;
   const t = Math.min(tx, ty);
-  const ex = cx + dx * t + (dx / len) * gap;
-  const ey = cy + dy * t + (dy / len) * gap;
+  const ex = cx + dx * t + (dx / len) * outset;
+  const ey = cy + dy * t + (dy / len) * outset;
   return [ex, ey];
+}
+
+// Ported from packages/element/src/binding.ts at excalidraw/excalidraw
+// 854d00c31b7105290396fe34294fc2a0331ea469 - the SHA src/interop.test.ts pins.
+const FIXED_POINT_BOUND = 10;
+const MIN_BINDABLE_SIZE = 1;
+
+/**
+ * normalizeFixedPoint, packages/element/src/binding.ts @ 854d00c: clamp each
+ * ratio to +-FIXED_POINT_BOUND, then nudge a ratio within 1e-4 of 0.5 to 0.5001
+ * so a centred arrow does not flip its heading on floating-point noise.
+ */
+function normalizeFixedPoint(ratio: [number, number]): [number, number] {
+  const epsilon = 0.0001;
+  const clamp = (n: number) => Math.min(Math.max(n, -FIXED_POINT_BOUND), FIXED_POINT_BOUND);
+  const clamped: [number, number] = [clamp(ratio[0]), clamp(ratio[1])];
+  if (Math.abs(clamped[0] - 0.5) < epsilon || Math.abs(clamped[1] - 0.5) < epsilon) {
+    return clamped.map((n) => (Math.abs(n - 0.5) < epsilon ? 0.5001 : n)) as [number, number];
+  }
+  return clamped;
+}
+
+/**
+ * The binding point on `el` expressed as a ratio of its box, which is the
+ * fixedPoint upstream stores.
+ *
+ * calculateFixedPointForNonElbowArrowBinding in
+ * packages/element/src/binding.ts @ 854d00c31b7105290396fe34294fc2a0331ea469
+ * divides the bound point's offset from the element origin by the element's
+ * width and height, floors each divisor at the binding gap so a near-zero-size
+ * shape cannot blow the ratio up, sends the pair through normalizeFixedPoint,
+ * and binds a shape smaller than MIN_BINDABLE_SIZE to its centre because it has
+ * no interior to anchor into. Upstream de-rotates the point around the element
+ * centre first; every element this file builds has angle 0, so that rotation is
+ * the identity here.
+ */
+function fixedPointFor(el: ExcalidrawElement, point: [number, number]): [number, number] {
+  if (el.width < MIN_BINDABLE_SIZE || el.height < MIN_BINDABLE_SIZE) {
+    return normalizeFixedPoint([0.5, 0.5]);
+  }
+  return normalizeFixedPoint([
+    (point[0] - el.x) / Math.max(el.width, EDGE_OUTSET),
+    (point[1] - el.y) / Math.max(el.height, EDGE_OUTSET),
+  ]);
 }
 
 function addBound(el: ExcalidrawElement, ref: { id: string; type: string }): ExcalidrawElement {
@@ -302,16 +369,30 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
         const endEl = spec.end ? lookup(spec.end) : undefined;
         if (spec.start && !startEl) throw new Error(`start element not found: ${spec.start}`);
         if (spec.end && !endEl) throw new Error(`end element not found: ${spec.end}`);
-        const gap = 4;
+        // The arrow stops EDGE_OUTSET px clear of the outline, but the binding
+        // records the point on the outline itself, which is what upstream's
+        // fixedPoint is a ratio of.
+        let startAnchor: [number, number] | null = null;
+        let endAnchor: [number, number] | null = null;
         if (startEl && endEl) {
           const mid: [number, number][] = absolute.length >= 2 ? absolute.slice(1, -1) : [];
           const towardsEnd = mid[0] ?? centre(endEl);
           const towardsStart = mid[mid.length - 1] ?? centre(startEl);
-          absolute = [edgePoint(startEl, towardsEnd, gap), ...mid, edgePoint(endEl, towardsStart, gap)];
+          startAnchor = edgePoint(startEl, towardsEnd, 0);
+          endAnchor = edgePoint(endEl, towardsStart, 0);
+          absolute = [
+            edgePoint(startEl, towardsEnd, EDGE_OUTSET),
+            ...mid,
+            edgePoint(endEl, towardsStart, EDGE_OUTSET),
+          ];
         } else if (startEl && absolute.length >= 1) {
-          absolute = [edgePoint(startEl, absolute[absolute.length - 1], gap), ...absolute.slice(1)];
+          const towards = absolute[absolute.length - 1];
+          startAnchor = edgePoint(startEl, towards, 0);
+          absolute = [edgePoint(startEl, towards, EDGE_OUTSET), ...absolute.slice(1)];
         } else if (endEl && absolute.length >= 1) {
-          absolute = [...absolute.slice(0, -1), edgePoint(endEl, absolute[0], gap)];
+          const towards = absolute[0];
+          endAnchor = edgePoint(endEl, towards, 0);
+          absolute = [...absolute.slice(0, -1), edgePoint(endEl, towards, EDGE_OUTSET)];
         }
         if (absolute.length < 2) {
           throw new Error(`${spec.type} needs at least two points, or start and end element ids`);
@@ -340,8 +421,14 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
           roundness: { type: 2 },
           points: rel,
           lastCommittedPoint: null,
-          startBinding: startEl ? { elementId: startEl.id, focus: 0, gap, fixedPoint: null } : null,
-          endBinding: endEl ? { elementId: endEl.id, focus: 0, gap, fixedPoint: null } : null,
+          startBinding:
+            startEl && startAnchor
+              ? { elementId: startEl.id, fixedPoint: fixedPointFor(startEl, startAnchor), mode: "orbit" }
+              : null,
+          endBinding:
+            endEl && endAnchor
+              ? { elementId: endEl.id, fixedPoint: fixedPointFor(endEl, endAnchor), mode: "orbit" }
+              : null,
           startArrowhead: spec.startArrowhead ?? null,
           endArrowhead: spec.endArrowhead ?? (spec.type === "arrow" ? "arrow" : null),
           ...(spec.type === "arrow" ? { elbowed: false } : {}),
