@@ -5,7 +5,7 @@
     "//": "tsx runs the TypeScript sources directly, so no compile step runs per mutant. view.test.ts, schema.test.ts and canvas-meta.test.ts are excluded because they need a built dist/ (the Vite canvas bundle and the server entrypoint), which Stryker's sandbox does not contain; snapshot.test.ts is excluded because it initialises the resvg WebAssembly module and rasterises several megapixels per run, which blows the per-mutant timeout. None of them kills a mutant in the files below. Every other test file is picked up automatically.",
     "command": "node_modules/.bin/tsx --test --experimental-test-isolation=none $(ls src/*.test.ts | grep -vE \"(view|schema|canvas-meta|snapshot)\\.test\\.ts\")"
   },
-  "mutate": ["src/crypto.ts", "src/reconcile.ts", "src/elements.ts"],
+  "mutate": ["src/crypto.ts", "src/reconcile.ts", "src/elements.ts", "src/mentions.ts"],
   "reporters": ["json", "progress", "clear-text"],
   "jsonReporter": { "fileName": "reports/mutation/mutation.json" },
   "tempDirName": ".stryker-tmp",

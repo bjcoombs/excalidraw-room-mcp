@@ -37,7 +37,7 @@ test("payload reports connection, scene version, peers and pending mentions", ()
     peerCount: 1,
     peers: ["Ada"],
     pendingCount: 1,
-    pendingMentions: [{ id: "n1", text: "@claude label this", announced: false }],
+    pendingMentions: [{ id: "n1", text: "@claude label this" }],
     changedSince: true,
   });
 });
@@ -114,30 +114,25 @@ test("peer names are sacrificed before mention text", () => {
   assert.ok(pollBody(payload).length <= POLL_TEXT_LIMIT);
 });
 
-test("poll_room prints announced true or false for every unacknowledged mention", () => {
+test("poll_room prints one line per unacknowledged mention as `mention <id> - <text>`", () => {
   const pending = [mention("n1", "@claude add a box here"), mention("n2", "@claude look in my calendar")];
-  const payload = buildPollPayload(state({ pending, announced: new Set(["n1"]) }));
+  const payload = buildPollPayload(state({ pending }));
   const out = pollText(payload);
   const lines = out.split("\n");
 
-  // One line per mention, each naming its id and carrying the token a reader
-  // greps for. Announced state is per mention, not per room.
-  assert.ok(lines.some((l) => l.includes("n1") && l.includes("announced: true")), out);
-  assert.ok(lines.some((l) => l.includes("n2") && l.includes("announced: false")), out);
+  // One line per mention, id then a hyphen then the words. Nothing about who
+  // announced it: the widget's button counts what is pending and asks nobody.
+  assert.ok(lines.includes("mention n1 - @claude add a box here"), out);
+  assert.ok(lines.includes("mention n2 - @claude look in my calendar"), out);
   assert.equal(payload.pendingCount, 2);
+  assert.ok(!out.includes("announced"), out);
 
   // The words are a person's, so they sit inside the block and the rule follows.
   const open = lines.indexOf(UNTRUSTED_OPEN);
   const close = lines.indexOf(UNTRUSTED_CLOSE);
   assert.ok(open >= 0 && close > open, out);
   for (const [i, line] of lines.entries()) {
-    if (line.includes("announced:")) assert.ok(i > open && i < close, `mention line ${i} outside the block`);
+    if (line.startsWith("mention ")) assert.ok(i > open && i < close, `mention line ${i} outside the block`);
   }
   assert.ok(out.includes(MENTION_SCOPE_RULE), out);
-});
-
-test("a mention nobody has announced reads as announced: false", () => {
-  const payload = buildPollPayload(state({ pending: [mention("n1", "@claude tidy this")] }));
-  assert.equal(payload.pendingMentions[0].announced, false);
-  assert.ok(pollText(payload).includes("announced: false"));
 });

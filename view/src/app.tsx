@@ -37,7 +37,7 @@ import { CaptureUpdateAction, Excalidraw } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { announceMentions, retryAnnouncement, type AnnounceResult } from "./announce.js";
+import { sendAnnouncement } from "./announce.js";
 import { boundsChanged, FIT_PADDING, sceneBounds, type SceneBounds } from "./bounds.js";
 import { highlightElements } from "./highlights.js";
 import { envelopeShape, isNotInRoom, linkFromSummary, parseResult, resultText, roomLink, sceneSignature, type ShowRoomPayload } from "./payload.js";
@@ -61,14 +61,13 @@ export function RoomView({ app }: { app: App }) {
   const [lastUpdateAt, setLastUpdateAt] = useState<number | null>(null);
   const [pollingAvailable, setPollingAvailable] = useState<boolean | null>(null);
   const [linkBlocked, setLinkBlocked] = useState(false);
-  /** Ids claimed for an announcement the host refused. Empty when there is nothing to press. */
-  const [blockedIds, setBlockedIds] = useState<string[]>([]);
+  /** True once the host has refused an announcement, which the bar says next to the button. */
+  const [announcementRefused, setAnnouncementRefused] = useState(false);
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
   /**
-   * True while an announcement is in flight. The poll runs every two seconds
-   * and a `sendMessage` round trip can outlast that, so without this the same
-   * mention would be claimed twice - the second claim losing, harmlessly, but
-   * only by luck of the server's ordering.
+   * True while an announcement is in flight. A `sendMessage` round trip can
+   * outlast a second press, and two presses must not put two messages in the
+   * chat for one set of notes.
    */
   const announcing = useRef(false);
   const lastSignature = useRef<string | null>(null);
@@ -138,71 +137,41 @@ export function RoomView({ app }: { app: App }) {
     if (flush()) show();
   });
 
+  /**
+   * The one path from this view into the conversation, and it runs only from
+   * the button. The count comes from what is pending at the moment of the
+   * press, so the sentence agrees with the canvas rather than with whatever a
+   * poll had claimed.
+   *
+   * Deliberately not able to throw: a host with no `ui/message` must cost the
+   * reader nothing but the refusal line next to a button that stays pressable.
+   */
+  const answer = useCallback(() => {
+    const count = payload?.mentions.length ?? 0;
+    if (!count || announcing.current) return;
+    announcing.current = true;
+    void sendAnnouncement(app, count)
+      .then((outcome) => setAnnouncementRefused(outcome === "refused"))
+      .finally(() => {
+        announcing.current = false;
+      });
+  }, [app, payload]);
+
   // Applied on every refresh. The scene is only pushed into the component when
   // an element's version or versionNonce moved, so an unchanged result leaves
   // the viewport alone. The `pending` half of that test is what keeps a held
   // scene from being stranded: an identical signature is only grounds to skip
   // the push when the last one actually reached the canvas.
-  /**
-   * Mentions this host has already refused to announce. A refusal releases the
-   * claim server-side, so without this the next poll would win the same id and
-   * be refused again, every two seconds for as long as the note is up. The
-   * button is the retry; the interval is not.
-   */
-  const refused = useRef(new Set<string>());
-
-  /** Record what an attempt did: the button appears only for a host that refused. */
-  const recordAnnouncement = useCallback((result: AnnounceResult) => {
-    if (result.outcome === "blocked") {
-      for (const id of result.ids) refused.current.add(id);
-      setBlockedIds((prev) => [...new Set([...prev, ...result.ids])]);
-      return;
-    }
-    if (result.outcome !== "sent") return;
-    for (const id of result.ids) refused.current.delete(id);
-    setBlockedIds((prev) => prev.filter((id) => !result.ids.includes(id)));
-  }, []);
-
-  /**
-   * Announce whatever this poll shows as unannounced, in the background.
-   *
-   * Deliberately not awaited and deliberately not able to throw: this is
-   * called from the same function that redraws the canvas, and a host with no
-   * `ui/message` must cost the reader nothing but the button.
-   */
-  const announce = useCallback(
-    (mentions: readonly { id: string; announced: boolean }[]) => {
-      if (announcing.current) return;
-      const fresh = mentions.filter((m) => !m.announced && !refused.current.has(m.id));
-      if (!fresh.length) return;
-      announcing.current = true;
-      void announceMentions(app, fresh)
-        .then(recordAnnouncement)
-        .finally(() => {
-          announcing.current = false;
-        });
-    },
-    [app, recordAnnouncement],
-  );
-
-  /** The Answer button: claim the released ids back and send the same message. */
-  const answer = useCallback(() => {
-    const ids = blockedIds;
-    if (!ids.length) return;
-    void retryAnnouncement(app, ids).then(recordAnnouncement);
-  }, [app, blockedIds, recordAnnouncement]);
-
   const apply = useCallback(
     (next: ShowRoomPayload) => {
       setPayload(next);
-      announce(next.mentions);
       const signature = sceneSignature(next.elements) + `#${next.mentions.map((m) => `${m.id}:${m.version}`).join(",")}`;
       if (signature === lastSignature.current && pending.current === null) return;
       lastSignature.current = signature;
       pending.current = next;
       flush();
     },
-    [announce, flush],
+    [flush],
   );
 
   /**
@@ -371,7 +340,7 @@ export function RoomView({ app }: { app: App }) {
         lastUpdateAt={lastUpdateAt}
         pollingAvailable={pollingAvailable}
         linkBlocked={linkBlocked}
-        blockedAnnouncement={blockedIds.length}
+        announcementRefused={announcementRefused}
         onOpen={open}
         onRefresh={() => void refresh()}
         onAnswer={answer}

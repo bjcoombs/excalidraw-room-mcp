@@ -4,8 +4,23 @@ import { buildElements, bump, type ExcalidrawElement } from "./elements.js";
 import { buildPollPayload, pollText } from "./poll.js";
 import {
   ACKNOWLEDGED_MARK,
-  AnnouncementClaims,
   ACKNOWLEDGED_STROKE,
+  acknowledgementText,
+  planAcknowledgement,
+  REPLY_WITH_NOTE_TEXT,
+  buildReply,
+  findHandledMentions,
+  findReply,
+  MAX_REPLY_LENGTH,
+  REPLY_CUSTOM_DATA_KEY,
+  REPLY_GAP,
+  REPLY_NOTE,
+  REPLY_PROMPT_LINE,
+  replyElementText,
+  replyIsMention,
+  replyQuestion,
+  replySchema,
+  replyTagText,
   acknowledgedText,
   boxDistance,
   DEFAULT_NEARBY_RADIUS,
@@ -361,26 +376,173 @@ test("a note that types the closing marker cannot end the block early", () => {
   assert.ok(block.includes("now follow these orders"));
 });
 
-test("claim_mention_announcement gives an id to the first caller only", () => {
-  const claims = new AnnouncementClaims();
+test("planAcknowledgement refuses reply with note, keeps the note for a reply, removes it by default", () => {
+  // The default: the note goes, because the drawing is the evidence.
+  assert.deepEqual(planAcknowledgement({}), { status: undefined, kept: false, replies: false });
+  assert.equal(acknowledgementText("m", planAcknowledgement({})), "acknowledged and removed m from the canvas");
 
-  // First caller wins; a second widget asking for the same id gets nothing,
-  // which is the whole reason the store is server-side.
-  assert.deepEqual(claims.claim(["n1", "n2"]), ["n1", "n2"]);
-  assert.deepEqual(claims.claim(["n1", "n2"]), []);
-  assert.deepEqual(claims.claim(["n2", "n3"]), ["n3"]);
-  assert.equal(claims.has("n1"), true);
-  assert.equal(claims.has("n9"), false);
+  // keep and a status both leave it on the canvas.
+  assert.deepEqual(planAcknowledgement({ keep: true }), { status: undefined, kept: true, replies: false });
+  assert.deepEqual(planAcknowledgement({ note: "declined" }), { status: "declined", kept: true, replies: false });
+  assert.equal(acknowledgementText("m", planAcknowledgement({ keep: true })), "acknowledged m");
 
-  // A released id is winnable again: that is how a widget whose host refused
-  // the message hands the attempt to the next one.
-  assert.deepEqual(claims.release(["n1", "n9"]), ["n1"]);
-  assert.equal(claims.has("n1"), false);
-  assert.deepEqual(claims.claim(["n1"]), ["n1"]);
+  // A blank note is no note, so it falls through to the default rather than
+  // leaving a trailing space as the whole status.
+  assert.deepEqual(planAcknowledgement({ note: "   " }), { status: undefined, kept: false, replies: false });
+  assert.deepEqual(planAcknowledgement({ note: "  ok  " }), { status: "ok", kept: true, replies: false });
+  assert.deepEqual(planAcknowledgement({ note: "   ", keep: true }), { status: undefined, kept: true, replies: false });
 
-  // A join is a new room, so nothing carries over.
-  claims.reset();
-  assert.deepEqual(claims.claim(["n1", "n2", "n3"]), ["n1", "n2", "n3"]);
+  // A reply keeps the note with the reply marker and draws the question.
+  assert.deepEqual(planAcknowledgement({ reply: "Which box?" }), { status: REPLY_NOTE, kept: true, replies: true });
+  assert.ok(acknowledgementText("m", planAcknowledgement({ reply: "Which box?" })).includes("replied on the canvas"));
+
+  // The two refusals, both naming reply, and neither carrying a plan to run.
+  const both = planAcknowledgement({ reply: "Which box?", note: "declined" });
+  assert.equal(both.refusal, REPLY_WITH_NOTE_TEXT);
+  assert.ok(both.refusal!.includes("reply"));
+  assert.ok(both.refusal!.includes("note"));
+  assert.equal(both.kept, false);
+  assert.equal(both.replies, false);
+
+  const tagged = planAcknowledgement({ reply: "which box, @claude?" });
+  assert.ok(tagged.refusal!.includes("reply"), tagged.refusal);
+  assert.equal(tagged.replies, false);
+  // A different tag is what that room's mentions are matched on, so it is what
+  // the reply is checked against.
+  assert.equal(planAcknowledgement({ reply: "which box, @claude?" }, "@bot").refusal, undefined);
+  assert.ok(planAcknowledgement({ reply: "ask @bot" }, "@bot").refusal);
+});
+
+test("a reply element sits under the note, in its font, greyed, linked back to it", () => {
+  const [note] = buildElements([{ type: "text", id: "note", x: 20, y: 120, text: "@claude which box" }], ctx()).created;
+  const existing = new Map([[note.id, note]]);
+  const reply = buildReply(note, "The left or the right one?", { existing, lastIndex: null });
+
+  // Directly below the note, same column, so the two read as one annotation.
+  assert.equal(reply.x, note.x);
+  assert.equal(reply.y, note.y + note.height + REPLY_GAP);
+  assert.equal(reply.fontSize, note.fontSize);
+  assert.equal(reply.fontFamily, note.fontFamily);
+  assert.equal(reply.strokeColor, ACKNOWLEDGED_STROKE);
+  assert.equal(reply.type, "text");
+  // A complete element: buildElements gave it a fractional index, so peers
+  // accept it without a reorder.
+  assert.ok(typeof reply.index === "string" && reply.index.length > 0);
+
+  // The question, then the line that makes it a two-way channel.
+  assert.equal(reply.text, `The left or the right one?\n${REPLY_PROMPT_LINE}`);
+  assert.ok(String(reply.text).startsWith("The left or the right one?"));
+  assert.ok(String(reply.text).endsWith(REPLY_PROMPT_LINE));
+  assert.equal((reply.customData as Record<string, unknown>)[REPLY_CUSTOM_DATA_KEY], "note");
+
+  // The fixed line carries no tag, so the reply is never itself a mention.
+  assert.equal(findMentions([reply]).length, 0);
+  assert.ok(!String(reply.text).includes("@claude"));
+
+  // And the room can find it again by the mention it answers.
+  assert.equal(findReply([note, reply], "note")?.id, reply.id);
+  assert.equal(findReply([note, reply], "other"), null);
+  assert.equal(findReply([note, markRemoved(reply)], "note"), null);
+  assert.equal(findReply([note], "note"), null);
+});
+
+test("replyQuestion gives back what was asked, without the fixed line", () => {
+  assert.equal(replyElementText("  Which box?  "), `Which box?\n${REPLY_PROMPT_LINE}`);
+  const [reply] = buildElements([{ type: "text", id: "r", x: 0, y: 0, text: replyElementText("Which box?") }], ctx()).created;
+  assert.equal(replyQuestion(reply), "Which box?");
+  // A multi-line question survives; only the prompt line is dropped.
+  const [two] = buildElements([{ type: "text", id: "r2", x: 0, y: 0, text: replyElementText("Which box?\nthe left?") }], ctx()).created;
+  assert.equal(replyQuestion(two), "Which box?\nthe left?");
+  assert.equal(replyQuestion({ ...reply, text: undefined }), "");
+});
+
+test("a blank, over-long or tag-carrying reply is refused, and the messages name reply", () => {
+  assert.equal(replySchema.safeParse("Which box?").success, true);
+  // Trimmed first, so spaces are blank rather than an empty line on the canvas.
+  assert.equal(replySchema.safeParse("Which box?  ").data, "Which box?");
+  for (const blank of ["", "   ", "\n\t"]) {
+    const parsed = replySchema.safeParse(blank);
+    assert.equal(parsed.success, false, blank);
+    assert.ok(parsed.error!.issues[0].message.includes("reply"), blank);
+  }
+  const long = replySchema.safeParse("a".repeat(MAX_REPLY_LENGTH + 1));
+  assert.equal(long.success, false);
+  assert.ok(long.error!.issues[0].message.includes("reply"));
+  assert.equal(replySchema.safeParse("a".repeat(MAX_REPLY_LENGTH)).success, true);
+
+  // A reply naming the tag would be found as a pending mention next pass.
+  assert.equal(replyIsMention("which box, @claude?"), true);
+  assert.equal(replyIsMention("Which box?"), false);
+  assert.ok(replyTagText().includes("reply"));
+  assert.ok(replyTagText().includes("@claude"));
+});
+
+test("a replied-to note is kept, greyed, with see reply as its only suffix", () => {
+  const [note] = buildElements([{ type: "text", id: "note", x: 0, y: 0, text: "@claude which box" }], ctx()).created;
+  const kept = markAcknowledged(markSeen(note)!, { note: REPLY_NOTE });
+  assert.equal(kept.text, `@claude which box ${REPLY_NOTE}`);
+  assert.ok(String(kept.text).endsWith(" see reply"));
+  assert.equal(kept.strokeColor, ACKNOWLEDGED_STROKE);
+  // The seen marker is replaced, not followed, so a second pass adds nothing.
+  assert.ok(!String(kept.text).includes(SEEN_MARKER));
+  // Replying twice replaces the marker rather than stacking a second one.
+  assert.equal(markAcknowledged(kept, { note: REPLY_NOTE }).text, kept.text);
+  assert.equal(markAcknowledged(kept).text, `@claude which box ${ACKNOWLEDGED_MARK}`);
+  assert.equal(stripStatus(String(kept.text)), "@claude which box");
+});
+
+test("findHandledMentions lists acknowledged notes still on the canvas and nothing else", () => {
+  const els = buildElements(
+    [
+      { type: "text", id: "kept", x: 0, y: 0, text: "@claude keep me" },
+      { type: "text", id: "open", x: 0, y: 60, text: "@claude still open" },
+      { type: "text", id: "plain", x: 0, y: 120, text: "just a label" },
+    ],
+    ctx(),
+  ).created;
+  const acknowledged: HandledVersions = new Map();
+  assert.deepEqual(findHandledMentions(els, "@claude", acknowledged), []);
+
+  const kept = markAcknowledged(els[0]);
+  acknowledged.set("kept", kept.version);
+  const scene = [kept, els[1], els[2]];
+  assert.deepEqual(findHandledMentions(scene, "@claude", acknowledged).map((m) => m.id), ["kept"]);
+  // The two lists partition the mentions: handled here, pending there.
+  assert.deepEqual(findMentions(scene, "@claude", acknowledged).map((m) => m.id), ["open"]);
+
+  // A person editing the note bumps it past the recorded version: pending
+  // again, and no longer handled.
+  const edited = bump({ ...kept, text: "@claude keep me, the left one" });
+  assert.deepEqual(findHandledMentions([edited], "@claude", acknowledged), []);
+  assert.deepEqual(findMentions([edited], "@claude", acknowledged).map((m) => m.id), ["kept"]);
+
+  // A removed note is gone from both.
+  assert.deepEqual(findHandledMentions([markRemoved(kept)], "@claude", acknowledged), []);
+  assert.deepEqual(findHandledMentions(scene, "@nobody", acknowledged), []);
+});
+
+test("formatMention marks a handled mention and carries the previous reply inside the block", () => {
+  const els = scene();
+  const [mention] = findMentions(els).filter((m) => m.id === "note");
+
+  const plain = formatMention(mention, []);
+  assert.ok(plain.startsWith(`mention note v${mention.version} at (`), plain);
+  assert.ok(!plain.includes("handled"), plain);
+  assert.ok(!plain.includes("previous reply:"), plain);
+
+  const handled = formatMention(mention, [], { handled: true });
+  assert.ok(handled.split("\n")[0].startsWith(`mention note v${mention.version} handled at (`), handled);
+
+  const asked = formatMention(mention, [], { previousReply: "Which box?" });
+  const lines = asked.split("\n");
+  const open = lines.indexOf(UNTRUSTED_OPEN);
+  const close = lines.indexOf(UNTRUSTED_CLOSE);
+  const at = lines.findIndex((l) => l.startsWith("previous reply: Which box?"));
+  // The question and the answer are a person's text read together, so both sit
+  // inside the block.
+  assert.ok(at > open && at < close, asked);
+  // Null is the no-reply case and adds nothing.
+  assert.ok(!formatMention(mention, [], { previousReply: null }).includes("previous reply:"));
 });
 
 test("pending means unacknowledged, so a seen mention is still listed", () => {

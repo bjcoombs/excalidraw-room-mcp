@@ -111,12 +111,6 @@ export interface ShowRoomMention {
   height: number;
   containerId: string | null;
   nearby: string[];
-  /**
-   * Whether a canvas widget has already announced this mention into the chat.
-   * The widget announces only what is false here, which is what stops a second
-   * widget - or the same one on its next poll - saying it again.
-   */
-  announced: boolean;
 }
 
 /** The JSON body of a `show_room` result: everything the view draws from. */
@@ -138,7 +132,6 @@ export function buildShowRoomPayload(
   elements: readonly ExcalidrawElement[],
   mentions: readonly Mention[],
   radius: number = DEFAULT_NEARBY_RADIUS,
-  announced: ReadonlySet<string> = new Set(),
 ): ShowRoomPayload {
   return {
     link: status.link,
@@ -155,7 +148,6 @@ export function buildShowRoomPayload(
       height: m.height,
       containerId: m.containerId,
       nearby: nearbyElements(elements, m, radius).map((e) => e.id),
-      announced: announced.has(m.id),
     })),
   };
 }

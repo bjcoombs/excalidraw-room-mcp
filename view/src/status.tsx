@@ -11,7 +11,7 @@
  * it renders under Node with renderToStaticMarkup and the bar's content is
  * pinned by test rather than by screenshot.
  */
-import { answerLabel } from "./announce.js";
+import { ANNOUNCEMENT_REFUSED_TEXT, answerLabel } from "./announce.js";
 import { roomLink, type ShowRoomPayload } from "./payload.js";
 
 /**
@@ -59,15 +59,22 @@ export function pendingText(count: number): string {
 }
 
 /**
- * The fallback the reader presses when the host would not take the
- * announcement. Nothing to press when nothing was refused.
+ * The only thing in this view that puts a message in the chat, and it does so
+ * from a press. Present whenever the room has a pending mention - not only
+ * after a refusal - because a host drafts a `ui/message` rather than sending
+ * it whether a timer or a click produced it, so the press is the mechanism and
+ * not the fallback. It stays up until the mentions leave the pending list: a
+ * sent announcement the model has not acted on yet is still unanswered.
  */
-function AnswerButton({ count, onAnswer }: { count: number; onAnswer?: () => void }) {
+function AnswerButton({ count, refused, onAnswer }: { count: number; refused: boolean; onAnswer?: () => void }) {
   if (count <= 0) return null;
   return (
-    <button type="button" className="answer" onClick={onAnswer}>
-      {answerLabel(count)}
-    </button>
+    <>
+      <button type="button" className="answer" onClick={onAnswer}>
+        {answerLabel(count)}
+      </button>
+      {refused ? <span className="announce-refused">{ANNOUNCEMENT_REFUSED_TEXT}</span> : null}
+    </>
   );
 }
 
@@ -100,15 +107,11 @@ export interface StatusBarProps {
   pollingAvailable: boolean | null;
   /** True once the host has refused to open the link, which makes the bar show it as text. */
   linkBlocked: boolean;
-  /**
-   * How many mentions were claimed but could not be announced, because the
-   * host would not take the message. Zero means there is nothing to press: the
-   * announcement went through, or there was none to make.
-   */
-  blockedAnnouncement?: number;
+  /** True once the host has refused an announcement, which puts the refusal next to the button. */
+  announcementRefused?: boolean;
   onOpen: () => void;
   onRefresh: () => void;
-  /** Send the announcement the host refused, from a click the host will accept. */
+  /** Send the announcement for everything pending. The only path to `ui/message` in this view. */
   onAnswer?: () => void;
 }
 
@@ -119,7 +122,7 @@ export function StatusBar({
   lastUpdateAt,
   pollingAvailable,
   linkBlocked,
-  blockedAnnouncement = 0,
+  announcementRefused = false,
   onOpen,
   onRefresh,
   onAnswer,
@@ -158,7 +161,7 @@ export function StatusBar({
           </button>
         </>
       ) : null}
-      <AnswerButton count={blockedAnnouncement} onAnswer={onAnswer} />
+      <AnswerButton count={payload?.mentions.length ?? 0} refused={announcementRefused} onAnswer={onAnswer} />
       {error ? <span className="status-error">last error: {error}</span> : null}
       <OpenControl href={href} linkBlocked={linkBlocked} onOpen={onOpen} />
     </footer>

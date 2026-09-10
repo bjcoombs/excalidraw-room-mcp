@@ -11,17 +11,25 @@ import { z } from "zod";
 import { buildElements, bump, measureText, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
-  AnnouncementClaims,
+  buildReply,
   DEFAULT_NEARBY_RADIUS,
   DEFAULT_TAG,
+  findHandledMentions,
   findMentions,
+  findReply,
   formatMention,
   markAcknowledged,
   markRemoved,
   markSeen,
   MAX_NOTE_LENGTH,
+  acknowledgementText,
+  planAcknowledgement,
+  MAX_REPLY_LENGTH,
   nearbyElements,
   noteSchema,
+  REPLY_NOTE,
+  replyQuestion,
+  replySchema,
   withScopeRule,
   type HandledVersions,
   type Mention,
@@ -62,16 +70,13 @@ let handledMentions: HandledVersions = new Map();
  *
  * Pending means unacknowledged, not unseen. A note an agent has looked at but
  * not acted on is still an open request: the canvas widget has to be able to
- * announce it, list_mentions has to be able to show it again, and poll_room
+ * announce it from its button, list_mentions has to be able to show it again, and poll_room
  * has to keep reporting it. Only acknowledge_mention closes a mention.
  */
 let acknowledgedMentions: HandledVersions = new Map();
-/** Which mentions a widget has already announced into the chat. Reset on join. */
-const announcementClaims = new AnnouncementClaims();
 room.on("joined", () => {
   handledMentions = new Map();
   acknowledgedMentions = new Map();
-  announcementClaims.reset();
 });
 
 /** Every mention of `tag` that has not been acknowledged, seen or not. */
@@ -79,9 +84,19 @@ function pendingMentions(tag: string, elements = room.getElements()): Mention[] 
   return findMentions(elements, tag, acknowledgedMentions);
 }
 
-/** Which of these mentions a widget has already announced. */
-function announcedIds(mentions: readonly Mention[]): Set<string> {
-  return new Set(mentions.filter((m) => announcementClaims.has(m.id)).map((m) => m.id));
+/** Every mention of `tag` this process has acknowledged and left on the canvas. */
+function handledMentionsOnCanvas(tag: string, elements = room.getElements()): Mention[] {
+  return findHandledMentions(elements, tag, acknowledgedMentions);
+}
+
+/**
+ * The question the agent last asked about a mention, or null when the room
+ * holds no reply for it. Read from the scene rather than remembered, so a
+ * reply written by an earlier process still shows up.
+ */
+function previousReplyFor(id: string, elements = room.getElements()): string | null {
+  const reply = findReply(elements, id);
+  return reply ? replyQuestion(reply) : null;
 }
 
 /**
@@ -269,7 +284,7 @@ registerAppTool(
     if (!room.isConnected) return canvasResult(error ? `${NOT_IN_ROOM_TEXT}\n${error}` : NOT_IN_ROOM_TEXT, true);
     const elements = room.getElements();
     const pending = pendingMentions(tag, elements);
-    const payload = buildShowRoomPayload(room.status(), elements, pending, radius, announcedIds(pending));
+    const payload = buildShowRoomPayload(room.status(), elements, pending, radius);
     // Text only, deliberately: a host that inlines structuredContent into the
     // model-visible transcript charges the reader for the element array on
     // every call, which is what a split payload was meant to avoid. The view
@@ -513,7 +528,10 @@ server.registerTool(
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     const mention = await room.waitForMention(tag, handledMentions, { timeoutMs: timeoutSeconds * 1000 });
     if (!mention) return text(`no mention of ${tag} within ${timeoutSeconds}s`);
-    const out = formatMention(mention, nearbyElements(room.getElements(), mention, radius));
+    const elements = room.getElements();
+    const out = formatMention(mention, nearbyElements(elements, mention, radius), {
+      previousReply: previousReplyFor(mention.id, elements),
+    });
     if (autoSeen) await commitSeen(mention);
     return text(withScopeRule(out));
   },
@@ -522,19 +540,35 @@ server.registerTool(
 server.registerTool(
   "list_mentions",
   {
-    description: "List every pending (unacknowledged) mention of the tag on the canvas right now, each with its nearby elements. Mentions surfaced here are marked seen on the canvas as wait_for_mention does; pass autoSeen false to look without touching the drawing.",
+    description: "List every pending (unacknowledged) mention of the tag on the canvas right now, each with its nearby elements. Mentions surfaced here are marked seen on the canvas as wait_for_mention does; pass autoSeen false to look without touching the drawing. Pass includeHandled true to also list the notes this server acknowledged and left on the canvas, marked handled, so they can be found and cleaned up.",
     inputSchema: {
       tag: z.string().default(DEFAULT_TAG),
       radius: z.number().min(0).default(250),
       autoSeen: autoSeenSchema,
+      includeHandled: z
+        .boolean()
+        .default(false)
+        .describe(
+          "Also list mentions already acknowledged whose note is still on the canvas (kept with a check mark, a status or a reply). They are listed after the pending ones with 'handled' on the first line, and are never marked seen.",
+        ),
     },
   },
-  async ({ tag, radius, autoSeen }) => {
+  async ({ tag, radius, autoSeen, includeHandled }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     const all = room.getElements();
     const pending = pendingMentions(tag, all);
-    if (!pending.length) return text(`no pending mentions of ${tag}`);
-    const out = pending.map((m) => formatMention(m, nearbyElements(all, m, radius))).join("\n\n---\n\n");
+    // Handled notes come after the pending ones, deliberately: the pending
+    // list is the work and the handled list is the tidying, and an agent
+    // reading top to bottom should meet the request before the housekeeping.
+    const handled = includeHandled ? handledMentionsOnCanvas(tag, all) : [];
+    if (!pending.length && !handled.length) return text(`no pending mentions of ${tag}`);
+    const blocks = [
+      ...pending.map((m) =>
+        formatMention(m, nearbyElements(all, m, radius), { previousReply: previousReplyFor(m.id, all) }),
+      ),
+      ...handled.map((m) => formatMention(m, nearbyElements(all, m, radius), { handled: true })),
+    ];
+    const out = blocks.join("\n\n---\n\n");
     if (autoSeen) {
       for (const m of pending) await commitSeen(m);
     }
@@ -547,7 +581,7 @@ server.registerTool(
   {
     description:
       "Mark a mention as handled so it is not returned again. By default the note is removed from the canvas (soft-deleted): the seen marker already told the person it landed and the drawing is the evidence it was done. Reply about the work in chat, not on the canvas - artefacts of the work belong on the canvas, prose about it does not. Pass a short note (up to " +
-      `${MAX_NOTE_LENGTH} characters) to keep the note instead, greyed with that note as its only suffix, when the person has to read the outcome where they wrote the request ("declined", "see chat"). Pass keep true to keep it greyed with a check mark for an audit trail. If the person edits the text again it becomes pending again.`,
+      `${MAX_NOTE_LENGTH} characters) to keep the note instead, greyed with that note as its only suffix, when the person has to read the outcome where they wrote the request ("declined", "see chat"). Pass keep true to keep it greyed with a check mark for an audit trail. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: the note is kept and greyed with "${REPLY_NOTE}" and the question is drawn on the canvas directly below it, so the person answers where they asked. Editing the note makes the mention pending again and the reply comes back with it. If the person edits the text again it becomes pending again.`,
     inputSchema: {
       id: z.string().describe("The mention's element id from wait_for_mention or list_mentions."),
       note: noteSchema
@@ -556,30 +590,38 @@ server.registerTool(
           `Keep the note on the canvas with this as its only suffix, at most ${MAX_NOTE_LENGTH} characters. For a status the person must see there, not a reply: reply in chat instead.`,
         ),
       keep: z.boolean().default(false).describe("Keep the note on the canvas, greyed with a single check mark, instead of removing it."),
+      reply: replySchema
+        .optional()
+        .describe(
+          `A question to draw under the note, at most ${MAX_REPLY_LENGTH} characters, for a request you cannot act on as written. Excludes note. Must not contain the tag, or the reply would itself read as a mention.`,
+        ),
     },
   },
-  async ({ id, note, keep }) => {
+  async ({ id, note, keep, reply }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    // Decided before anything on the canvas is touched: a refusal must leave
+    // the note exactly as the person wrote it.
+    const plan = planAcknowledgement({ note, keep, reply });
+    if (plan.refusal) return errorText(plan.refusal);
     const current = room.getElement(id);
     if (!current || current.type !== "text") return text(`no text element with id ${id}`);
-    // A note or an explicit keep leaves the element in place; otherwise the
-    // handled note goes. Either way the post-bump version is recorded, so our
-    // own edit never reads back as a new mention.
-    // An empty or blank note is no note: keeping it would leave a trailing
-    // space as the whole status, which reads as a bug on the canvas. It falls
-    // through to the default instead, so the note is removed unless keep says
-    // otherwise.
-    const status = note?.trim() || undefined;
-    const kept = status !== undefined || keep;
-    const updated = kept ? markAcknowledged(current, { note: status }) : markRemoved(current);
-    const result = await room.commit([updated]);
+    // Either way the post-bump version is recorded, so our own edit never
+    // reads back as a new mention.
+    const updated = plan.kept ? markAcknowledged(current, { note: plan.status }) : markRemoved(current);
+    // Whatever this acknowledgement does, the question the last one asked is
+    // answered: the old reply element goes, replaced when a new reply is given.
+    const stale = findReply(room.getElements(), id);
+    const changed: ExcalidrawElement[] = [updated];
+    if (stale) changed.push(markRemoved(stale));
+    if (reply !== undefined) {
+      changed.push(
+        buildReply(current, reply, { existing: new Map(room.getElements(true).map((e) => [e.id, e])), lastIndex: room.lastIndex() }),
+      );
+    }
+    const result = await room.commit(changed);
     handledMentions.set(id, updated.version);
     acknowledgedMentions.set(id, updated.version);
-    // The claim goes with it. If the person edits the note again it is a new
-    // request, and a widget has to be free to announce it.
-    announcementClaims.release([id]);
-    const what = kept ? `acknowledged ${id}` : `acknowledged and removed ${id} from the canvas`;
-    return text(`${what}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
+    return text(`${acknowledgementText(id, plan)}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
   },
 );
 
@@ -596,31 +638,10 @@ server.registerTool(
   async ({ sinceVersion, tag }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     const pending = pendingMentions(tag);
-    return text(pollText(buildPollPayload({ status: room.status(), pending, announced: announcedIds(pending) }, sinceVersion)));
+    return text(pollText(buildPollPayload({ status: room.status(), pending }, sinceVersion)));
   },
 );
 
-
-server.registerTool(
-  "claim_mention_announcement",
-  {
-    description:
-      "For the in-chat canvas view, not for an agent to call. Claim the right to announce mentions into the chat: the first caller for an id gets it back in the result, later callers get nothing, so several open widgets against one server produce one message rather than several. Pass release true to give ids back after a failed announcement, which lets a later attempt win them. Claims are dropped when the mention is acknowledged and when the server joins a room.",
-    inputSchema: {
-      ids: z.array(z.string()).min(1).describe("Mention element ids, as poll_room and show_room report them."),
-      release: z
-        .boolean()
-        .default(false)
-        .describe("Give these ids back instead of claiming them. For a widget whose host refused the message."),
-    },
-  },
-  async ({ ids, release }) => {
-    const changed = release ? announcementClaims.release(ids) : announcementClaims.claim(ids);
-    const verb = release ? "released" : "won";
-    const header = `announcement claim: ${verb} ${changed.length} of ${ids.length}`;
-    return text(changed.length ? `${header}\n${changed.join("\n")}` : header);
-  },
-);
 
 server.registerTool(
   "leave_room",
