@@ -61,11 +61,11 @@ export function pendingText(count: number): string {
 /**
  * The only thing in this view that puts a message in the chat, and it does so
  * from a press. Present whenever the room has a pending mention - not only
- * after a refusal - because a host drafts the message into the composer
- * rather than sending it, whether a timer or a click produced it, so the press
- * is the mechanism and
- * not the fallback. It stays up until the mentions leave the pending list: a
- * sent announcement the model has not acted on yet is still unanswered.
+ * after a refusal - because a host drafts the message into the composer rather
+ * than sending it, whether a timer or a click produced it, so the press is the
+ * mechanism and not the fallback. It stays up until the mentions leave the
+ * pending list: a sent announcement the model has not acted on yet is still
+ * unanswered.
  */
 function AnswerButton({ count, refused, onAnswer }: { count: number; refused: boolean; onAnswer?: () => void }) {
   if (count <= 0) return null;
