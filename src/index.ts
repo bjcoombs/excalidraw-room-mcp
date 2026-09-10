@@ -8,7 +8,7 @@ import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { buildElements, bump, measureText, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
+import { applyUpdate, buildElements, bump, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
   buildAttributedLine,
@@ -462,32 +462,33 @@ server.registerTool(
   "update_elements",
   {
     description:
-      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. 'set' accepts any element field, including link (a URL, or null to remove it). Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given.",
+      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. 'set' accepts any element field, including link (a URL, or null to remove it). Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given, keeps originalText in step, and, for a label bound to a shape, re-centres it and grows the shape to fit so the canvas redraws the new label.",
     inputSchema: {
       updates: z.array(z.object({ id: z.string(), set: z.record(z.unknown()) })).min(1),
     },
   },
   async ({ updates }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
-    const changed: ExcalidrawElement[] = [];
+    // Keyed by id: one update may also change the container its text is bound
+    // to, and two updates in a batch may reach the same element.
+    const changed = new Map<string, ExcalidrawElement>();
     const missing: string[] = [];
+    let matched = 0;
     for (const { id, set } of updates) {
-      const current = room.getElement(id);
+      const current = changed.get(id) ?? room.getElement(id);
       if (!current) {
         missing.push(id);
         continue;
       }
-      let next = { ...current, ...set, id: current.id } as ExcalidrawElement;
-      if (next.type === "text" && ("text" in set || "fontSize" in set) && !("width" in set) && !("height" in set)) {
-        const m = measureText(String(next.text ?? ""), Number(next.fontSize ?? 20));
-        next = { ...next, width: m.width, height: m.height, originalText: next.text };
+      matched++;
+      for (const el of applyUpdate(current, set, (cid) => changed.get(cid) ?? room.getElement(cid))) {
+        changed.set(el.id, el);
       }
-      changed.push(bump(next));
     }
-    if (!changed.length) return text(`no elements updated; unknown ids: ${missing.join(", ")}`);
-    const result = await room.commit(changed);
+    if (!matched) return text(`no elements updated; unknown ids: ${missing.join(", ")}`);
+    const result = await room.commit([...changed.values()]);
     const note = missing.length ? `\nunknown ids: ${missing.join(", ")}` : "";
-    return text(`updated ${changed.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}${note}`);
+    return text(`updated ${matched} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}${note}`);
   },
 );
 

@@ -198,6 +198,7 @@ Prefer `add_elements` compact specs over `add_raw_elements` for bulk creation: a
 - Images and other file attachments are out of scope. They travel by a separate path and are not needed for diagrams.
 - A snapshot is a flat rendering of the supported element subset, not excalidraw.com's own export: no hand-drawn roughness, solid fills only, and image elements as labelled placeholders. Reading the files behind image elements out of Firebase Storage is out of scope.
 - Text is measured by approximation, not a real font. Labels may be slightly wider or narrower than the web app would make them; the app re-measures on the next edit.
+- A container's label may be multi-line: put `\n` in `label` (or in `text` on the bound element) and every line is measured, with the container grown from its top-left corner until the text fits with 10 px to spare. Editing a label through `update_elements` keeps `originalText` in step and marks the container changed, which is what makes peers redraw it.
 - The public relay is not a documented API for third parties. The protocol is open source and stable in practice, but nobody has promised to keep it that way.
 - One room per server process. Run a second instance for a second room.
 

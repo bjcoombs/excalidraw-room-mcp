@@ -332,19 +332,18 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
         };
         created.push(shape);
         if (spec.label) {
-          const fontSize = spec.fontSize ?? 20;
-          const m = measureText(spec.label, fontSize);
           const label = textElement(spec.label, {
-            x: shape.x + (shape.width - m.width) / 2,
-            y: shape.y + (shape.height - m.height) / 2,
-            fontSize,
+            x: shape.x,
+            y: shape.y,
+            fontSize: spec.fontSize ?? 20,
             containerId: shape.id,
             textAlign: "center",
             verticalAlign: "middle",
             strokeColor: spec.strokeColor,
           });
-          created.push(label);
-          remember(addBound(shape, { id: label.id, type: "text" }));
+          const laid = layoutBoundLabel(shape, label);
+          created.push(laid.label);
+          remember(addBound(laid.container, { id: label.id, type: "text" }));
         }
         break;
       }
@@ -504,6 +503,72 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
     if (ctx.existing.has(el.id)) updated.push(bump(el));
   }
   return { created, updated };
+}
+
+/** Smallest gap kept between a bound label's box and its container's edge, in px. */
+export const LABEL_PADDING = 10;
+
+/**
+ * Place a bound label inside its container and grow the container to fit it.
+ *
+ * Upstream draws a container's label from `originalText`, wrapped to the
+ * container's width, so a label wider or taller than the box is clipped or
+ * disappears. The container therefore grows - keeping its top-left corner, so
+ * nothing else on the canvas moves - until the label fits with LABEL_PADDING
+ * to spare, and the label is re-centred on the result.
+ *
+ * A linear container is the exception: an arrow's or line's width and height
+ * are derived from its points, so resizing the box would move the line.
+ * Those keep their geometry and only re-centre the label.
+ */
+export function layoutBoundLabel(
+  container: ExcalidrawElement,
+  label: ExcalidrawElement,
+): { container: ExcalidrawElement; label: ExcalidrawElement } {
+  const linear = container.type === "arrow" || container.type === "line";
+  const width = linear ? container.width : Math.max(container.width, label.width + LABEL_PADDING);
+  const height = linear ? container.height : Math.max(container.height, label.height + LABEL_PADDING);
+  const fitted =
+    width === container.width && height === container.height ? container : { ...container, width, height };
+  return {
+    container: fitted,
+    label: {
+      ...label,
+      x: fitted.x + (fitted.width - label.width) / 2,
+      y: fitted.y + (fitted.height - label.height) / 2,
+    },
+  };
+}
+
+/**
+ * Merge `set` over `current` and return every element that changed, bumped.
+ *
+ * Editing a text element's content is not a one-field change. Upstream renders
+ * from `originalText`, not `text`, and re-renders a container's label only
+ * when the container itself is marked changed, so a bare `text` write leaves
+ * the box blank on the canvas while the scene model reports the new string
+ * (issue #90). Here `originalText` follows `text`, the box is re-measured
+ * unless the caller gave explicit dimensions, and a bound label is re-laid out
+ * inside its container, which is returned bumped alongside it.
+ */
+export function applyUpdate(
+  current: ExcalidrawElement,
+  set: Record<string, unknown>,
+  lookup: (id: string) => ExcalidrawElement | undefined,
+): ExcalidrawElement[] {
+  let next = { ...current, ...set, id: current.id } as ExcalidrawElement;
+  const reflowed = next.type === "text" && ("text" in set || "fontSize" in set);
+  if (reflowed) {
+    if ("text" in set) next = { ...next, originalText: next.text };
+    if (!("width" in set) && !("height" in set)) {
+      const m = measureText(String(next.text ?? ""), Number(next.fontSize ?? 20));
+      next = { ...next, width: m.width, height: m.height };
+    }
+  }
+  const container = reflowed && next.containerId ? lookup(next.containerId) : undefined;
+  if (!container) return [bump(next)];
+  const laid = layoutBoundLabel(container, next);
+  return [bump(laid.label), bump(laid.container)];
 }
 
 /** Return a copy with version bumped and a fresh nonce, as Excalidraw does on every mutation. */
