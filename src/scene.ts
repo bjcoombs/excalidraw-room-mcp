@@ -6,8 +6,8 @@
  * or for a neighbourhood around one of them, reusing the same proximity rule
  * mentions use.
  */
-import { elementAuthor, type ExcalidrawElement } from "./elements.js";
-import { nearbyElements, type Mention } from "./mentions.js";
+import { type ExcalidrawElement } from "./elements.js";
+import { mentionOf, nearbyElements } from "./mentions.js";
 
 export interface NearFilter {
   /** Element the neighbourhood is centred on. */
@@ -27,21 +27,6 @@ export interface Selection {
   elements: ExcalidrawElement[];
   /** Ids named by the filter that the scene does not hold. */
   unknownIds: string[];
-}
-
-/** An element read as a mention, so `nearbyElements` can centre on it. */
-function asAnchor(el: ExcalidrawElement): Mention {
-  return {
-    id: el.id,
-    version: el.version,
-    text: el.text ?? "",
-    x: el.x,
-    y: el.y,
-    width: el.width,
-    height: el.height,
-    containerId: el.containerId ?? null,
-    author: elementAuthor(el),
-  };
 }
 
 /**
@@ -75,7 +60,7 @@ export function selectElements(
       unknownIds.push(filter.near.id);
       keep = narrowed(keep, new Set());
     } else {
-      const around = nearbyElements(elements, asAnchor(anchor), filter.near.radius);
+      const around = nearbyElements(elements, mentionOf(anchor), filter.near.radius);
       keep = narrowed(keep, new Set([anchor.id, ...around.map((e) => e.id)]));
     }
   }

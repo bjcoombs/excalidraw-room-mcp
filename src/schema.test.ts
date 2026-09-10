@@ -114,7 +114,7 @@ test("snapshot_scene takes only the six selector and size arguments, none of the
   assert.match(snapshot.description ?? "", /overlap/);
 });
 
-test("acknowledge_mention takes id, keep, reply, status, answer and source, and refuses anything else by name", async () => {
+test("acknowledge_mention takes id, keep, reply, replyTo, status, answer and source, and refuses anything else by name", async () => {
   const ack = tools.find((t) => t.name === "acknowledge_mention");
   assert.ok(ack, "acknowledge_mention is not in tools/list");
   const schema = ack.inputSchema as {
@@ -122,7 +122,7 @@ test("acknowledge_mention takes id, keep, reply, status, answer and source, and 
     required?: string[];
     additionalProperties?: boolean;
   };
-  assert.deepEqual(Object.keys(schema.properties).sort(), ["answer", "id", "keep", "reply", "source", "status"]);
+  assert.deepEqual(Object.keys(schema.properties).sort(), ["answer", "id", "keep", "reply", "replyTo", "source", "status"]);
   assert.deepEqual(schema.properties.status.enum, ["out of scope", "see chat"]);
   assert.deepEqual(schema.required ?? [], ["id"]);
   // Strict, so `note` - the free-text status this tool took until 0.7.0 - is
@@ -135,6 +135,7 @@ test("acknowledge_mention takes id, keep, reply, status, answer and source, and 
   assert.match(ack.description ?? "", /status/);
   assert.match(ack.description ?? "", /answer/);
   assert.match(ack.description ?? "", /source/);
+  assert.match(ack.description ?? "", /replyTo/);
   assert.ok(!/note/.test(ack.description ?? ""), ack.description);
 
   // Over stdio, both refusals come back as tool results the model can read,
@@ -204,4 +205,41 @@ test("set_mention_policy reports the flag, room_status prints it, and the answer
   assert.equal(seen.tooLong.isError, true, resultText(seen.tooLong));
   assert.match(resultText(seen.tooLong), /answer/);
   assert.match(resultText(seen.tooLong), /400/);
+});
+
+/**
+ * Issue #84: the room's bound on agent-to-agent chains, over stdio, because
+ * that is where a host meets it. Nothing here needs the network: the argument
+ * is read and refused before the relay is contacted, and room_status reports
+ * the default for a process that has joined nothing.
+ */
+test("create_room and join_room take agentReplyDepth from 0 to 5, and room_status reports it", async () => {
+  for (const name of ["create_room", "join_room"]) {
+    const tool = tools.find((t) => t.name === name);
+    assert.ok(tool, `${name} is not in tools/list`);
+    const schema = tool.inputSchema as {
+      properties: Record<string, { type?: string; minimum?: number; maximum?: number; description?: string }>;
+    };
+    const depth = schema.properties.agentReplyDepth;
+    assert.ok(depth, `${name} does not declare agentReplyDepth`);
+    assert.equal(depth.type, "integer");
+    assert.equal(depth.minimum, 0);
+    assert.equal(depth.maximum, 5);
+    assert.match(depth.description ?? "", /agentReplyDepth: <n>/);
+  }
+
+  const seen = await use(async (client) => ({
+    status: resultText((await client.callTool({ name: "room_status", arguments: {} })) as ToolResult),
+    tooDeep: (await client.callTool({
+      name: "join_room",
+      arguments: { link: "https://excalidraw.com/#room=44370699de248c2fed0a,CGRLjH7340vVPvMRyjFIrg", agentReplyDepth: 6 },
+    })) as ToolResult,
+  }));
+
+  // The default is one hop, and room_status always carries the line.
+  assert.match(seen.status, /^agentReplyDepth: 1$/m);
+  // A depth outside the range is a result the model can read, and it names the
+  // argument: read and refused, not silently dropped.
+  assert.equal(seen.tooDeep.isError, true, resultText(seen.tooDeep));
+  assert.match(resultText(seen.tooDeep), /agentReplyDepth/);
 });

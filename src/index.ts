@@ -24,9 +24,14 @@ import { forcedLine, protectedBy, refusalLines, type Refusal } from "./guard.js"
 import { defaultHandle, isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
+  agentReplyDepthLine,
+  agentReplyDepthRefusal,
+  agentReplyDepthSchema,
   answerSchema,
   buildAttributedLine,
   BROADCAST_TAG,
+  chainOf,
+  DEFAULT_AGENT_REPLY_DEPTH,
   DEFAULT_NEARBY_RADIUS,
   findAttributedLine,
   findHandledMentions,
@@ -41,10 +46,13 @@ import {
   markAnswered,
   MAX_ANSWER_LENGTH,
   MAX_REPLY_LENGTH,
+  MAX_AGENT_REPLY_DEPTH,
   MENTION_POLICY_HOSTING_RULE,
   MENTION_STATUSES,
   MentionPolicy,
+  MIN_AGENT_REPLY_DEPTH,
   newGroupId,
+  nextChain,
   policyLine,
   previousLine,
   scopeRuleFor,
@@ -138,7 +146,12 @@ function pendingMentions(
   elements = room.getElements(),
   answerAgentMentions = false,
 ): Mention[] {
-  return visibleMentions(findMentions(elements, tags, acknowledgedMentions), room.handle, answerAgentMentions);
+  return visibleMentions(
+    findMentions(elements, tags, acknowledgedMentions),
+    room.handle,
+    answerAgentMentions,
+    room.agentReplyDepth,
+  );
 }
 
 /** Every mention of any of `tags` this process has acknowledged and left on the canvas. */
@@ -147,7 +160,12 @@ function handledMentionsOnCanvas(
   elements = room.getElements(),
   answerAgentMentions = false,
 ): Mention[] {
-  return visibleMentions(findHandledMentions(elements, tags, acknowledgedMentions), room.handle, answerAgentMentions);
+  return visibleMentions(
+    findHandledMentions(elements, tags, acknowledgedMentions),
+    room.handle,
+    answerAgentMentions,
+    room.agentReplyDepth,
+  );
 }
 
 /**
@@ -270,7 +288,7 @@ const answerAgentMentionsSchema = z
   .boolean()
   .default(false)
   .describe(
-    "Also return notes written by another agent in the room. False by default: a note stamped with another agent's handle is dropped, while notes people wrote (nothing stamps them) and this server's own notes are always returned. True returns them all, each with the 'from: <handle>' line naming its author.",
+    "Also return notes written by another agent in the room. False by default: a note stamped with another agent's handle is dropped, while notes people wrote (nothing stamps them) and this server's own notes are always returned. True returns them all, each with the 'from: <handle>' line naming its author - up to the room's agentReplyDepth, which bounds how far a chain an agent started may run before this agent stops hearing it. A chain a person started is never bounded.",
   );
 
 /**
@@ -395,6 +413,15 @@ const nearbyRadiusSchema = z
     `How far a neighbourhood query reaches around a mention, in canvas px, and the distance placement keeps between clusters. ${DEFAULT_NEARBY_RADIUS} by default; room_status reports it, and list_mentions, wait_for_mention, show_room, read_scene near and snapshot_scene near use it when they are given no radius of their own.`,
   );
 
+/**
+ * The room's bound on agent-to-agent chains. A property of the room, like the
+ * neighbourhood radius: the facilitator who sets the room up decides how much
+ * agent-to-agent traffic their canvas carries, and no rebuild changes it.
+ */
+const roomReplyDepthSchema = agentReplyDepthSchema.describe(
+  `How many agent replies deep a chain an agent started may run before this agent stops hearing it, ${MIN_AGENT_REPLY_DEPTH} to ${MAX_AGENT_REPLY_DEPTH}. ${DEFAULT_AGENT_REPLY_DEPTH} by default, so an agent may answer another agent once and the conversation goes on only if a person writes again; 0 means agent-started chains are never answered, even with answerAgentMentions on. A chain a person started is never bounded. room_status reports it as "agentReplyDepth: <n>".`,
+);
+
 /** A refusal naming the handle, or null when there is nothing to refuse. */
 function handleRefusal(handle: string | undefined): string | null {
   if (handle === undefined || isValidHandle(handle)) return null;
@@ -423,6 +450,7 @@ function statusText(): string {
     `room: ${s.link ?? "-"}`,
     `handle: ${s.handle ?? "-"}`,
     `nearbyRadius: ${s.nearbyRadius}`,
+    agentReplyDepthLine(s.agentReplyDepth),
     policyLine(mentionPolicy),
     `peers: ${peers}`,
     `elements: ${s.elementCount} (${s.deletedCount} deleted)`,
@@ -444,13 +472,13 @@ server.registerTool(
   {
     description:
       "Create a new empty live-collaboration room, join it, and return the excalidraw.com link for a person to open. The link contains the encryption key; share it only with people who should see the drawing. The result states the handle this server took in the room.",
-    inputSchema: { handle: handleSchema, nearbyRadius: nearbyRadiusSchema },
+    inputSchema: { handle: handleSchema, nearbyRadius: nearbyRadiusSchema, agentReplyDepth: roomReplyDepthSchema },
   },
-  async ({ handle, nearbyRadius }) => {
-    const refusal = handleRefusal(handle);
+  async ({ handle, nearbyRadius, agentReplyDepth }) => {
+    const refusal = handleRefusal(handle) ?? agentReplyDepthRefusal(agentReplyDepth);
     if (refusal) return errorText(refusal);
     const link = await RoomClient.createLink();
-    await room.join(link, { initTimeoutMs: 1500, handle, nearbyRadius });
+    await room.join(link, { initTimeoutMs: 1500, handle, nearbyRadius, agentReplyDepth });
     return text(`${link}\n\n${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
@@ -464,14 +492,15 @@ server.registerTool(
       link: z.string().describe("Collaboration link, e.g. https://excalidraw.com/#room=abc...,key..."),
       handle: handleSchema,
       nearbyRadius: nearbyRadiusSchema,
+      agentReplyDepth: roomReplyDepthSchema,
       serverUrl: z.string().optional().describe("Relay URL. Defaults to excalidraw.com's public relay."),
       origin: z.string().optional().describe("Origin header to present to the relay. Defaults to https://excalidraw.com, which the public relay requires."),
     },
   },
-  async ({ link, serverUrl, origin, handle, nearbyRadius }) => {
-    const refusal = handleRefusal(handle);
+  async ({ link, serverUrl, origin, handle, nearbyRadius, agentReplyDepth }) => {
+    const refusal = handleRefusal(handle) ?? agentReplyDepthRefusal(agentReplyDepth);
     if (refusal) return errorText(refusal);
-    await room.join(link, { serverUrl, origin, handle, nearbyRadius });
+    await room.join(link, { serverUrl, origin, handle, nearbyRadius, agentReplyDepth });
     return text(`${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
@@ -539,7 +568,7 @@ server.registerTool(
   "room_status",
   {
     description:
-      "Connection state, the handle this server took in the room, the session's answerQuestions policy, the peers with their handles and whether each is an agent or a browser, and scene counters for the current room.",
+      "Connection state, the handle this server took in the room, the room's nearbyRadius and agentReplyDepth, the session's answerQuestions policy, the peers with their handles and whether each is an agent or a browser, and scene counters for the current room.",
     inputSchema: {},
   },
   async () => text(statusText()),
@@ -834,7 +863,7 @@ server.registerTool(
     const tags = resolveTags(tag, room.handle);
     const mention = await room.waitForMention(tags, handledMentions, {
       timeoutMs: timeoutSeconds * 1000,
-      accept: (m) => visibleMentions([m], room.handle, answerAgentMentions).length > 0,
+      accept: (m) => visibleMentions([m], room.handle, answerAgentMentions, room.agentReplyDepth).length > 0,
     });
     if (!mention) return text(`no mention of ${tags[0]} within ${timeoutSeconds}s`);
     const elements = room.getElements();
@@ -895,7 +924,7 @@ server.registerTool(
   {
     description:
       "Mark a mention as handled so it is not returned again. By default the text element is removed from the canvas (soft-deleted): the seen marker already told the person it landed and the drawing is the evidence it was done. Say what you did in chat, not on the canvas - artefacts of the work belong there, prose about it does not. " +
-      `Pass status ${MENTION_STATUSES.map((v) => `"${v}"`).join(" or ")} to keep the element instead, greyed with one check mark, and draw that status under it on its own grey line reading "claude: <status>" - use it when the person has to read the outcome where they wrote the request. Pass keep true to keep it greyed with a check mark and draw nothing. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: your question is drawn on the same line under it, as "claude: <question>", so the person answers where they asked. Pass answer (up to ${MAX_ANSWER_LENGTH} characters) for a knowledge question, while set_mention_policy has answering on: the question stays in its own colour with a check mark as the heading of your answer, which is drawn on the line under it, and source puts a public URL behind it. Whatever you were given, the person's own words are left exactly as they wrote them. status, reply and answer exclude each other. Editing the text makes the mention pending again and what you wrote comes back with it.`,
+      `Pass status ${MENTION_STATUSES.map((v) => `"${v}"`).join(" or ")} to keep the element instead, greyed with one check mark, and draw that status under it on its own grey line reading "claude: <status>" - use it when the person has to read the outcome where they wrote the request. Pass keep true to keep it greyed with a check mark and draw nothing. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: your question is drawn on the same line under it, as "claude: <question>", so the person answers where they asked. A reply to a mention another agent wrote is addressed to that agent by default, as "claude: @<its handle> <question>", so it reaches that agent as a mention of its own; replyTo addresses it to a different handle instead, and the room's agentReplyDepth bounds how far such a chain runs. Pass answer (up to ${MAX_ANSWER_LENGTH} characters) for a knowledge question, while set_mention_policy has answering on: the question stays in its own colour with a check mark as the heading of your answer, which is drawn on the line under it, and source puts a public URL behind it. Whatever you were given, the person's own words are left exactly as they wrote them. status, reply and answer exclude each other. Editing the text makes the mention pending again and what you wrote comes back with it.`,
     inputSchema: z
       .object({
         id: z.string().describe("The mention's element id from wait_for_mention or list_mentions."),
@@ -904,6 +933,12 @@ server.registerTool(
           .optional()
           .describe(
             `A question to draw underneath, at most ${MAX_REPLY_LENGTH} characters, for a request you cannot act on as written. Excludes status. Must not contain a tag this agent answers to (its own handle or ${BROADCAST_TAG}), or your question would itself read as a mention.`,
+          ),
+        replyTo: z
+          .string()
+          .optional()
+          .describe(
+            "Handle to address the reply to, written on the line as \"@<handle>\" so it reaches that agent as a mention. Defaults to the mention's own author, which is what you want: an agent gets its answer back, and a note a person wrote is answered with no tag at all. Needs reply, and may not be an address this agent answers to.",
           ),
         status: statusSchema
           .optional()
@@ -926,19 +961,22 @@ server.registerTool(
       // than have its words silently dropped.
       .strict(),
   },
-  async ({ id, keep, reply, status, answer, source }) => {
-    // Decided before anything on the canvas is touched, and before the room is
-    // even consulted: a refusal must leave the note exactly as the person wrote
-    // it, and arguments that exclude each other do so whatever the connection
-    // state is.
+  async ({ id, keep, reply, replyTo, status, answer, source }) => {
+    // Read before the plan so a reply can default to the note's own author, and
+    // only when there is a room to read it from: the refusals below are decided
+    // before anything on the canvas is touched and before the room is even
+    // consulted, because a refusal must leave the note exactly as the person
+    // wrote it and arguments that exclude each other do so whatever the
+    // connection state is.
+    const current = room.isConnected ? room.getElement(id) : undefined;
     const plan = planAcknowledgement(
-      { keep, reply, status, answer, source },
+      { keep, reply, replyTo, status, answer, source },
       resolveTags(undefined, room.handle),
       room.handle,
+      current ? elementAuthor(current) : null,
     );
     if (plan.refusal) return errorText(plan.refusal);
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
-    const current = room.getElement(id);
     if (!current || current.type !== "text") return text(`no text element with id ${id}`);
     // Either way the post-bump version is recorded, so our own edit never
     // reads back as a new mention. An answered question keeps its own colour:
@@ -967,7 +1005,10 @@ server.registerTool(
               lastIndex: room.lastIndex(),
             },
             room.handle,
-            { link: plan.link, answer: plan.answers },
+            // One hop past the note being answered, carrying its root kind: the
+            // line is itself a mention for whoever it addresses, and this is
+            // what stops that going on forever.
+            { link: plan.link, answer: plan.answers, chain: nextChain(chainOf(current)) },
           ),
           group,
         ),

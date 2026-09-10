@@ -37,6 +37,7 @@ function status(over: Partial<RoomStatus> = {}): RoomStatus {
     link: LINK,
     handle: "kt",
     nearbyRadius: 250,
+    agentReplyDepth: 1,
     peers: [{ socketId: "sock-1", username: "Ada", kind: "browser" }],
     elementCount: 4,
     deletedCount: 0,

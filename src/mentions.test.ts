@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  AGENT_AUTHOR_KIND,
   buildElements,
   bump,
   elementAuthor,
+  PERSON_AUTHOR,
   stampAuthor,
   summarise,
   type ElementSpec,
@@ -13,6 +15,25 @@ import { buildPollPayload, pollText } from "./poll.js";
 import {
   ACKNOWLEDGED_MARK,
   ACKNOWLEDGED_STROKE,
+  addressesSelf,
+  AGENT_REPLY_DEPTH_RANGE_TEXT,
+  agentReplyDepthLine,
+  agentReplyDepthRefusal,
+  agentReplyDepthSchema,
+  chainCustomData,
+  chainOf,
+  DEFAULT_AGENT_REPLY_DEPTH,
+  DEPTH_CUSTOM_DATA_KEY,
+  isAgentReplyDepth,
+  MAX_AGENT_REPLY_DEPTH,
+  MIN_AGENT_REPLY_DEPTH,
+  mentionOf,
+  nextChain,
+  REPLY_TO_WITHOUT_REPLY_TEXT,
+  replyToInvalidText,
+  replyToSelfText,
+  ROOT_AUTHOR_KIND_CUSTOM_DATA_KEY,
+  withinReplyDepth,
   acknowledgementText,
   ANSWER_BLANK_TEXT,
   ANSWER_KIND,
@@ -546,7 +567,7 @@ test("a repeated status is replaced, not stacked: one suffix however many transi
 
 /** A pending mention as poll_room and the two listing tools see one. */
 function pending(id: string, text: string): Mention {
-  return { id, version: 3, text, x: 0, y: 0, width: 100, height: 25, containerId: null, author: null };
+  return { id, version: 3, text, x: 0, y: 0, width: 100, height: 25, containerId: null, author: null, rootAuthorKind: PERSON_AUTHOR, depth: 0 };
 }
 
 /** The room status poll_room reads, with nothing in it that matters here. */
@@ -557,6 +578,7 @@ function pollStatus() {
     link: "https://excalidraw.com/#room=room1,0123456789abcdefghijkl",
     handle: "kt",
     nearbyRadius: 250,
+    agentReplyDepth: DEFAULT_AGENT_REPLY_DEPTH,
     peers: [],
     elementCount: 1,
     deletedCount: 0,
@@ -1305,6 +1327,8 @@ test("the refusal messages, the marker colours and the custom-data keys are what
   assert.equal(ACKNOWLEDGED_STROKE, "#868e96");
   assert.equal(REPLY_CUSTOM_DATA_KEY, "excalidrawRoomReplyTo");
   assert.equal(REPLY_KIND_CUSTOM_DATA_KEY, "excalidrawRoomReplyKind");
+  assert.equal(ROOT_AUTHOR_KIND_CUSTOM_DATA_KEY, "excalidrawRoomRootAuthorKind");
+  assert.equal(DEPTH_CUSTOM_DATA_KEY, "excalidrawRoomDepth");
   assert.equal(ANSWER_KIND, "answer");
 
   assert.equal(
@@ -1338,6 +1362,26 @@ test("the refusal messages, the marker colours and the custom-data keys are what
       "and a reply with the question you need answered. Pass one or the other.",
   );
 
+  assert.equal(
+    AGENT_REPLY_DEPTH_RANGE_TEXT,
+    "agentReplyDepth must be a whole number from 0 to 5: " +
+      "it is how many agent replies deep an agent-rooted chain may run before this agent stops hearing it.",
+  );
+  assert.equal(
+    REPLY_TO_WITHOUT_REPLY_TEXT,
+    "replyTo belongs to a reply: it is the handle your question is addressed to, so pass it with reply or not at all.",
+  );
+  assert.equal(
+    replyToInvalidText("Not A Handle"),
+    'invalid replyTo "Not A Handle": it is the handle to address the question to, ' +
+      "1 to 32 characters of lowercase letters, digits and hyphens.",
+  );
+  assert.equal(
+    replyToSelfText("beta"),
+    'replyTo "beta" is an address this agent answers to: the question would come back as a ' +
+      "mention of its own. Address it to the agent you are answering, or omit replyTo for the mention's author.",
+  );
+
   // The two forms of the scope rule, verbatim: they are the enforcement text
   // the model reads, and the contract quotes both.
   assert.equal(
@@ -1360,4 +1404,321 @@ test("the refusal messages, the marker colours and the custom-data keys are what
     "The board is visible to everyone holding the room link: never write client-identifiable, personal, " +
       "confidential or credential data on the canvas.",
   );
+});
+
+/**
+ * Issue #84: a reply is addressed, so it reaches the agent that asked, and the
+ * room bounds how far a chain of those replies runs. The five tests below are
+ * named in the wave 4 acceptance contract.
+ */
+
+/** The mentions one agent sees in a scene, at a given bound. */
+function seen(
+  elements: readonly ExcalidrawElement[],
+  handle: string,
+  agentReplyDepth: number,
+  acknowledged: Map<string, number> = new Map(),
+): Mention[] {
+  return visibleMentions(findMentions(elements, defaultTags(handle), acknowledged), handle, true, agentReplyDepth);
+}
+
+/**
+ * One acknowledgement with a reply, as `acknowledge_mention` performs it: the
+ * plan decides the line, the note is marked, and the line is built one hop
+ * down the chain. Returns the scene the room holds afterwards, so a chain can
+ * be run hop by hop through the same functions the tool calls.
+ */
+function replyHop(
+  elements: readonly ExcalidrawElement[],
+  id: string,
+  handle: string,
+  reply: string,
+  replyTo?: string,
+) {
+  const note = elements.find((el) => el.id === id);
+  assert.ok(note, `no element ${id} in the scene`);
+  const plan = planAcknowledgement({ reply, replyTo }, defaultTags(handle), handle, elementAuthor(note));
+  assert.equal(plan.refusal, undefined, plan.refusal);
+  const kept = markAcknowledged(note);
+  const line = buildAttributedLine(kept, plan.line!, ctx(), handle, { chain: nextChain(chainOf(note)) });
+  return { elements: [...elements.filter((el) => el.id !== id), kept, line], line, plan };
+}
+
+/** The chain keys a line carries, as a reader of the scene finds them. */
+function chainKeys(el: ExcalidrawElement): { kind: unknown; depth: unknown } {
+  const data = el.customData as Record<string, unknown>;
+  return { kind: data[ROOT_AUTHOR_KIND_CUSTOM_DATA_KEY], depth: data[DEPTH_CUSTOM_DATA_KEY] };
+}
+
+test("a reply is addressed to the mention author or to replyTo", () => {
+  // A question written under another agent's note is invisible to it: an agent
+  // answers the tags it listens on. So a reply to an agent carries its tag.
+  const fromAlpha = buildElements([{ type: "text", id: "a1", x: 0, y: 0, text: "@beta ping" }], ctx()).created.map(
+    (el) => stampAuthor(el, "alpha"),
+  );
+  const answered = replyHop(fromAlpha, "a1", "beta", "pong?");
+  assert.equal(answered.line.text, `beta: @alpha pong?\n${REPLY_PROMPT_LINE}`);
+  assert.ok(String(answered.line.text).startsWith("beta: @alpha "), answered.line.text);
+  // And it is a mention for alpha, which is the whole point of addressing it.
+  assert.deepEqual(ids(seen(answered.elements, "alpha", 2)), [answered.line.id]);
+
+  // A person's note has no author to name, so the line carries no tag: they
+  // are looking at the canvas, and a tag addressed to a person is noise.
+  const fromPerson = buildElements([{ type: "text", id: "pn", x: 0, y: 0, text: "@alpha from a person" }], ctx()).created;
+  assert.equal(elementAuthor(fromPerson[0]), null);
+  assert.equal(replyHop(fromPerson, "pn", "alpha", "can you confirm?").line.text, `alpha: can you confirm?\n${REPLY_PROMPT_LINE}`);
+  // replyTo overrides that default, which is how an agent hands a person's
+  // question to the agent that can answer it.
+  const handed = replyHop(fromPerson, "pn", "alpha", "can you confirm?", "beta");
+  assert.equal(handed.line.text, `alpha: @beta can you confirm?\n${REPLY_PROMPT_LINE}`);
+  assert.ok(String(handed.line.text).startsWith("alpha: @beta "), handed.line.text);
+  assert.deepEqual(ids(seen(handed.elements, "beta", 1)), [handed.line.id]);
+
+  // The text function on its own, so the shape is pinned without a scene.
+  assert.equal(attributedReplyText("which box?", "beta", "alpha"), `beta: @alpha which box?\n${REPLY_PROMPT_LINE}`);
+  assert.equal(attributedReplyText("which box?", "beta", null), `beta: which box?\n${REPLY_PROMPT_LINE}`);
+  assert.equal(attributedReplyText("which box?", "beta"), `beta: which box?\n${REPLY_PROMPT_LINE}`);
+  assert.equal(attributedReplyText("  which box?  ", "beta", "alpha"), `beta: @alpha which box?\n${REPLY_PROMPT_LINE}`);
+  assert.equal(attributedReplyText("which box?"), `claude: which box?\n${REPLY_PROMPT_LINE}`);
+
+  // Our own note answered by us is not tagged: answering yourself is fine,
+  // tagging yourself in the answer is the loop this bounds.
+  const own = buildElements([{ type: "text", id: "o1", x: 0, y: 0, text: "@beta note to self" }], ctx()).created.map(
+    (el) => stampAuthor(el, "beta"),
+  );
+  assert.equal(replyHop(own, "o1", "beta", "still?").line.text, `beta: still?\n${REPLY_PROMPT_LINE}`);
+  assert.equal(addressesSelf("beta", defaultTags("beta")), true);
+  assert.equal(addressesSelf("claude", defaultTags("beta")), true, "the broadcast tag is heard too");
+  assert.equal(addressesSelf("BETA", defaultTags("beta")), true, "the canvas matches case-insensitively");
+  assert.equal(addressesSelf("alpha", defaultTags("beta")), false);
+  assert.equal(addressesSelf("alpha", "@alpha"), true);
+
+  // An explicit replyTo is refused rather than dropped, and each refusal names
+  // the argument the caller passed.
+  const tags = defaultTags("beta");
+  assert.equal(planAcknowledgement({ replyTo: "alpha" }, tags, "beta").refusal, REPLY_TO_WITHOUT_REPLY_TEXT);
+  assert.equal(planAcknowledgement({ replyTo: "alpha" }, tags, "beta").kept, false, "nothing is touched");
+  assert.equal(planAcknowledgement({ reply: "x", replyTo: "Not A Handle" }, tags, "beta").refusal, replyToInvalidText("Not A Handle"));
+  assert.equal(planAcknowledgement({ reply: "x", replyTo: "" }, tags, "beta").refusal, replyToInvalidText(""));
+  assert.equal(planAcknowledgement({ reply: "x", replyTo: "beta" }, tags, "beta").refusal, replyToSelfText("beta"));
+  assert.equal(planAcknowledgement({ reply: "x", replyTo: "claude" }, tags, "beta").refusal, replyToSelfText("claude"));
+  for (const refusal of [REPLY_TO_WITHOUT_REPLY_TEXT, replyToInvalidText("x y"), replyToSelfText("beta")]) {
+    assert.match(refusal, /replyTo/);
+  }
+  // And an accepted one reaches the line.
+  const ok = planAcknowledgement({ reply: "x", replyTo: "alpha" }, tags, "beta");
+  assert.equal(ok.refusal, undefined);
+  assert.equal(ok.replies, true);
+  assert.equal(ok.line, `beta: @alpha x\n${REPLY_PROMPT_LINE}`);
+  // A reply with no replyTo and no author is the line every caller had before.
+  assert.equal(planAcknowledgement({ reply: "x" }, tags, "beta").line, `beta: x\n${REPLY_PROMPT_LINE}`);
+});
+
+test("an agent-rooted chain stops at the room depth", () => {
+  // beta writes to alpha, so the chain's root is an agent's. alpha's bound is
+  // the default 1 and beta's is 2, which is one exchange more.
+  const root = buildElements([{ type: "text", id: "b3", x: 0, y: 0, text: "@alpha direct" }], ctx()).created.map((el) =>
+    stampAuthor(el, "beta"),
+  );
+  const acked = new Map<string, number>();
+
+  // The root itself is depth 0, so alpha hears it at the default bound.
+  assert.deepEqual(ids(seen(root, "alpha", 1, acked)), ["b3"]);
+  const hop1 = replyHop(root, "b3", "alpha", "ok");
+  acked.set("b3", hop1.elements.find((el) => el.id === "b3")!.version);
+  // One hop: beta hears it, because 1 is below beta's bound of 2.
+  assert.deepEqual(ids(seen(hop1.elements, "beta", 2, acked)), [hop1.line.id]);
+  assert.equal(seen(hop1.elements, "beta", 2, acked)[0].author, "alpha", "still says who wrote it");
+  // alpha's own bound of 1 would already have stopped it there.
+  assert.deepEqual(ids(seen(hop1.elements, "beta", 1, acked)), []);
+
+  const hop2 = replyHop(hop1.elements, hop1.line.id, "beta", "thanks");
+  acked.set(hop1.line.id, hop2.elements.find((el) => el.id === hop1.line.id)!.version);
+  // Two hops: alpha does not hear it, because 2 is not below 1.
+  assert.deepEqual(ids(seen(hop2.elements, "alpha", 1, acked)), []);
+  // Raised, alpha hears it: the bound is the room's setting, not a rule.
+  assert.deepEqual(ids(seen(hop2.elements, "alpha", 3, acked)), [hop2.line.id]);
+  // Acknowledging by id still works, whether or not the list showed it, so a
+  // third hop can be written - and beta does not hear that one either.
+  const hop3 = replyHop(hop2.elements, hop2.line.id, "alpha", "welcome");
+  acked.set(hop2.line.id, hop3.elements.find((el) => el.id === hop2.line.id)!.version);
+  assert.deepEqual(ids(seen(hop3.elements, "beta", 2, acked)), [], "the bound bites at the upper end too");
+  assert.deepEqual(ids(seen(hop3.elements, "beta", 4, acked)), [hop3.line.id]);
+  // Every hop of it is agent-rooted, and the count is what grew.
+  assert.deepEqual(
+    [hop1, hop2, hop3].map((hop) => chainKeys(hop.line)),
+    [
+      { kind: AGENT_AUTHOR_KIND, depth: 1 },
+      { kind: AGENT_AUTHOR_KIND, depth: 2 },
+      { kind: AGENT_AUTHOR_KIND, depth: 3 },
+    ],
+  );
+
+  // The rule on its own: strictly below, and only for an agent-rooted chain.
+  const agentRooted = (depth: number): Mention => ({ ...pending("m", "@beta x"), rootAuthorKind: AGENT_AUTHOR_KIND, depth });
+  assert.equal(withinReplyDepth(agentRooted(0), 1), true);
+  assert.equal(withinReplyDepth(agentRooted(1), 1), false);
+  assert.equal(withinReplyDepth(agentRooted(1), 2), true);
+  assert.equal(withinReplyDepth(agentRooted(2), 2), false);
+  assert.equal(withinReplyDepth(agentRooted(0), DEFAULT_AGENT_REPLY_DEPTH), true, "the default is one hop");
+  assert.equal(withinReplyDepth(agentRooted(1), DEFAULT_AGENT_REPLY_DEPTH), false);
+  assert.equal(withinReplyDepth(agentRooted(0)), true, "and it is the function's default too");
+  assert.equal(withinReplyDepth(agentRooted(1)), false);
+});
+
+test("a person-rooted chain is not bounded", () => {
+  // A person is in the room watching, so cutting their thread off mid-answer
+  // is the bug rather than the feature: every hop is delivered.
+  const root = buildElements([{ type: "text", id: "pn", x: 0, y: 0, text: "@alpha from a person" }], ctx()).created;
+  assert.equal(root[0].customData, undefined, "a browser writes no customData at all");
+  const acked = new Map<string, number>();
+
+  // Hop by hop, each read at the moment it lands, at the default bound of 1.
+  const q1 = replyHop(root, "pn", "alpha", "can you confirm?", "beta");
+  acked.set("pn", q1.elements.find((el) => el.id === "pn")!.version);
+  assert.deepEqual(ids(seen(q1.elements, "beta", 1, acked)), [q1.line.id], "depth 1 at a bound of 1");
+  // Even at 0, which hides every agent-rooted chain, a person's stands.
+  assert.deepEqual(ids(seen(q1.elements, "beta", 0, acked)), [q1.line.id]);
+
+  const q2 = replyHop(q1.elements, q1.line.id, "beta", "confirmed");
+  acked.set(q1.line.id, q2.elements.find((el) => el.id === q1.line.id)!.version);
+  assert.deepEqual(ids(seen(q2.elements, "alpha", 1, acked)), [q2.line.id], "depth 2 at a bound of 1");
+
+  const q3 = replyHop(q2.elements, q2.line.id, "alpha", "great");
+  acked.set(q2.line.id, q3.elements.find((el) => el.id === q2.line.id)!.version);
+  assert.deepEqual(ids(seen(q3.elements, "beta", 1, acked)), [q3.line.id], "depth 3 at a bound of 1");
+  assert.deepEqual(ids(seen(q3.elements, "beta", 0, acked)), [q3.line.id]);
+
+  // Depths 1, 2 and 3, all still rooted in the person's note, though every one
+  // of those lines was written and stamped by an agent.
+  assert.deepEqual([q1.line, q2.line, q3.line].map((el) => chainKeys(el).depth), [1, 2, 3]);
+  assert.deepEqual([q1.line, q2.line, q3.line].map((el) => chainKeys(el).kind), [PERSON_AUTHOR, PERSON_AUTHOR, PERSON_AUTHOR]);
+  assert.deepEqual([q1.line, q2.line, q3.line].map((el) => elementAuthor(el)), ["alpha", "beta", "alpha"]);
+  assert.equal(withinReplyDepth({ ...pending("m", "@beta x"), rootAuthorKind: PERSON_AUTHOR, depth: 9 }, 0), true);
+});
+
+test("agentReplyDepth 0 hides every agent-rooted mention", () => {
+  // The facilitator who wants no agent-to-agent traffic at all sets 0, and the
+  // flag no longer opens anything: an agent-rooted note is never returned.
+  const fromAgent = buildElements([{ type: "text", id: "g1", x: 0, y: 0, text: "@gamma hello" }], ctx()).created.map(
+    (el) => stampAuthor(el, "alpha"),
+  );
+  const fromPerson = buildElements([{ type: "text", id: "pg", x: 0, y: 200, text: "@gamma from a person" }], ctx()).created;
+  const both = [...fromAgent, ...fromPerson];
+  assert.deepEqual(ids(seen(both, "gamma", 0)), ["pg"]);
+  assert.deepEqual(ids(seen(both, "gamma", 1)), ["g1", "pg"]);
+  // With the flag off as well, which is the same answer by a different route.
+  assert.deepEqual(
+    ids(visibleMentions(findMentions(both, defaultTags("gamma")), "gamma", false, 0)),
+    ["pg"],
+  );
+
+  // The bound is the room's, so it is validated where the room is joined.
+  assert.equal(MIN_AGENT_REPLY_DEPTH, 0);
+  assert.equal(MAX_AGENT_REPLY_DEPTH, 5);
+  assert.equal(DEFAULT_AGENT_REPLY_DEPTH, 1);
+  assert.equal(agentReplyDepthLine(0), "agentReplyDepth: 0");
+  assert.equal(agentReplyDepthLine(DEFAULT_AGENT_REPLY_DEPTH), "agentReplyDepth: 1");
+  for (const good of [0, 1, 5]) {
+    assert.equal(isAgentReplyDepth(good), true, `${good} is a depth`);
+    assert.equal(agentReplyDepthRefusal(good), null);
+    assert.equal(agentReplyDepthSchema.safeParse(good).success, true);
+  }
+  for (const bad of [-1, 6, 1.5]) {
+    assert.equal(isAgentReplyDepth(bad), false, `${bad} is not a depth`);
+    assert.equal(agentReplyDepthRefusal(bad), AGENT_REPLY_DEPTH_RANGE_TEXT);
+    assert.equal(agentReplyDepthSchema.safeParse(bad).success, false);
+    // The schema hands back the same words the refusal does, because the host
+    // shows whichever of the two rejected the argument.
+    assert.equal(agentReplyDepthSchema.safeParse(bad).error?.issues[0].message, AGENT_REPLY_DEPTH_RANGE_TEXT);
+  }
+  assert.equal(isAgentReplyDepth(Number.NaN), false);
+  assert.equal(agentReplyDepthRefusal(Number.NaN), AGENT_REPLY_DEPTH_RANGE_TEXT);
+  assert.equal(agentReplyDepthSchema.safeParse(Number.NaN).success, false);
+  assert.equal(isAgentReplyDepth("1"), false, "and not a string that looks like one");
+  assert.equal(isAgentReplyDepth(undefined), false);
+  // Absent is not out of range: the room takes its default.
+  assert.equal(agentReplyDepthRefusal(undefined), null);
+  assert.equal(agentReplyDepthSchema.safeParse(undefined).success, true);
+  assert.match(AGENT_REPLY_DEPTH_RANGE_TEXT, /agentReplyDepth/);
+
+  // The blocking path applies it before it settles anything, so a bounded note
+  // must not end a wait either. A room per case: the two notes are separate
+  // arrivals, not two versions of one element.
+  const accept = (m: Mention) => visibleMentions([m], "gamma", true, 0).length > 0;
+  const ignoring = new RoomClient();
+  const quiet = ignoring.waitForMention(defaultTags("gamma"), new Map(), { timeoutMs: 200, settleMs: 5, accept });
+  setTimeout(() => ignoring.ingestRemote(fromAgent), 10);
+  return quiet.then(async (nothing) => {
+    assert.equal(nothing, null, "an agent-rooted note does not end the wait at 0");
+    const listening = new RoomClient();
+    const heard = listening.waitForMention(defaultTags("gamma"), new Map(), { timeoutMs: 5000, settleMs: 10, accept });
+    setTimeout(() => listening.ingestRemote(fromPerson), 10);
+    const got = await heard;
+    assert.equal(got?.id, "pg");
+    assert.equal(got?.author, null);
+    assert.equal(got?.rootAuthorKind, PERSON_AUTHOR);
+  });
+});
+
+test("root author kind and depth are copied down a chain", () => {
+  // A note nobody has replied to is the root of its own chain: its kind is
+  // read off its author and its depth is 0.
+  const [bare] = buildElements([{ type: "text", id: "r0", x: 0, y: 0, text: "@beta ping" }], ctx()).created;
+  assert.deepEqual(chainOf(bare), { rootAuthorKind: PERSON_AUTHOR, depth: 0 });
+  assert.deepEqual(chainOf(stampAuthor(bare, "alpha")), { rootAuthorKind: AGENT_AUTHOR_KIND, depth: 0 });
+  assert.deepEqual(mentionOf(stampAuthor(bare, "alpha")), {
+    ...mentionOf(stampAuthor(bare, "alpha")),
+    author: "alpha",
+    rootAuthorKind: AGENT_AUTHOR_KIND,
+    depth: 0,
+  });
+  assert.equal(mentionOf(bare).rootAuthorKind, PERSON_AUTHOR);
+  assert.equal(mentionOf(bare).depth, 0);
+
+  // One hop further, same root. That is the whole of the copying rule.
+  assert.deepEqual(nextChain({ rootAuthorKind: PERSON_AUTHOR, depth: 0 }), { rootAuthorKind: PERSON_AUTHOR, depth: 1 });
+  assert.deepEqual(nextChain({ rootAuthorKind: AGENT_AUTHOR_KIND, depth: 2 }), { rootAuthorKind: AGENT_AUTHOR_KIND, depth: 3 });
+  assert.deepEqual(chainCustomData({ rootAuthorKind: AGENT_AUTHOR_KIND, depth: 3 }), {
+    excalidrawRoomRootAuthorKind: "agent",
+    excalidrawRoomDepth: 3,
+  });
+
+  // A person's root carried down three agent-written lines stays a person's,
+  // though every one of those lines is stamped with an agent's handle.
+  const line = (kind: unknown, depth: unknown) =>
+    stampAuthor({ ...bare, customData: { [ROOT_AUTHOR_KIND_CUSTOM_DATA_KEY]: kind, [DEPTH_CUSTOM_DATA_KEY]: depth } }, "beta");
+  assert.deepEqual(chainOf(line(PERSON_AUTHOR, 2)), { rootAuthorKind: PERSON_AUTHOR, depth: 2 });
+  assert.deepEqual(chainOf(line(AGENT_AUTHOR_KIND, 1)), { rootAuthorKind: AGENT_AUTHOR_KIND, depth: 1 });
+
+  // The keys arrive from peers unsanitised, so anything that is not one of the
+  // two kinds, or not a whole depth at least 0, falls back to the element.
+  assert.deepEqual(chainOf(line("nonsense", 1)), { rootAuthorKind: AGENT_AUTHOR_KIND, depth: 1 });
+  // Both kinds are read off the key when it says one of them, whatever the
+  // element's own author says: an unstamped element carrying "agent" is a
+  // line whose stamp a peer dropped, not a person's note.
+  assert.equal(chainOf({ ...bare, customData: { [ROOT_AUTHOR_KIND_CUSTOM_DATA_KEY]: AGENT_AUTHOR_KIND } }).rootAuthorKind, AGENT_AUTHOR_KIND);
+  assert.equal(chainOf({ ...bare, customData: { [ROOT_AUTHOR_KIND_CUSTOM_DATA_KEY]: "nonsense" } }).rootAuthorKind, PERSON_AUTHOR);
+  assert.deepEqual(chainOf(line("person\ninjected", 1)), { rootAuthorKind: AGENT_AUTHOR_KIND, depth: 1 });
+  assert.equal(chainOf(line(PERSON_AUTHOR, 1.5)).depth, 0);
+  assert.equal(chainOf(line(PERSON_AUTHOR, -3)).depth, 0);
+  assert.equal(chainOf(line(PERSON_AUTHOR, "2")).depth, 0);
+  assert.equal(chainOf(line(PERSON_AUTHOR, undefined)).depth, 0);
+  assert.equal(chainOf(line(PERSON_AUTHOR, 4)).depth, 4);
+
+  // And the line the tool writes carries both keys, beside the back reference
+  // and the author, so the next hop can be counted off the scene alone.
+  const written = buildAttributedLine(bare, "beta: @alpha pong?", ctx(), "beta", {
+    chain: nextChain(chainOf(stampAuthor(bare, "alpha"))),
+  });
+  const data = written.customData as Record<string, unknown>;
+  assert.equal(data[REPLY_CUSTOM_DATA_KEY], "r0");
+  assert.equal(data.author, "beta");
+  assert.deepEqual(chainKeys(written), { kind: AGENT_AUTHOR_KIND, depth: 1 });
+  assert.deepEqual(chainOf(written), { rootAuthorKind: AGENT_AUTHOR_KIND, depth: 1 });
+  // A line built with no chain carries neither key, which is what every line
+  // written before this existed looks like: a root, at depth 0.
+  const chainless = buildAttributedLine(bare, "beta: see chat", ctx(), "beta");
+  assert.deepEqual(chainKeys(chainless), { kind: undefined, depth: undefined });
+  assert.deepEqual(chainOf(chainless), { rootAuthorKind: AGENT_AUTHOR_KIND, depth: 0 });
 });
