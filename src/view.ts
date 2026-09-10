@@ -23,9 +23,26 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ExcalidrawElement } from "./elements.js";
 import { DEFAULT_NEARBY_RADIUS, nearbyElements, type Mention } from "./mentions.js";
 import { RoomClient, type RoomStatus } from "./room.js";
+import { PACKAGE_VERSION } from "./version.js";
 
-/** The resource the host loads to render the canvas. Referenced by tool `_meta.ui.resourceUri`. */
-export const CANVAS_RESOURCE_URI = "ui://excalidraw-room/canvas.html";
+/**
+ * The stem of the resource URI. The version is appended, so the whole URI
+ * changes with every release.
+ */
+export const CANVAS_RESOURCE_URI_PREFIX = "ui://excalidraw-room/canvas-";
+
+/**
+ * The resource the host loads to render the canvas. Referenced by tool
+ * `_meta.ui.resourceUri`.
+ *
+ * The URI carries the package version because a host may cache the HTML by
+ * URI and keep serving it across extension versions. Claude Desktop 1.49585.0
+ * with extension 0.5.3 on disk rendered the 0.5.1 view: its log shows
+ * `resources/read` for `ui://excalidraw-room/canvas.html` three times on one
+ * afternoon and never again after any later reinstall, so no view change since
+ * then had ever run. A version in the URI makes each release a cache miss.
+ */
+export const CANVAS_RESOURCE_URI = `${CANVAS_RESOURCE_URI_PREFIX}${PACKAGE_VERSION}.html`;
 export const CANVAS_RESOURCE_NAME = "Excalidraw room canvas";
 
 /**

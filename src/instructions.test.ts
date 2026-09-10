@@ -24,3 +24,8 @@ test("the tip carries the tool, the timeout and the tag", () => {
   assert.match(LISTEN_TIP, /600/);
   assert.match(LISTEN_TIP, /@claude/);
 });
+
+test("instructions point a person at the browser after a room is opened", () => {
+  assert.match(SERVER_INSTRUCTIONS, /open_room/);
+  assert.match(SERVER_INSTRUCTIONS, /excalidraw\.com/);
+});

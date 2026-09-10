@@ -4,9 +4,11 @@ import test from "node:test";
 import type { ExcalidrawElement } from "./elements.js";
 import { DEFAULT_NEARBY_RADIUS, formatMention, nearbyElements, type Mention } from "./mentions.js";
 import { RoomClient, type RoomStatus } from "./room.js";
+import { PACKAGE_VERSION } from "./version.js";
 import {
   buildShowRoomPayload,
   CANVAS_RESOURCE_URI,
+  CANVAS_RESOURCE_URI_PREFIX,
   canvasHtmlUrl,
   ensureJoined,
   formatShowRoomMention,
@@ -243,7 +245,6 @@ test("registerCanvasResource serves canvas.html at the URI show_room's _meta poi
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].uri, CANVAS_RESOURCE_URI);
-  assert.equal(CANVAS_RESOURCE_URI, "ui://excalidraw-room/canvas.html");
   assert.ok(calls[0].config.mimeType?.startsWith("text/html"));
 
   const result = await read(new URL(CANVAS_RESOURCE_URI));
@@ -254,6 +255,19 @@ test("registerCanvasResource serves canvas.html at the URI show_room's _meta poi
   const onDisk = await readFile(canvasHtmlUrl(), "utf8");
   assert.equal(result.contents[0].text, onDisk);
   assert.ok(onDisk.length > 0);
+});
+
+test("the canvas resource URI carries the package version, so a host cannot serve a stale view", () => {
+  // A host may cache the view HTML by URI across extension versions: Claude
+  // Desktop 1.49585.0 rendered the 0.5.1 view with 0.5.3 installed, having read
+  // ui://excalidraw-room/canvas.html once and never again. The version makes
+  // every release a distinct URI, so the read happens again.
+  assert.equal(CANVAS_RESOURCE_URI_PREFIX, "ui://excalidraw-room/canvas-");
+  assert.ok(CANVAS_RESOURCE_URI.startsWith(CANVAS_RESOURCE_URI_PREFIX), CANVAS_RESOURCE_URI);
+  assert.ok(CANVAS_RESOURCE_URI.endsWith(".html"), CANVAS_RESOURCE_URI);
+  assert.equal(CANVAS_RESOURCE_URI, `${CANVAS_RESOURCE_URI_PREFIX}${PACKAGE_VERSION}.html`);
+  assert.notEqual(CANVAS_RESOURCE_URI, "ui://excalidraw-room/canvas.html", "the unversioned URI is the one hosts cached");
+  assert.match(PACKAGE_VERSION, /^\d+\.\d+\.\d+/, "a real version, not the 0.0.0 fallback shape only");
 });
 
 test("canvasHtmlUrl points at dist/view/canvas.html next to the compiled server", () => {
