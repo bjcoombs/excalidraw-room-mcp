@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildElements, type ExcalidrawElement } from "./elements.js";
+import { buildElements, summarise, type ExcalidrawElement } from "./elements.js";
+import { reconcile } from "./reconcile.js";
 import { selectElements, unknownIdsText } from "./scene.js";
 
 const ctx = () => ({ existing: new Map<string, ExcalidrawElement>(), lastIndex: null });
@@ -75,4 +76,33 @@ test("deleted elements are dropped from a near selection but kept by id", () => 
 
 test("unknownIdsText names every id", () => {
   assert.equal(unknownIdsText(["a", "b"]), "unknown id(s): a, b");
+});
+
+test("legacy focus and gap bindings load without error", () => {
+  // A scene written before upstream replaced the focus/gap pair with fixedPoint
+  // still carries the older binding object. Every read path here must load it
+  // without throwing and without losing the arrow or the ids it binds.
+  const els = scene();
+  const legacy = els.map((el) =>
+    el.id === "hub-near1"
+      ? {
+          ...el,
+          startBinding: { elementId: "hub", focus: 0, gap: 4, fixedPoint: null },
+          endBinding: { elementId: "near1", focus: 0.3, gap: 8, fixedPoint: null },
+        }
+      : el,
+  );
+
+  const { elements, unknownIds } = selectElements(legacy, { ids: ["hub-near1"] });
+  assert.deepEqual(unknownIds, []);
+  assert.deepEqual(elements.map((e) => e.id), ["hub-near1"]);
+
+  const near = selectElements(legacy, { near: { id: "hub", radius: 100 } });
+  assert.deepEqual(near.unknownIds, []);
+
+  const merged = reconcile(legacy, legacy);
+  const arrow = merged.find((e) => e.id === "hub-near1")!;
+  assert.equal(arrow.startBinding!.elementId, "hub");
+  assert.equal(arrow.endBinding!.elementId, "near1");
+  assert.match(summarise(merged), /^hub-near1 arrow .* from hub to near1$/m);
 });
