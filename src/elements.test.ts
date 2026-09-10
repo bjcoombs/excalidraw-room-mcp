@@ -886,4 +886,97 @@ test("a non-text update is merged and bumped without re-measuring", () => {
   assert.equal(out[0].backgroundColor, "#ffec99");
   assert.equal(out[0].width, 100);
   assert.equal(out[0].version, rect.version + 1);
+  // A shape carrying a stray text field is still a shape: only text elements re-measure.
+  const odd = applyUpdate(rect, { text: "not a text element" }, () => undefined);
+  assert.equal(odd.length, 1);
+  assert.equal(odd[0].width, 100);
+  assert.equal(odd[0].originalText, undefined);
+});
+
+test("only a content edit re-lays out a label; other fields leave the container alone", () => {
+  const { created } = buildElements(
+    [{ type: "rectangle", id: "r", x: 0, y: 0, width: 200, height: 80, label: "API" }],
+    ctx(),
+  );
+  const label = created[1];
+  const recoloured = applyUpdate(label, { strokeColor: "#e03131" }, lookupIn(created));
+  assert.equal(recoloured.length, 1, "a colour change does not touch the container");
+  assert.equal(recoloured[0].strokeColor, "#e03131");
+  assert.equal(recoloured[0].width, label.width, "and does not re-measure");
+
+  const resized = applyUpdate(label, { fontSize: 40 }, lookupIn(created));
+  assert.equal(resized.length, 2, "a font-size change re-measures and marks the container changed");
+  const bigger = resized.find((e) => e.id === label.id)!;
+  assert.deepEqual({ width: bigger.width, height: bigger.height }, measureText("API", 40));
+});
+
+test("originalText is rewritten only by a text edit, not by a re-measure", () => {
+  const { created } = buildElements(
+    [{ type: "rectangle", id: "r", x: 0, y: 0, width: 200, height: 80, label: "wrapped line" }],
+    ctx(),
+  );
+  // Upstream wraps the rendered text to the container while originalText keeps
+  // what the person typed, so the two legitimately differ on an inbound element.
+  const wrapped = { ...created[1], text: "wrapped\nline" };
+  const out = applyUpdate(wrapped, { fontSize: 24 }, lookupIn(created));
+  const next = out.find((e) => e.id === wrapped.id)!;
+  assert.equal(next.originalText, "wrapped line", "a font-size change leaves the typed text alone");
+  assert.equal(next.text, "wrapped\nline");
+});
+
+test("a label measured at its own font size, and an empty one, keep their metrics", () => {
+  const { created } = buildElements(
+    [{ type: "rectangle", id: "r", x: 0, y: 0, width: 400, height: 200, label: "API", fontSize: 30 }],
+    ctx(),
+  );
+  const label = created[1];
+  assert.equal(label.fontSize, 30);
+  const out = applyUpdate(label, { text: "abc" }, lookupIn(created));
+  const next = out.find((e) => e.id === label.id)!;
+  assert.deepEqual({ width: next.width, height: next.height }, measureText("abc", 30), "measured at 30, not the default");
+
+  const blank = { ...label, text: undefined } as ExcalidrawElement;
+  const cleared = applyUpdate(blank, { fontSize: 30 }, lookupIn(created));
+  const empty = cleared.find((e) => e.id === label.id)!;
+  assert.deepEqual({ width: empty.width, height: empty.height }, measureText("", 30), "a missing text measures as empty");
+});
+
+test("an explicit width or height alone suppresses the re-measure", () => {
+  const { created } = buildElements(
+    [{ type: "rectangle", id: "r", x: 0, y: 0, width: 400, height: 200, label: "API" }],
+    ctx(),
+  );
+  const label = created[1];
+  const wide = applyUpdate(label, { text: "a much longer label", width: 300 }, lookupIn(created));
+  const w = wide.find((e) => e.id === label.id)!;
+  assert.equal(w.width, 300);
+  assert.equal(w.height, label.height, "the height the caller did not give is left as it was");
+
+  const tall = applyUpdate(label, { text: "a much longer label", height: 99 }, lookupIn(created));
+  const h = tall.find((e) => e.id === label.id)!;
+  assert.equal(h.height, 99);
+  assert.equal(h.width, label.width);
+});
+
+test("a container narrower than its label widens to fit", () => {
+  const { created } = buildElements(
+    [{ type: "rectangle", id: "r", x: 0, y: 0, width: 50, height: 200, label: "API gateway" }],
+    ctx(),
+  );
+  const [rect, label] = created;
+  assert.equal(rect.width, label.width + LABEL_PADDING, "grown to the label plus the padding");
+  assert.equal(rect.height, 200, "the height already fitted and is untouched");
+  assert.equal(label.x, rect.x + (rect.width - label.width) / 2);
+});
+
+test("a label bound to a line re-centres without resizing the line", () => {
+  const { created } = buildElements(
+    [{ type: "line", id: "ln", points: [[0, 0], [20, 0]], label: "a long line label" }],
+    ctx(),
+  );
+  const line = created.find((e) => e.id === "ln")!;
+  const label = created.find((e) => e.containerId === "ln")!;
+  const laid = layoutBoundLabel(line, label);
+  assert.equal(laid.container.width, line.width, "a line's box comes from its points");
+  assert.equal(laid.container.height, line.height);
 });
