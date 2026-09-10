@@ -10,7 +10,8 @@ function status(over: Partial<RoomStatus> = {}): RoomStatus {
     connected: true,
     roomId: "room1",
     link: "https://excalidraw.com/#room=room1,0123456789abcdefghijkl",
-    peers: [{ socketId: "sock-1", username: "Ada" }],
+    handle: "kt",
+    peers: [{ socketId: "sock-1", username: "Ada", kind: "browser" }],
     elementCount: 3,
     deletedCount: 0,
     sceneVersion: 120,
@@ -43,7 +44,7 @@ test("payload reports connection, scene version, peers and pending mentions", ()
 });
 
 test("a peer with no username is named by its socket id", () => {
-  const payload = buildPollPayload(state({ status: status({ peers: [{ socketId: "sock-1", username: null }] }) }));
+  const payload = buildPollPayload(state({ status: status({ peers: [{ socketId: "sock-1", username: null, kind: "browser" }] }) }));
   assert.deepEqual(payload.peers, ["sock-1"]);
 });
 
@@ -77,7 +78,7 @@ test("text stays under the limit with ten pending mentions and eight peers", () 
   const pending = Array.from({ length: 10 }, (_, i) =>
     mention(`element-id-${i}-abcdefghij`, `@claude please redraw the whole left hand column, note ${i}`),
   );
-  const peers = Array.from({ length: 8 }, (_, i) => ({ socketId: `sock-${i}`, username: `Collaborator ${i}` }));
+  const peers = Array.from({ length: 8 }, (_, i) => ({ socketId: `sock-${i}`, username: `Collaborator ${i}`, kind: "browser" as const }));
   const payload = buildPollPayload(state({ status: status({ peers }), pending }), 3);
   const out = pollBody(payload);
   assert.ok(out.length < POLL_TEXT_LIMIT, `expected under ${POLL_TEXT_LIMIT} characters, got ${out.length}`);
@@ -105,7 +106,7 @@ test("newlines in mention text collapse to one line", () => {
 });
 
 test("peer names are sacrificed before mention text", () => {
-  const peers = Array.from({ length: 6 }, (_, i) => ({ socketId: `sock-${i}`, username: `Collaborator number ${i}` }));
+  const peers = Array.from({ length: 6 }, (_, i) => ({ socketId: `sock-${i}`, username: `Collaborator number ${i}`, kind: "browser" as const }));
   const note = "@claude move the queue box above the worker";
   const payload = buildPollPayload(state({ status: status({ peers }), pending: [mention("n1", note)] }));
   assert.equal(payload.pendingMentions[0].text, note);
