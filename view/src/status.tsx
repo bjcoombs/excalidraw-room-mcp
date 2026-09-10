@@ -78,6 +78,17 @@ function AnswerButton({ count, refused, onAnswer }: { count: number; refused: bo
   );
 }
 
+/**
+ * A menu action's one-line result. Its own component for the reason
+ * AnswerButton and OpenControl are: the bar's function is already at the
+ * complexity ceiling the lint config sets, and a conditional piece of it
+ * belongs beside the others rather than inside the footer.
+ */
+function Hint({ text }: { text?: string | null }) {
+  if (!text) return null;
+  return <span className="status-hint">{text}</span>;
+}
+
 /** The way out to the browser, or the link as text where the host refused it. */
 function OpenControl({ href, linkBlocked, onOpen }: { href: string | null; linkBlocked: boolean; onOpen: () => void }) {
   if (!href) return null;
@@ -109,6 +120,13 @@ export interface StatusBarProps {
   linkBlocked: boolean;
   /** True once the host has refused an announcement, which puts the refusal next to the button. */
   announcementRefused?: boolean;
+  /**
+   * The last menu action's one-line result - a snapshot sent, copied to the
+   * clipboard, or refused everywhere. Null when there is nothing to say. The
+   * menu has no surface of its own once it closes, so this line is where its
+   * actions report.
+   */
+  hint?: string | null;
   onOpen: () => void;
   onRefresh: () => void;
   /** Send the announcement for everything pending. The only path to `ui/message` in this view. */
@@ -123,6 +141,7 @@ export function StatusBar({
   pollingAvailable,
   linkBlocked,
   announcementRefused = false,
+  hint,
   onOpen,
   onRefresh,
   onAnswer,
@@ -162,6 +181,7 @@ export function StatusBar({
         </>
       ) : null}
       <AnswerButton count={payload?.mentions.length ?? 0} refused={announcementRefused} onAnswer={onAnswer} />
+      <Hint text={hint} />
       {error ? <span className="status-error">last error: {error}</span> : null}
       <OpenControl href={href} linkBlocked={linkBlocked} onOpen={onOpen} />
     </footer>

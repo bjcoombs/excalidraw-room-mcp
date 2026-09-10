@@ -40,6 +40,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { sendAnnouncement } from "./announce.js";
 import { boundsChanged, FIT_PADDING, sceneBounds, type SceneBounds } from "./bounds.js";
 import { highlightElements } from "./highlights.js";
+import { RoomMenu } from "./menu-excalidraw.js";
 import { envelopeShape, isNotInRoom, linkFromSummary, parseResult, resultText, roomLink, sceneSignature, type ShowRoomPayload } from "./payload.js";
 import { canvasElements } from "./scene.js";
 import { openInBrowser, StatusBar } from "./status.js";
@@ -63,6 +64,8 @@ export function RoomView({ app }: { app: App }) {
   const [linkBlocked, setLinkBlocked] = useState(false);
   /** True once the host has refused an announcement, which the bar says next to the button. */
   const [announcementRefused, setAnnouncementRefused] = useState(false);
+  /** The last menu action's one-line result, shown in the bar. Null before the first one. */
+  const [hint, setHint] = useState<string | null>(null);
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
   /**
    * True while an announcement is in flight. A `sendMessage` round trip can
@@ -331,7 +334,13 @@ export function RoomView({ app }: { app: App }) {
           viewModeEnabled
           zenModeEnabled
           UIOptions={{ canvasActions: { toggleTheme: false } }}
-        />
+        >
+          {/* The room's own menu, in place of Excalidraw's editor menu. A
+              child of Excalidraw is how the package takes a replacement, and
+              the menu reads the canvas through the API recorded above - from a
+              click, never from a render. */}
+          <RoomMenu app={app} api={() => api.current} link={roomLink(payload?.link ?? null)} onHint={setHint} onOpen={open} />
+        </Excalidraw>
       </div>
       <StatusBar
         payload={payload}
@@ -341,6 +350,7 @@ export function RoomView({ app }: { app: App }) {
         pollingAvailable={pollingAvailable}
         linkBlocked={linkBlocked}
         announcementRefused={announcementRefused}
+        hint={hint}
         onOpen={open}
         onRefresh={() => void refresh()}
         onAnswer={answer}
