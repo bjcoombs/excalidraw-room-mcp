@@ -514,6 +514,7 @@ function pollStatus() {
     roomId: "room1",
     link: "https://excalidraw.com/#room=room1,0123456789abcdefghijkl",
     handle: "kt",
+    nearbyRadius: 250,
     peers: [],
     elementCount: 1,
     deletedCount: 0,

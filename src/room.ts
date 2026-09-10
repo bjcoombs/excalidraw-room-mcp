@@ -33,7 +33,7 @@ import { decryptJson, encryptJson, generateRoomId, generateRoomKey } from "./cry
 import { defaultHandle, isValidHandle, uniqueHandle } from "./handle.js";
 import type { ExcalidrawElement } from "./elements.js";
 import { loadScene, saveScene, SceneConflictError } from "./firebase.js";
-import { findMentions, isMentionText, type HandledVersions, type Mention } from "./mentions.js";
+import { DEFAULT_NEARBY_RADIUS, findMentions, isMentionText, type HandledVersions, type Mention } from "./mentions.js";
 import { orderByIndex, reconcile, sceneVersion } from "./reconcile.js";
 
 export const DEFAULT_SERVER_URL = "https://oss-collab.excalidraw.com";
@@ -73,6 +73,8 @@ export interface RoomStatus {
   roomId: string | null;
   link: string | null;
   handle: string | null;
+  /** The room's neighbourhood radius, in canvas px. */
+  nearbyRadius: number;
   peers: RoomPeer[];
   elementCount: number;
   deletedCount: number;
@@ -95,6 +97,12 @@ export class RoomClient extends EventEmitter {
   private desiredHandle: string = defaultHandle();
   /** The handle actually taken in this room; null until we are in one. */
   private currentHandle: string | null = null;
+  /**
+   * How far a neighbourhood query reaches in this room, in canvas px. One
+   * number for the room, so the layout a placement chooses and the context a
+   * mention pulls in are measured with the same tape.
+   */
+  private roomRadius: number = DEFAULT_NEARBY_RADIUS;
   private presenceTimer: NodeJS.Timeout | null = null;
   private firstInRoom = false;
   private lastRemoteUpdate: number | null = null;
@@ -128,6 +136,11 @@ export class RoomClient extends EventEmitter {
     return this.currentHandle;
   }
 
+  /** The neighbourhood radius agreed for this room, for the other tools. */
+  get nearbyRadius(): number {
+    return this.roomRadius;
+  }
+
   status(): RoomStatus {
     const all = [...this.elements.values()];
     return {
@@ -135,6 +148,7 @@ export class RoomClient extends EventEmitter {
       roomId: this.roomId,
       link: this.link,
       handle: this.currentHandle,
+      nearbyRadius: this.roomRadius,
       peers: [...this.peers.entries()].map(([socketId, peer]) => ({
         socketId,
         username: peer.username,
@@ -172,6 +186,8 @@ export class RoomClient extends EventEmitter {
       /** Name to present in the room. Invalid handles are refused here. */
       handle?: string;
       handleWaitMs?: number;
+      /** Neighbourhood radius for this room, in canvas px. */
+      nearbyRadius?: number;
     } = {},
   ): Promise<RoomStatus> {
     if (opts.handle !== undefined && !isValidHandle(opts.handle)) {
@@ -188,6 +204,7 @@ export class RoomClient extends EventEmitter {
     this.storedUpdateTime = null;
     this.desiredHandle = opts.handle ?? defaultHandle();
     this.currentHandle = null;
+    this.roomRadius = opts.nearbyRadius ?? DEFAULT_NEARBY_RADIUS;
     this.firstInRoom = false;
 
     // The public relay rejects handshakes without a browser Origin (400 on

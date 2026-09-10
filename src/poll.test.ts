@@ -11,6 +11,7 @@ function status(over: Partial<RoomStatus> = {}): RoomStatus {
     roomId: "room1",
     link: "https://excalidraw.com/#room=room1,0123456789abcdefghijkl",
     handle: "kt",
+    nearbyRadius: 250,
     peers: [{ socketId: "sock-1", username: "Ada", kind: "browser" }],
     elementCount: 3,
     deletedCount: 0,

@@ -8,7 +8,7 @@ import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { applyUpdate, buildElements, bump, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
+import { applyUpdate, buildElements, bump, randomId, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
 import { defaultHandle, isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
@@ -38,6 +38,19 @@ import {
   type PreviousLine,
 } from "./mentions.js";
 import { openRoom } from "./open.js";
+import {
+  CLUSTER_CUSTOM_DATA_KEY,
+  DEFAULT_GAP,
+  SIDES,
+  integralSize,
+  nearRadius,
+  place,
+  placementLines,
+  reservedElement,
+  specSize,
+  type PlacedSpec,
+  type PlacementResult,
+} from "./placement.js";
 import { buildPollPayload, pollText } from "./poll.js";
 import { RoomClient } from "./room.js";
 import { selectElements, unknownIdsText } from "./scene.js";
@@ -165,6 +178,37 @@ const point = z
   .length(2)
   .describe("An [x, y] pair.");
 
+/**
+ * Where to put the element, instead of where. Given `place`, the server finds
+ * a free slot from the live scene and the caller's x and y are not read:
+ * asking for a slot and naming coordinates are alternatives, and honouring
+ * both would put the element somewhere neither asked for.
+ */
+const placeSchema = z
+  .object({
+    near: z.string().optional().describe("Id of the element to sit beside. The slot is the first free one on the chosen side."),
+    cluster: z
+      .string()
+      .optional()
+      .describe(
+        "Id of an element whose cluster to join: its group, its frame, or the nodes already placed in it. The slot search fills the cluster's footprint before growing it, and the result says when the cluster no longer fits inside the room's neighbourhood radius.",
+      ),
+    side: z
+      .enum(SIDES)
+      .optional()
+      .describe("Which side of the anchor to take, or 'auto' (the default) for the nearest free side."),
+    gap: z.number().min(0).optional().describe(`Space left around the element, in canvas px. ${DEFAULT_GAP} by default.`),
+    newCluster: z
+      .boolean()
+      .optional()
+      .describe(
+        "Start a separate cluster: the slot is more than the room's neighbourhood radius clear of the anchor's cluster, so a mention written on one does not pull in the other. Needs near.",
+      ),
+  })
+  .strict()
+  .optional()
+  .describe("Let the server choose the coordinates. Given this, x and y are ignored.");
+
 const elementSpec = z
   .object({
     type: z.enum(["rectangle", "ellipse", "diamond", "text", "arrow", "line", "freedraw"]),
@@ -190,6 +234,7 @@ const elementSpec = z
     endArrowhead: z.string().nullable().optional(),
     roughness: z.number().optional(),
     opacity: z.number().optional(),
+    place: placeSchema,
   })
   .strict();
 
@@ -230,6 +275,19 @@ const handleSchema = z
     `Name to appear as in the room: lowercase letters, digits and hyphens, 1 to ${MAX_HANDLE_LENGTH} characters. Made unique against the agents already in the room by appending -2, -3, and the result text states the handle taken. Defaults to ${defaultHandle()}.`,
   );
 
+/**
+ * The room's neighbourhood radius. One number decides how far a mention
+ * reaches for context and how far apart placement keeps clusters, so it is
+ * agreed once on join rather than passed per call.
+ */
+const nearbyRadiusSchema = z
+  .number()
+  .min(0)
+  .optional()
+  .describe(
+    `How far a neighbourhood query reaches around a mention, in canvas px, and the distance placement keeps between clusters. ${DEFAULT_NEARBY_RADIUS} by default; room_status reports it, and list_mentions, wait_for_mention, show_room, read_scene near and snapshot_scene near use it when they are given no radius of their own.`,
+  );
+
 /** A refusal naming the handle, or null when there is nothing to refuse. */
 function handleRefusal(handle: string | undefined): string | null {
   if (handle === undefined || isValidHandle(handle)) return null;
@@ -245,6 +303,7 @@ function statusText(): string {
     `connected: ${s.connected}`,
     `room: ${s.link ?? "-"}`,
     `handle: ${s.handle ?? "-"}`,
+    `nearbyRadius: ${s.nearbyRadius}`,
     `peers: ${peers}`,
     `elements: ${s.elementCount} (${s.deletedCount} deleted)`,
     `sceneVersion: ${s.sceneVersion}`,
@@ -265,13 +324,13 @@ server.registerTool(
   {
     description:
       "Create a new empty live-collaboration room, join it, and return the excalidraw.com link for a person to open. The link contains the encryption key; share it only with people who should see the drawing. The result states the handle this server took in the room.",
-    inputSchema: { handle: handleSchema },
+    inputSchema: { handle: handleSchema, nearbyRadius: nearbyRadiusSchema },
   },
-  async ({ handle }) => {
+  async ({ handle, nearbyRadius }) => {
     const refusal = handleRefusal(handle);
     if (refusal) return errorText(refusal);
     const link = await RoomClient.createLink();
-    await room.join(link, { initTimeoutMs: 1500, handle });
+    await room.join(link, { initTimeoutMs: 1500, handle, nearbyRadius });
     return text(`${link}\n\n${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
@@ -284,14 +343,15 @@ server.registerTool(
     inputSchema: {
       link: z.string().describe("Collaboration link, e.g. https://excalidraw.com/#room=abc...,key..."),
       handle: handleSchema,
+      nearbyRadius: nearbyRadiusSchema,
       serverUrl: z.string().optional().describe("Relay URL. Defaults to excalidraw.com's public relay."),
       origin: z.string().optional().describe("Origin header to present to the relay. Defaults to https://excalidraw.com, which the public relay requires."),
     },
   },
-  async ({ link, serverUrl, origin, handle }) => {
+  async ({ link, serverUrl, origin, handle, nearbyRadius }) => {
     const refusal = handleRefusal(handle);
     if (refusal) return errorText(refusal);
-    await room.join(link, { serverUrl, origin, handle });
+    await room.join(link, { serverUrl, origin, handle, nearbyRadius });
     return text(`${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
@@ -311,7 +371,7 @@ registerAppTool(
         .describe(
           "Collaboration link to join first if this server is in no room, or in a different one. The canvas view sends the link it was shown, because some hosts route the view's calls to a second server process that has joined nothing. Leave it unset: the model's own calls should use the room already joined.",
         ),
-      radius: z.number().min(0).default(DEFAULT_NEARBY_RADIUS).describe("How far around each mention to look for related elements, in canvas px."),
+      radius: z.number().min(0).optional().describe("How far around each mention to look for related elements, in canvas px. Defaults to the room's nearbyRadius."),
       include: z
         .enum(["summary", "json"])
         .default("summary")
@@ -326,7 +386,7 @@ registerAppTool(
     if (!room.isConnected) return canvasResult(error ? `${NOT_IN_ROOM_TEXT}\n${error}` : NOT_IN_ROOM_TEXT, true);
     const elements = room.getElements();
     const pending = pendingMentions(tag, elements);
-    const payload = buildShowRoomPayload(room.status(), elements, pending, radius);
+    const payload = buildShowRoomPayload(room.status(), elements, pending, nearRadius(room.nearbyRadius, radius));
     // Text only, deliberately: a host that inlines structuredContent into the
     // model-visible transcript charges the reader for the element array on
     // every call, which is what a split payload was meant to avoid. The view
@@ -377,7 +437,7 @@ server.registerTool(
       near: z
         .object({
           id: z.string().describe("Element the neighbourhood is centred on."),
-          radius: z.number().describe("How far beyond that element's bounding box to reach."),
+          radius: z.number().min(0).optional().describe("How far beyond that element's bounding box to reach. Defaults to the room's nearbyRadius."),
         })
         .optional()
         .describe("Return the named element and everything within the radius of it."),
@@ -385,7 +445,10 @@ server.registerTool(
   },
   async ({ format, includeDeleted, ids, near }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
-    const { elements, unknownIds } = selectElements(room.getElements(includeDeleted), { ids, near });
+    const { elements, unknownIds } = selectElements(room.getElements(includeDeleted), {
+      ids,
+      near: near && { id: near.id, radius: nearRadius(room.nearbyRadius, near.radius) },
+    });
     const body =
       format === "json"
         ? JSON.stringify(elements)
@@ -409,7 +472,7 @@ server.registerTool(
       near: z
         .string()
         .optional()
-        .describe(`Element id to centre on: it and everything within ${DEFAULT_NEARBY_RADIUS} scene units of it are rendered.`),
+        .describe("Element id to centre on: it and everything within the room's nearbyRadius of it are rendered."),
       bbox: z
         .object({
           x: z.number(),
@@ -439,7 +502,15 @@ server.registerTool(
   },
   async ({ ids, near, bbox, scale, maxWidth, maxHeight }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
-    const snapshot = await snapshotScene(room.getElements(), { ids, near, bbox, scale, maxWidth, maxHeight });
+    const snapshot = await snapshotScene(room.getElements(), {
+      ids,
+      near,
+      nearRadius: room.nearbyRadius,
+      bbox,
+      scale,
+      maxWidth,
+      maxHeight,
+    });
     if (!snapshot.png) return text(snapshot.text);
     return {
       content: [
@@ -454,19 +525,53 @@ server.registerTool(
   "add_elements",
   {
     description:
-      "Add elements to the drawing from compact specs. Shapes take x, y, width, height and an optional label. Arrows take start/end element ids (edges are computed) or absolute points. Any element may take a link (a URL), which makes it clickable on the canvas. Later specs may reference ids of earlier specs in the same call.",
+      "Add elements to the drawing from compact specs. Shapes take x, y, width, height and an optional label. Arrows take start/end element ids (edges are computed) or absolute points. Any element may take a link (a URL), which makes it clickable on the canvas. Later specs may reference ids of earlier specs in the same call. Pass place instead of x and y to have the server find a free slot beside an element or inside a cluster, so two agents drawing at once never overlap; the result reports the coordinates it chose.",
     inputSchema: { elements: z.array(elementSpec).min(1) },
   },
   async ({ elements }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const specs = elements as PlacedSpec[];
+    // Placement runs before anything is built, spec by spec: each slot is
+    // found against the live scene plus the slots this call has already
+    // taken, or two specs placed against one anchor would be sent to the
+    // same free space.
+    const placements: { id: string; result: PlacementResult }[] = [];
+    const reserved: ExcalidrawElement[] = [];
+    for (const spec of specs) {
+      if (!spec.place) continue;
+      // An id is assigned now rather than by the builder: the result names
+      // the element whose coordinates it reports, and a cluster stamp has to
+      // find the built element again.
+      const id = spec.id ?? randomId();
+      spec.id = id;
+      const placed = place(spec.place, spec, {
+        elements: [...room.getElements(), ...reserved],
+        radius: room.nearbyRadius,
+      });
+      if (placed.refusal) return errorText(`${id}: ${placed.refusal}`);
+      spec.x = placed.x;
+      spec.y = placed.y;
+      reserved.push(reservedElement(id, spec.type, placed.x, placed.y, integralSize(specSize(spec))));
+      placements.push({ id, result: placed });
+    }
     const existing = new Map(room.getElements(true).map((e) => [e.id, e]));
-    const { created, updated } = buildElements(elements as ElementSpec[], {
+    const { created, updated } = buildElements(specs as ElementSpec[], {
       existing,
       lastIndex: room.lastIndex(),
     });
-    const result = await room.commit([...created, ...updated]);
-    const ids = created.map((e) => `${e.id} ${e.type}`).join("\n");
-    return text(`added ${created.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}\n${ids}`);
+    const clustered = created.map((el) => {
+      const key = placements.find((p) => p.id === el.id)?.result.clusterKey;
+      if (key === undefined) return el;
+      const current = el.customData as Record<string, unknown> | undefined;
+      return { ...el, customData: { ...current, [CLUSTER_CUSTOM_DATA_KEY]: key } };
+    });
+    const result = await room.commit([...clustered, ...updated]);
+    const lines = [
+      `added ${clustered.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}`,
+      ...clustered.map((e) => `${e.id} ${e.type}`),
+      ...placements.flatMap(({ id, result: placed }) => placementLines(id, placed)),
+    ];
+    return text(lines.join("\n"));
   },
 );
 
@@ -567,7 +672,7 @@ server.registerTool(
     inputSchema: {
       tag: z.string().default(DEFAULT_TAG),
       timeoutSeconds: z.number().min(1).max(600).default(60),
-      radius: z.number().min(0).default(250).describe("How far around the mention to look for related elements, in canvas px."),
+      radius: z.number().min(0).optional().describe("How far around the mention to look for related elements, in canvas px. Defaults to the room's nearbyRadius."),
       autoSeen: autoSeenSchema,
     },
   },
@@ -576,7 +681,7 @@ server.registerTool(
     const mention = await room.waitForMention(tag, handledMentions, { timeoutMs: timeoutSeconds * 1000 });
     if (!mention) return text(`no mention of ${tag} within ${timeoutSeconds}s`);
     const elements = room.getElements();
-    const out = mentionBlock(mention, elements, radius, {
+    const out = mentionBlock(mention, elements, nearRadius(room.nearbyRadius, radius), {
       previous: previousLineFor(mention.id, elements),
     });
     if (autoSeen) await commitSeen(mention);
@@ -590,7 +695,7 @@ server.registerTool(
     description: "List every pending (unacknowledged) mention of the tag on the canvas right now, each with its nearby elements. Mentions surfaced here are marked seen on the canvas as wait_for_mention does; pass autoSeen false to look without touching the drawing. Pass includeHandled true to also list the notes this server acknowledged and left on the canvas, marked handled, so they can be found and cleaned up.",
     inputSchema: {
       tag: z.string().default(DEFAULT_TAG),
-      radius: z.number().min(0).default(250),
+      radius: z.number().min(0).optional().describe("How far around each mention to look for related elements, in canvas px. Defaults to the room's nearbyRadius."),
       autoSeen: autoSeenSchema,
       includeHandled: z
         .boolean()
@@ -609,11 +714,12 @@ server.registerTool(
     // reading top to bottom should meet the request before the housekeeping.
     const handled = includeHandled ? handledMentionsOnCanvas(tag, all) : [];
     if (!pending.length && !handled.length) return text(`no pending mentions of ${tag}`);
+    const reach = nearRadius(room.nearbyRadius, radius);
     const blocks = [
       ...pending.map((m) =>
-        mentionBlock(m, all, radius, { previous: previousLineFor(m.id, all) }),
+        mentionBlock(m, all, reach, { previous: previousLineFor(m.id, all) }),
       ),
-      ...handled.map((m) => mentionBlock(m, all, radius, { handled: true })),
+      ...handled.map((m) => mentionBlock(m, all, reach, { handled: true })),
     ];
     const out = blocks.join("\n\n---\n\n");
     if (autoSeen) {
