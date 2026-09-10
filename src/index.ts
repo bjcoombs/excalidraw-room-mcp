@@ -24,6 +24,7 @@ import { forcedLine, protectedBy, refusalLines, type Refusal } from "./guard.js"
 import { defaultHandle, isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
+  answerSchema,
   buildAttributedLine,
   BROADCAST_TAG,
   DEFAULT_NEARBY_RADIUS,
@@ -37,13 +38,21 @@ import {
   markSeen,
   acknowledgementText,
   planAcknowledgement,
+  markAnswered,
+  MAX_ANSWER_LENGTH,
   MAX_REPLY_LENGTH,
+  MENTION_POLICY_HOSTING_RULE,
   MENTION_STATUSES,
+  MentionPolicy,
+  newGroupId,
+  policyLine,
   previousLine,
+  scopeRuleFor,
   replySchema,
   resolveTags,
   statusSchema,
   visibleMentions,
+  withGroup,
   withRequestPreamble,
   withScopeRule,
   type HandledVersions,
@@ -104,9 +113,17 @@ let handledMentions: HandledVersions = new Map();
  * has to keep reporting it. Only acknowledge_mention closes a mention.
  */
 let acknowledgedMentions: HandledVersions = new Map();
+/**
+ * Whether this session answers knowledge questions on the canvas. In memory
+ * beside the two handled maps, off until a person asks for it in chat, and
+ * reset by the same join that clears them: a permission granted for one room is
+ * not a permission for the next.
+ */
+const mentionPolicy = new MentionPolicy();
 room.on("joined", () => {
   handledMentions = new Map();
   acknowledgedMentions = new Map();
+  mentionPolicy.reset();
 });
 
 /**
@@ -406,6 +423,7 @@ function statusText(): string {
     `room: ${s.link ?? "-"}`,
     `handle: ${s.handle ?? "-"}`,
     `nearbyRadius: ${s.nearbyRadius}`,
+    policyLine(mentionPolicy),
     `peers: ${peers}`,
     `elements: ${s.elementCount} (${s.deletedCount} deleted)`,
     `sceneVersion: ${s.sceneVersion}`,
@@ -521,7 +539,7 @@ server.registerTool(
   "room_status",
   {
     description:
-      "Connection state, the handle this server took in the room, the peers with their handles and whether each is an agent or a browser, and scene counters for the current room.",
+      "Connection state, the handle this server took in the room, the session's answerQuestions policy, the peers with their handles and whether each is an agent or a browser, and scene counters for the current room.",
     inputSchema: {},
   },
   async () => text(statusText()),
@@ -824,7 +842,7 @@ server.registerTool(
       previous: previousLineFor(mention.id, elements),
     });
     if (autoSeen) await commitSeen(mention);
-    return text(withRequestPreamble(withScopeRule(out)));
+    return text(withRequestPreamble(withScopeRule(out, mentionPolicy)));
   },
 );
 
@@ -868,7 +886,7 @@ server.registerTool(
     if (autoSeen) {
       for (const m of pending) await commitSeen(m);
     }
-    return text(withRequestPreamble(withScopeRule(out)));
+    return text(withRequestPreamble(withScopeRule(out, mentionPolicy)));
   },
 );
 
@@ -877,7 +895,7 @@ server.registerTool(
   {
     description:
       "Mark a mention as handled so it is not returned again. By default the text element is removed from the canvas (soft-deleted): the seen marker already told the person it landed and the drawing is the evidence it was done. Say what you did in chat, not on the canvas - artefacts of the work belong there, prose about it does not. " +
-      `Pass status ${MENTION_STATUSES.map((v) => `"${v}"`).join(" or ")} to keep the element instead, greyed with one check mark, and draw that status under it on its own grey line reading "claude: <status>" - use it when the person has to read the outcome where they wrote the request. Pass keep true to keep it greyed with a check mark and draw nothing. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: your question is drawn on the same line under it, as "claude: <question>", so the person answers where they asked. Whatever you were given, the person's own words are left exactly as they wrote them. status and reply exclude each other. Editing the text makes the mention pending again and your question comes back with it.`,
+      `Pass status ${MENTION_STATUSES.map((v) => `"${v}"`).join(" or ")} to keep the element instead, greyed with one check mark, and draw that status under it on its own grey line reading "claude: <status>" - use it when the person has to read the outcome where they wrote the request. Pass keep true to keep it greyed with a check mark and draw nothing. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: your question is drawn on the same line under it, as "claude: <question>", so the person answers where they asked. Pass answer (up to ${MAX_ANSWER_LENGTH} characters) for a knowledge question, while set_mention_policy has answering on: the question stays in its own colour with a check mark as the heading of your answer, which is drawn on the line under it, and source puts a public URL behind it. Whatever you were given, the person's own words are left exactly as they wrote them. status, reply and answer exclude each other. Editing the text makes the mention pending again and what you wrote comes back with it.`,
     inputSchema: z
       .object({
         id: z.string().describe("The mention's element id from wait_for_mention or list_mentions."),
@@ -892,47 +910,95 @@ server.registerTool(
           .describe(
             "The outcome to draw underneath, attributed to you. \"out of scope\" for anything that is not a change to the drawing; \"see chat\" for work whose account is in the chat reply. Excludes reply.",
           ),
+        answer: answerSchema
+          .optional()
+          .describe(
+            `What the question asks, in at most two sentences and ${MAX_ANSWER_LENGTH} characters, drawn on the line underneath while set_mention_policy has answerQuestions on. Built from the words above and public knowledge only, never from the conversation or anything seen outside the room. ${MENTION_POLICY_HOSTING_RULE} Excludes status and reply; put the depth behind source rather than writing more here.`,
+          ),
+        source: z
+          .string()
+          .url()
+          .optional()
+          .describe("Public URL the answer cites. It becomes the link on the answer line, which is where depth belongs. Needs answer."),
       })
       // Strict on purpose: `note` was this tool's free-text status until 0.7.0,
       // and a caller still passing it must be told the argument is gone rather
       // than have its words silently dropped.
       .strict(),
   },
-  async ({ id, keep, reply, status }) => {
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
-    // Decided before anything on the canvas is touched: a refusal must leave
-    // the note exactly as the person wrote it.
-    const plan = planAcknowledgement({ keep, reply, status }, resolveTags(undefined, room.handle), room.handle);
+  async ({ id, keep, reply, status, answer, source }) => {
+    // Decided before anything on the canvas is touched, and before the room is
+    // even consulted: a refusal must leave the note exactly as the person wrote
+    // it, and arguments that exclude each other do so whatever the connection
+    // state is.
+    const plan = planAcknowledgement(
+      { keep, reply, status, answer, source },
+      resolveTags(undefined, room.handle),
+      room.handle,
+    );
     if (plan.refusal) return errorText(plan.refusal);
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     const current = room.getElement(id);
     if (!current || current.type !== "text") return text(`no text element with id ${id}`);
     // Either way the post-bump version is recorded, so our own edit never
-    // reads back as a new mention.
-    const updated = plan.kept ? markAcknowledged(current) : markRemoved(current);
+    // reads back as a new mention. An answered question keeps its own colour:
+    // it is the heading of the line under it, not spent work.
+    let updated = plan.answers ? markAnswered(current) : plan.kept ? markAcknowledged(current) : markRemoved(current);
     // Whatever this acknowledgement does, whatever the last one wrote is spent:
     // the old attributed line goes, replaced when this one writes its own.
     const stale = findAttributedLine(room.getElements(), id);
-    const changed: ExcalidrawElement[] = [updated];
+    const changed: ExcalidrawElement[] = [];
     if (stale) changed.push(markRemoved(stale));
     if (plan.line !== undefined) {
+      // The note and its line are one thing on the canvas, so they are put in
+      // a fresh group: dragging the question somewhere else takes the words
+      // under it along. A new id each time, because the old line is going.
+      const group = newGroupId();
+      updated = withGroup(updated, group);
       // Placed under the note as it now reads: the check mark has already been
       // written, so `updated` carries the height the line has to clear.
       changed.push(
-        buildAttributedLine(
-          updated,
-          plan.line,
-          {
-            existing: new Map(room.getElements(true).map((e) => [e.id, e])),
-            lastIndex: room.lastIndex(),
-          },
-          room.handle,
+        withGroup(
+          buildAttributedLine(
+            updated,
+            plan.line,
+            {
+              existing: new Map(room.getElements(true).map((e) => [e.id, e])),
+              lastIndex: room.lastIndex(),
+            },
+            room.handle,
+            { link: plan.link, answer: plan.answers },
+          ),
+          group,
         ),
       );
     }
+    // The note goes in first so a reader of the commit sees the heading before
+    // the line, and after the grouping so it carries the group id.
+    changed.unshift(updated);
     const result = await room.commit(changed);
     handledMentions.set(id, updated.version);
     acknowledgedMentions.set(id, updated.version);
     return text(`${acknowledgementText(id, plan)}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
+  },
+);
+
+server.registerTool(
+  "set_mention_policy",
+  {
+    description:
+      "Turn knowledge answers on or off for this session. With answerQuestions true, a mention that asks a question - a definition, a comparison, a critique of what is on the canvas - may be answered on the canvas with acknowledge_mention answer instead of being acknowledged \"out of scope\"; reading the person's accounts, sending or posting anything, and acting outside the room stay out of scope either way, and an answer is built from the mention's own words and public knowledge only, never from the conversation. " +
+      `${MENTION_POLICY_HOSTING_RULE} ` +
+      "The flag is held in memory only: it is off when this server starts, a person turns it on by asking in chat, and joining a room or restarting turns it off again. Nothing is written to disk, so this tool call is the only record that it was asked for. room_status and poll_room report answerQuestions.",
+    inputSchema: {
+      answerQuestions: z
+        .boolean()
+        .describe("True to answer knowledge questions on the canvas for the rest of this session; false to go back to drawing requests only."),
+    },
+  },
+  async ({ answerQuestions }) => {
+    mentionPolicy.set(answerQuestions);
+    return text(`${policyLine(mentionPolicy)}\n\n${scopeRuleFor(mentionPolicy)}`);
   },
 );
 
@@ -950,7 +1016,14 @@ server.registerTool(
   async ({ sinceVersion, tag, answerAgentMentions }) => {
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     const pending = pendingMentions(resolveTags(tag, room.handle), room.getElements(), answerAgentMentions);
-    return text(pollText(buildPollPayload({ status: room.status(), pending }, sinceVersion)));
+    return text(
+      pollText(
+        buildPollPayload(
+          { status: room.status(), pending, answerQuestions: mentionPolicy.answerQuestions },
+          sinceVersion,
+        ),
+      ),
+    );
   },
 );
 

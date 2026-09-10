@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
-import { MENTION_SCOPE_RULE, STATE_REQUESTS_LINE } from "./mentions.js";
+import { MAX_ANSWER_LENGTH, MENTION_SCOPE_RULE, MENTION_SCOPE_RULE_ANSWERING, STATE_REQUESTS_LINE } from "./mentions.js";
 
 test("instructions name the listen loop and both of its tools", () => {
   assert.match(SERVER_INSTRUCTIONS, /wait_for_mention/);
@@ -65,4 +65,24 @@ test("instructions carry the scope rule verbatim, and it names the status not a 
   // model is told at initialize may still point at it.
   assert.ok(!SERVER_INSTRUCTIONS.includes("with the note"), SERVER_INSTRUCTIONS);
   assert.ok(SERVER_INSTRUCTIONS.includes('status "out of scope" or "see chat"'), SERVER_INSTRUCTIONS);
+});
+
+test("instructions carry both forms of the scope rule and say which applies when", () => {
+  // Both travel at initialize, because the policy can be turned on mid-session
+  // and nothing re-sends these.
+  assert.ok(SERVER_INSTRUCTIONS.includes(MENTION_SCOPE_RULE), SERVER_INSTRUCTIONS);
+  assert.ok(SERVER_INSTRUCTIONS.includes(MENTION_SCOPE_RULE_ANSWERING), SERVER_INSTRUCTIONS);
+  // The drawing-only rule first, then the note saying which applies, then the
+  // answering form: a reader meeting the second one has to know it is
+  // conditional before reading it.
+  assert.ok(
+    SERVER_INSTRUCTIONS.indexOf(MENTION_SCOPE_RULE) < SERVER_INSTRUCTIONS.indexOf(MENTION_SCOPE_RULE_ANSWERING),
+    SERVER_INSTRUCTIONS,
+  );
+  assert.match(SERVER_INSTRUCTIONS, /set_mention_policy \{answerQuestions: true\} is on/);
+  assert.match(SERVER_INSTRUCTIONS, /never write client-identifiable/);
+  // And how to answer once it is on, with the cap and where depth goes.
+  assert.match(SERVER_INSTRUCTIONS, /acknowledge_mention answer/);
+  assert.ok(SERVER_INSTRUCTIONS.includes(String(MAX_ANSWER_LENGTH)), SERVER_INSTRUCTIONS);
+  assert.match(SERVER_INSTRUCTIONS, /source/);
 });

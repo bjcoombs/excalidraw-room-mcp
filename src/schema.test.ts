@@ -114,7 +114,7 @@ test("snapshot_scene takes only the six selector and size arguments, none of the
   assert.match(snapshot.description ?? "", /overlap/);
 });
 
-test("acknowledge_mention takes id, keep, reply and status, and refuses anything else by name", async () => {
+test("acknowledge_mention takes id, keep, reply, status, answer and source, and refuses anything else by name", async () => {
   const ack = tools.find((t) => t.name === "acknowledge_mention");
   assert.ok(ack, "acknowledge_mention is not in tools/list");
   const schema = ack.inputSchema as {
@@ -122,7 +122,7 @@ test("acknowledge_mention takes id, keep, reply and status, and refuses anything
     required?: string[];
     additionalProperties?: boolean;
   };
-  assert.deepEqual(Object.keys(schema.properties).sort(), ["id", "keep", "reply", "status"]);
+  assert.deepEqual(Object.keys(schema.properties).sort(), ["answer", "id", "keep", "reply", "source", "status"]);
   assert.deepEqual(schema.properties.status.enum, ["out of scope", "see chat"]);
   assert.deepEqual(schema.required ?? [], ["id"]);
   // Strict, so `note` - the free-text status this tool took until 0.7.0 - is
@@ -133,6 +133,8 @@ test("acknowledge_mention takes id, keep, reply and status, and refuses anything
   // The description is what the model reads before it picks the argument, so
   // it names the status and no longer names the argument that is gone.
   assert.match(ack.description ?? "", /status/);
+  assert.match(ack.description ?? "", /answer/);
+  assert.match(ack.description ?? "", /source/);
   assert.ok(!/note/.test(ack.description ?? ""), ack.description);
 
   // Over stdio, both refusals come back as tool results the model can read,
@@ -148,4 +150,58 @@ test("acknowledge_mention takes id, keep, reply and status, and refuses anything
   assert.match(resultText(refusals.note), /note/);
   assert.equal(refusals.status.isError, true, resultText(refusals.status));
   assert.match(resultText(refusals.status), /status/);
+});
+
+/**
+ * Issue #89: the session policy and the answer outcome, over stdio, because
+ * that is where a host meets them. Nothing here needs the network: the policy
+ * is process state and every refusal is decided before the room is touched.
+ */
+test("set_mention_policy reports the flag, room_status prints it, and the answer refusals name both arguments", async () => {
+  const policy = tools.find((t) => t.name === "set_mention_policy");
+  assert.ok(policy, "set_mention_policy is not in tools/list");
+  const schema = policy.inputSchema as { properties: Record<string, unknown>; required?: string[] };
+  assert.deepEqual(Object.keys(schema.properties), ["answerQuestions"]);
+  assert.deepEqual(schema.required ?? [], ["answerQuestions"]);
+  // The description is the whole record that answering was asked for, so it
+  // carries the hosting statement and says the flag is never written down.
+  assert.match(policy.description ?? "", /never write client-identifiable/);
+  assert.match(policy.description ?? "", /memory/);
+
+  const seen = await use(async (client) => {
+    const call = async (name: string, args: Record<string, unknown>) =>
+      resultText((await client.callTool({ name, arguments: args })) as ToolResult);
+    const errored = async (name: string, args: Record<string, unknown>) =>
+      (await client.callTool({ name, arguments: args })) as ToolResult;
+    return {
+      before: await call("room_status", {}),
+      set: await call("set_mention_policy", { answerQuestions: true }),
+      after: await call("room_status", {}),
+      off: await call("set_mention_policy", { answerQuestions: false }),
+      offAfter: await call("room_status", {}),
+      withStatus: await errored("acknowledge_mention", { id: "q", answer: "x", status: "see chat" }),
+      withReply: await errored("acknowledge_mention", { id: "q", answer: "x", reply: "y" }),
+      tooLong: await errored("acknowledge_mention", { id: "q", answer: "x".repeat(401) }),
+    };
+  });
+
+  // Off at the start of a process, and room_status always carries the line.
+  assert.match(seen.before, /^answerQuestions: false$/m);
+  assert.match(seen.set, /^answerQuestions: true$/m);
+  assert.match(seen.after, /^answerQuestions: true$/m);
+  assert.match(seen.offAfter, /^answerQuestions: false$/m);
+  // Turning it on hands back the rule that now applies.
+  assert.match(seen.set, /knowledge questions answered on the canvas/);
+  assert.match(seen.set, /never write client-identifiable/);
+
+  // Each refusal is a result the model can read, and names both arguments.
+  assert.equal(seen.withStatus.isError, true, resultText(seen.withStatus));
+  assert.match(resultText(seen.withStatus), /answer/);
+  assert.match(resultText(seen.withStatus), /status/);
+  assert.equal(seen.withReply.isError, true, resultText(seen.withReply));
+  assert.match(resultText(seen.withReply), /answer/);
+  assert.match(resultText(seen.withReply), /reply/);
+  assert.equal(seen.tooLong.isError, true, resultText(seen.tooLong));
+  assert.match(resultText(seen.tooLong), /answer/);
+  assert.match(resultText(seen.tooLong), /400/);
 });

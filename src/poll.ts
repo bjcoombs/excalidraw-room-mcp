@@ -14,7 +14,7 @@
  * then entries in the mention list. `peerCount` and `pendingCount` always
  * report the true totals, so a shortened list is visible rather than silent.
  */
-import { MENTION_SCOPE_RULE, UNTRUSTED_CLOSE, UNTRUSTED_OPEN, type Mention } from "./mentions.js";
+import { scopeRuleFor, UNTRUSTED_CLOSE, UNTRUSTED_OPEN, type Mention } from "./mentions.js";
 import type { RoomStatus } from "./room.js";
 
 /**
@@ -28,10 +28,18 @@ export interface PollState {
   status: RoomStatus;
   /** Every mention not yet acknowledged, whether or not an agent has seen it. */
   pending: readonly Mention[];
+  /**
+   * Whether the session policy has knowledge answers on. Reported here as well
+   * as by room_status because poll_room is the call an agent makes inside a
+   * turn, and the rule that follows the counters depends on it.
+   */
+  answerQuestions: boolean;
 }
 
 export interface PollPayload {
   connected: boolean;
+  /** The session policy's answering flag, as set_mention_policy left it. */
+  answerQuestions: boolean;
   sceneVersion: number;
   peerCount: number;
   /** Peer names, shortened to fit the size bound; peerCount is the true total. */
@@ -81,6 +89,7 @@ function assemble(state: PollState, sinceVersion: number | undefined, detail: De
   const { status, pending } = state;
   return {
     connected: status.connected,
+    answerQuestions: state.answerQuestions,
     sceneVersion: status.sceneVersion,
     peerCount: status.peers.length,
     peers: status.peers.slice(0, detail.peerCap).map((p) => shorten(p.username ?? p.socketId, 24)),
@@ -119,7 +128,7 @@ export function pollBody(payload: PollPayload): string {
  * so it sits outside the bound rather than competing with the counters for it.
  */
 export function pollText(payload: PollPayload): string {
-  return `${pollBody(payload)}\n${MENTION_SCOPE_RULE}`;
+  return `${pollBody(payload)}\n${scopeRuleFor(payload)}`;
 }
 
 /**

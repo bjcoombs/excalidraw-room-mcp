@@ -27,7 +27,7 @@ function mention(id: string, text: string): Mention {
 }
 
 function state(over: Partial<PollState> = {}): PollState {
-  return { status: status(), pending: [], ...over };
+  return { status: status(), pending: [], answerQuestions: false, ...over };
 }
 
 test("payload reports connection, scene version, peers and pending mentions", () => {
@@ -35,6 +35,7 @@ test("payload reports connection, scene version, peers and pending mentions", ()
   const payload = buildPollPayload(s, undefined);
   assert.deepEqual(payload, {
     connected: true,
+    answerQuestions: false,
     sceneVersion: 120,
     peerCount: 1,
     peers: ["Ada"],
@@ -66,6 +67,7 @@ test("a disconnected room still reports a parseable payload", () => {
   );
   assert.deepEqual(payload, {
     connected: false,
+    answerQuestions: false,
     sceneVersion: 0,
     peerCount: 0,
     peers: [],
