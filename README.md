@@ -59,6 +59,8 @@ A status line along the bottom carries a **Refresh** button and says when the la
 
 Some hosts run the widget against their own copy of the server rather than the process the model is talking to - Claude Desktop routes the widget's tool calls to a second process - and one process holds one room, so that copy has joined nothing and every refresh would otherwise report "Not in a room". The widget therefore reads the room link out of the summary it was shown and passes it back with each call, and the server joins that room before answering. The room then has one more peer in it than there are people and agents; that peer is the widget.
 
+Hosts may cache the view HTML by resource URI and keep serving it across extension versions, so a rebuilt view can go unseen: the URI therefore carries the package version, which makes every release a distinct resource the host has to fetch. `open_room` is the reliable way to watch the canvas live - it opens the room on excalidraw.com in your default browser, where the drawing is the real thing rather than a host-rendered copy.
+
 The view is read-only: it never writes to the room. Editing happens on excalidraw.com. The header shows the connection state, the peer count and the element count, and carries an **Open on excalidraw.com** link to the room. Hosts without MCP Apps support get the same text results as before.
 
 ### Talk to it on the canvas
@@ -104,6 +106,7 @@ The listener runs until you stop it or until it escalates. A subagent's report r
 | `create_room` | Make a new empty room, join it, return the link to open. |
 | `join_room` | Join a room from its link. Loads the scene from a peer, or from the persisted copy if nobody else is there. |
 | `show_room` | The room summarised as text (link, connection state, peer and element counts, pending mentions with the ids around each), and in a host that supports MCP Apps the canvas rendered in the chat. The result is text only; the view fetches the payload itself. `include: "json"` puts the whole payload (link, connection state, peers, elements, mentions) in the text instead of the summary. |
+| `open_room` | Open the room on excalidraw.com in the default browser: the reliable way for a person to watch the canvas live. Returns the link with the connection state and the peer and element counts. `EXCALIDRAW_ROOM_NO_OPEN=1` returns the link without launching anything. |
 | `poll_room` | Lightweight state probe: connection state, scene version, peers, pending mention ids, and whether the scene changed since a version you pass. |
 | `room_status` | Connection state, peers, element counts. |
 | `read_scene` | The drawing as one line per element (default), or the full element JSON (compact). Freehand strokes come back as a sampled path so a scribble is legible. `ids` narrows the read to named elements; `near: {id, radius}` reads one element and its neighbourhood, so a check costs a few elements rather than the whole scene. |
@@ -190,7 +193,7 @@ EXCALIDRAW_ROOM_DEBUG=1 node dist/index.js # run with diagnostics on stderr
 
 Register the local build with a client by pointing it at `dist/index.js` in the clone, for example `claude mcp add excalidraw-room-dev -- node "$PWD/dist/index.js"`.
 
-The in-chat view is a separate Vite build under `view/` (paths relative to the repo root). It bundles `@excalidraw/excalidraw` into the single file `dist/view/canvas.html`, which `src/view.ts` serves as the MCP Apps resource. The Node server itself never imports that package.
+The in-chat view is a separate Vite build under `view/` (paths relative to the repo root). It bundles `@excalidraw/excalidraw` into the single file `dist/view/canvas.html`, which `src/view.ts` serves as the MCP Apps resource under a version-stamped `ui://` URI. The Node server itself never imports that package.
 
 Releases are tag-driven. Pushing a `v*` tag runs `.github/workflows/release.yml`, which creates the GitHub release with `excalidraw-room-mcp.mcpb` attached, and then, in a second job, publishes that tag to npm with a provenance attestation. The order is deliberate: the bundle is how a Claude Desktop user installs this server, so a failing publish cannot withhold it.
 
