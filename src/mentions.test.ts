@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildElements, bump, type ExcalidrawElement } from "./elements.js";
+import { buildElements, bump, summarise, type ElementSpec, type ExcalidrawElement } from "./elements.js";
 import { buildPollPayload, pollText } from "./poll.js";
 import {
   ACKNOWLEDGED_MARK,
@@ -36,6 +36,7 @@ import {
   markRemoved,
   markSeen,
   nearbyElements,
+  nearbyNeighbourhood,
   SEEN_MARKER,
   SEEN_STROKE,
   stripSeenMarker,
@@ -97,6 +98,162 @@ test("nearbyElements returns what sits around the mention, with bound labels, no
   assert.ok(!ids.includes("note"), "the mention itself is excluded");
   const apiLabel = els.find((e) => e.type === "text" && e.containerId === "api")!;
   assert.ok(ids.includes(apiLabel.id), "bound label of a nearby shape travels with it");
+});
+
+/**
+ * The neighbourhood fixture: a note beside cluster A, an arrow from A to a node
+ * in cluster B 1500 px away, a shape beside that node, a grouped pair straddling
+ * the radius, and a framed note in a third cluster. Every hop and every
+ * exclusion the one-hop rule has to make is expressible on this one scene.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/94
+ */
+const NEIGHBOURHOOD_SPECS: ElementSpec[] = [
+  { type: "rectangle", id: "a", x: 0, y: 0, width: 100, height: 100 },
+  { type: "rectangle", id: "b", x: 1500, y: 0, width: 100, height: 100 },
+  { type: "rectangle", id: "c", x: 1500, y: 300, width: 100, height: 100 },
+  { type: "arrow", id: "ar", start: "a", end: "b" },
+  { type: "text", id: "m", x: 0, y: 150, text: "@claude look" },
+  { type: "rectangle", id: "g1", x: 0, y: 330, width: 100, height: 100 },
+  { type: "rectangle", id: "g2", x: 1200, y: 330, width: 100, height: 100 },
+];
+
+/** A complete element from a partial one, for the shapes `buildElements` does not build. */
+function rawElement(props: Record<string, unknown> & { id: string; type: string }): ExcalidrawElement {
+  return {
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    angle: 0,
+    strokeColor: "#1e1e1e",
+    backgroundColor: "transparent",
+    fillStyle: "solid",
+    strokeWidth: 2,
+    strokeStyle: "solid",
+    roughness: 1,
+    opacity: 100,
+    groupIds: [],
+    frameId: null,
+    roundness: null,
+    seed: 7,
+    version: 1,
+    versionNonce: 1,
+    updated: 1,
+    isDeleted: false,
+    boundElements: null,
+    link: null,
+    locked: false,
+    ...props,
+  } as ExcalidrawElement;
+}
+
+/**
+ * The fixture, with `groups` applied after the build (`buildElements` has no
+ * spec field for group membership) and the frame cluster appended raw.
+ */
+function neighbourhoodScene(extra: ElementSpec[] = [], groups: Record<string, string[]> = { g1: ["grp"], g2: ["grp"] }): ExcalidrawElement[] {
+  const built = buildElements([...NEIGHBOURHOOD_SPECS, ...extra], ctx()).created;
+  const grouped = built.map((el) => (groups[el.id] ? { ...el, groupIds: groups[el.id] } : el));
+  return [
+    ...grouped,
+    rawElement({ type: "frame", id: "fr", name: "Frame A", x: 2500, y: 0, width: 400, height: 300 }),
+    rawElement({ type: "rectangle", id: "d", x: 2600, y: 100, width: 60, height: 60, frameId: "fr" }),
+    rawElement({
+      type: "text",
+      id: "m3",
+      x: 2610,
+      y: 250,
+      width: 200,
+      height: 25,
+      frameId: "fr",
+      text: "@claude in frame",
+      originalText: "@claude in frame",
+      fontSize: 20,
+    }),
+  ];
+}
+
+function anchorFor(els: readonly ExcalidrawElement[], id: string): Mention {
+  return findMentions(els).find((m) => m.id === id)!;
+}
+
+test("the neighbourhood follows an arrow binding one hop", () => {
+  const els = neighbourhoodScene();
+  const { elements: near, reasons } = nearbyNeighbourhood(els, anchorFor(els, "m"));
+  const ids = near.map((e) => e.id);
+
+  const b = els.find((e) => e.id === "b")!;
+  assert.ok(boxDistance(b, anchorFor(els, "m")) > DEFAULT_NEARBY_RADIUS, "b is well outside the radius");
+  assert.ok(ids.includes("a"), "the near end of the arrow is within the radius");
+  assert.ok(ids.includes("ar"), "so is the arrow itself");
+  assert.ok(ids.includes("b"), "the far end is reached by following the binding");
+  assert.equal(reasons.get("b"), "via arrow ar", "and says which arrow reached it");
+  assert.equal(reasons.get("a"), undefined, "an element the radius picked carries no marker");
+  assert.ok(!ids.includes("c"), "a shape sitting beside the far end is not pulled in");
+  assert.match(summarise(near, reasons), /^b rectangle @\(1500,0\) 100x100 via arrow ar$/m);
+});
+
+test("the neighbourhood includes the rest of a group", () => {
+  const els = neighbourhoodScene();
+  const mention = anchorFor(els, "m");
+  const { elements: near, reasons } = nearbyNeighbourhood(els, mention);
+  const ids = near.map((e) => e.id);
+
+  const g2 = els.find((e) => e.id === "g2")!;
+  assert.ok(boxDistance(g2, mention) > DEFAULT_NEARBY_RADIUS, "the other member is outside the radius");
+  assert.ok(ids.includes("g1"), "the member beside the note");
+  assert.ok(ids.includes("g2"), "a group is one thing however it is laid out");
+  assert.equal(reasons.get("g2"), "via group");
+  assert.equal(reasons.get("g1"), undefined);
+  assert.match(summarise(near, reasons), /^g2 rectangle @\(1200,330\) 100x100 via group$/m);
+
+  // An element in some other group stays out.
+  const other = neighbourhoodScene([], { g1: ["grp"], g2: ["other"] });
+  assert.ok(!nearbyNeighbourhood(other, anchorFor(other, "m")).elements.some((e) => e.id === "g2"));
+
+  // groupIds absent rather than empty - an older scene, a hand-written
+  // element - is no group at all: it must neither throw nor read as one group
+  // holding everything ungrouped.
+  const legacy = els.map((el) => (el.id === "a" || el.id === "c" ? { ...el, groupIds: undefined } : el));
+  const fromLegacy = nearbyNeighbourhood(legacy, anchorFor(legacy, "m"));
+  assert.ok(fromLegacy.elements.some((e) => e.id === "g2"), "the real group still hops");
+  assert.ok(!fromLegacy.elements.some((e) => e.id === "c"), "and an absent groupIds is not a group of its own");
+});
+
+test("the neighbourhood includes the containing frame and its title", () => {
+  const els = neighbourhoodScene();
+  const { elements: near, reasons } = nearbyNeighbourhood(els, anchorFor(els, "m3"));
+  const ids = near.map((e) => e.id);
+  assert.ok(ids.includes("fr"), "the frame the note was written in");
+  assert.ok(ids.includes("d"), "and what sits in it beside the note");
+  assert.ok(!ids.includes("a") && !ids.includes("b"), "nothing from the far cluster");
+  assert.match(summarise(near, reasons), /^fr frame @\(2500,0\) 400x300 "Frame A"/m, "the frame's title is the only text it carries");
+
+  // frameId is membership, not geometry: a shape dragged out of its frame keeps
+  // the id, and the frame is still the region the note belongs to.
+  const dragged = els.map((el) => (el.id === "m3" ? { ...el, x: 6000, y: 6000 } : el));
+  const moved = nearbyNeighbourhood(dragged, anchorFor(dragged, "m3"));
+  assert.equal(moved.reasons.get("fr"), "via frame fr", "the frame is reached by the frame hop");
+  assert.ok(!moved.elements.some((e) => e.id === "d"), "which does not bring the frame's other children");
+});
+
+test("the neighbourhood does not take a second hop", () => {
+  // b arrives by the arrow hop. Everything b would itself reach - a further
+  // arrow, its own group - stays out, or one note walks the whole diagram.
+  const els = neighbourhoodScene([{ type: "arrow", id: "ar2", start: "b", end: "c" }, { type: "rectangle", id: "e2", x: 1500, y: 600, width: 100, height: 100 }], {
+    g1: ["grp"],
+    g2: ["grp"],
+    b: ["far"],
+    e2: ["far"],
+  });
+  const { elements: near, reasons } = nearbyNeighbourhood(els, anchorFor(els, "m"));
+  const ids = near.map((e) => e.id);
+
+  assert.ok(ids.includes("b"), "one hop still happens");
+  assert.equal(reasons.get("b"), "via arrow ar");
+  assert.ok(!ids.includes("ar2"), "the arrow leaving b is a second hop");
+  assert.ok(!ids.includes("c"), "and so is what it points at");
+  assert.ok(!ids.includes("e2"), "b's own group is a second hop too");
 });
 
 test("boxDistance measures box to box: zero when the boxes meet, the gap when they do not", () => {

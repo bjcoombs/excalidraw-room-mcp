@@ -13,7 +13,7 @@
  * canvas never reads as one sentence written by two authors.
  */
 import { z } from "zod";
-import { buildElements, bump, measureText, summarise, type BuildContext, type ExcalidrawElement } from "./elements.js";
+import { buildElements, bump, measureText, summarise, type BuildContext, type ExcalidrawElement, type SummaryReasons } from "./elements.js";
 
 export const DEFAULT_TAG = "@claude";
 export const DEFAULT_NEARBY_RADIUS = 250;
@@ -459,28 +459,132 @@ export function boxDistance(first: Box, second: Box): number {
   return Math.hypot(dx, dy);
 }
 
+/** How the summary says an element was reached, for each of the three hops. */
+export function viaArrowText(arrowId: string): string {
+  return `via arrow ${arrowId}`;
+}
+export const VIA_GROUP_TEXT = "via group";
+export function viaFrameText(frameId: string): string {
+  return `via frame ${frameId}`;
+}
+
+/** The elements around a mention, and why the far ones are among them. */
+export interface Neighbourhood {
+  elements: ExcalidrawElement[];
+  /**
+   * id -> the marker naming the hop that reached it. Elements the radius
+   * picked, and bound labels travelling with their container, are absent.
+   */
+  reasons: Map<string, string>;
+}
+
+/** A hopped-in element and the marker saying which hop reached it. */
+type Hop = [el: ExcalidrawElement, reason: string];
+
+/** Elements by id, which is how a binding or a `frameId` is resolved. */
+type ById = Map<string, ExcalidrawElement>;
+
+/** The other end of every binding the picked arrows carry. */
+function* arrowHops(inRadius: readonly ExcalidrawElement[], byId: ById): Generator<Hop> {
+  for (const el of inRadius) {
+    for (const binding of [el.startBinding, el.endBinding]) {
+      const target = binding && byId.get(binding.elementId);
+      if (target) yield [target, viaArrowText(el.id)];
+    }
+  }
+}
+
+/** Every element sharing a group with a picked one. A group is one thing however it is laid out. */
+function* groupHops(inRadius: readonly ExcalidrawElement[], live: readonly ExcalidrawElement[]): Generator<Hop> {
+  const groups = new Set<string>();
+  for (const el of inRadius) {
+    if (el.groupIds) for (const group of el.groupIds) groups.add(group);
+  }
+  for (const el of live) {
+    if (el.groupIds?.some((group) => groups.has(group))) yield [el, VIA_GROUP_TEXT];
+  }
+}
+
+/**
+ * The frame each source element belongs to. `frameId` is membership rather
+ * than geometry, so this holds even for a shape that has been dragged clear of
+ * the frame box it still names.
+ */
+function* frameHops(sources: readonly ExcalidrawElement[], byId: ById): Generator<Hop> {
+  for (const el of sources) {
+    const frame = el.frameId ? byId.get(el.frameId) : undefined;
+    if (frame) yield [frame, viaFrameText(frame.id)];
+  }
+}
+
 /**
  * Elements around a mention: anything whose bounding box is within `radius` of
- * the mention's box, plus the container the text is bound to. The mention
- * itself is excluded.
+ * the mention's box, plus the container the text is bound to, plus exactly one
+ * hop out of that set - the far end of a picked arrow's bindings, the rest of
+ * any group a picked element belongs to, and the frame containing a picked
+ * element or the mention itself.
+ *
+ * The hop exists because proximity alone lies about a drawing. A bound arrow
+ * joins two shapes an arbitrary distance apart, so the radius hands the model
+ * one end and nothing about what it points at; a group is one thing however
+ * far its members are laid out, so the radius hands over half of it; and a
+ * frame names the region the note was written in.
+ *
+ * One hop, never two: the hopped-in elements are not themselves searched for
+ * bindings, groups or frames. A second hop walks the whole connected component
+ * of a diagram, which is the scene the neighbourhood exists to avoid sending.
+ * `reasons` says which hop reached each far element, because a shape 1500 px
+ * away reads as adjacent otherwise.
+ *
+ * The mention itself is excluded. {@link nearbyElements} is this function
+ * without the reasons.
+ */
+export function nearbyNeighbourhood(
+  elements: readonly ExcalidrawElement[],
+  mention: Mention,
+  radius: number = DEFAULT_NEARBY_RADIUS,
+): Neighbourhood {
+  const live = elements.filter((el) => !el.isDeleted);
+  const byId: ById = new Map(live.map((el) => [el.id, el]));
+  const picked = new Map<string, ExcalidrawElement>();
+  for (const el of live) {
+    if (el.id === mention.id) continue;
+    if (el.id === mention.containerId || boxDistance(el, mention) <= radius) picked.set(el.id, el);
+  }
+
+  // The radius pick is the only hop source, so it is frozen before hopping;
+  // reading `picked` as it grows would take a second hop.
+  const inRadius = [...picked.values()];
+  const mentionEl = byId.get(mention.id);
+  const framed = mentionEl ? [...inRadius, mentionEl] : inRadius;
+  const reasons = new Map<string, string>();
+  for (const [el, reason] of [...arrowHops(inRadius, byId), ...groupHops(inRadius, live), ...frameHops(framed, byId)]) {
+    if (el.id === mention.id || picked.has(el.id)) continue;
+    picked.set(el.id, el);
+    reasons.set(el.id, reason);
+  }
+
+  // Bound labels of picked shapes travel with them so the summary reads whole.
+  for (const el of live) {
+    if (el.type === "text" && el.containerId && picked.has(el.containerId) && el.id !== mention.id) {
+      picked.set(el.id, el);
+    }
+  }
+  return { elements: [...picked.values()], reasons };
+}
+
+/**
+ * {@link nearbyNeighbourhood}'s elements alone, for the callers that render a
+ * plain scene subset (`read_scene near`, `snapshot_scene near`) rather than a
+ * mention block. Both go through the same function, so the three
+ * neighbourhood views cannot drift apart.
  */
 export function nearbyElements(
   elements: readonly ExcalidrawElement[],
   mention: Mention,
   radius: number = DEFAULT_NEARBY_RADIUS,
 ): ExcalidrawElement[] {
-  const picked = new Map<string, ExcalidrawElement>();
-  for (const el of elements) {
-    if (el.isDeleted || el.id === mention.id) continue;
-    if (el.id === mention.containerId || boxDistance(el, mention) <= radius) picked.set(el.id, el);
-  }
-  // Bound labels of picked shapes travel with them so the summary reads whole.
-  for (const el of elements) {
-    if (el.type === "text" && el.containerId && picked.has(el.containerId) && el.id !== mention.id) {
-      picked.set(el.id, el);
-    }
-  }
-  return [...picked.values()];
+  return nearbyNeighbourhood(elements, mention, radius).elements;
 }
 
 /**
@@ -499,6 +603,11 @@ export interface FormatMentionOptions {
   previous?: PreviousLine | null;
   /** True for a mention already acknowledged and kept, which `includeHandled` lists. */
   handled?: boolean;
+  /**
+   * The neighbourhood's hop map, so a far element's line says why it is
+   * listed. Omit it and the nearby lines carry no via markers.
+   */
+  reasons?: SummaryReasons;
 }
 
 export function formatMention(
@@ -514,7 +623,7 @@ export function formatMention(
     "",
     nearby.length ? `nearby (${nearby.length}):` : "nearby: none",
   ];
-  if (nearby.length) lines.push(summarise(nearby));
+  if (nearby.length) lines.push(summarise(nearby, opts.reasons));
   return lines.join("\n");
 }
 
