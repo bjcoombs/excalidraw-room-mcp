@@ -13,6 +13,8 @@ export interface ShowRoomMention {
   height: number;
   containerId: string | null;
   nearby: string[];
+  /** Whether a widget has already announced this mention into the chat. */
+  announced: boolean;
 }
 
 export interface ShowRoomPayload {
@@ -143,7 +145,11 @@ function coerce(value: unknown): ShowRoomPayload | null {
     connected: p.connected === true,
     peers: Array.isArray(p.peers) ? p.peers : [],
     elements: p.elements,
-    mentions: Array.isArray(p.mentions) ? p.mentions : [],
+    // A mention with no `announced` field came from a server too old to carry
+    // one. Reading that as "already announced" is the safe default: a missed
+    // announcement leaves the note on the canvas for the next agent turn,
+    // while a false negative would announce it on every poll forever.
+    mentions: Array.isArray(p.mentions) ? p.mentions.map((m) => ({ ...m, announced: m?.announced !== false })) : [],
   };
 }
 
