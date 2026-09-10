@@ -138,8 +138,22 @@ function errorText(s: string) {
   return { ...text(s), isError: true };
 }
 
-/** Binds a tool to the in-chat canvas. Hosts without MCP Apps ignore it. */
+/**
+ * Binds a tool to the in-chat canvas. Hosts without MCP Apps ignore it.
+ *
+ * `show_room` alone carries it. create_room and join_room used to as well, and
+ * a host renders one widget per result that does, so asking for a room drew a
+ * canvas before there was anything on it and a second one the moment the model
+ * called show_room. Their results are text; the canvas is what show_room is
+ * for.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/64
+ */
 const CANVAS_META = { ui: { resourceUri: CANVAS_RESOURCE_URI } } as const;
+
+/** A result the host should render the canvas for: show_room's, and only its. */
+function canvasResult(s: string, isError = false) {
+  return { ...text(s), _meta: CANVAS_META, ...(isError ? { isError: true } : {}) };
+}
 
 function statusText(): string {
   const s = room.status();
@@ -162,11 +176,11 @@ const server = new McpServer(
   { instructions: SERVER_INSTRUCTIONS },
 );
 
-registerAppTool(
-  server,
+// Plain registerTool, not registerAppTool: the canvas metadata is what
+// registerAppTool is for, and this result is text. See CANVAS_META above.
+server.registerTool(
   "create_room",
   {
-    _meta: CANVAS_META,
     description:
       "Create a new empty live-collaboration room, join it, and return the excalidraw.com link for a person to open. The link contains the encryption key; share it only with people who should see the drawing.",
     inputSchema: {},
@@ -178,11 +192,9 @@ registerAppTool(
   },
 );
 
-registerAppTool(
-  server,
+server.registerTool(
   "join_room",
   {
-    _meta: CANVAS_META,
     description:
       "Join an existing excalidraw.com live-collaboration room from its link (the URL with #room=<id>,<key>). Loads the current scene from a connected peer, or from the room's persisted copy if nobody else is present.",
     inputSchema: {
@@ -224,7 +236,7 @@ registerAppTool(
     // whose calls the host routed to a second process is not stuck reporting
     // NOT_IN_ROOM_TEXT forever. See ensureJoined in view.ts.
     const { error } = await ensureJoined(room, link);
-    if (!room.isConnected) return errorText(error ? `${NOT_IN_ROOM_TEXT}\n${error}` : NOT_IN_ROOM_TEXT);
+    if (!room.isConnected) return canvasResult(error ? `${NOT_IN_ROOM_TEXT}\n${error}` : NOT_IN_ROOM_TEXT, true);
     const elements = room.getElements();
     const pending = findMentions(elements, tag, handledMentions);
     const payload = buildShowRoomPayload(room.status(), elements, pending, radius);
@@ -232,7 +244,7 @@ registerAppTool(
     // model-visible transcript charges the reader for the element array on
     // every call, which is what a split payload was meant to avoid. The view
     // calls this tool itself with include: "json" and reads the text.
-    return text(include === "json" ? JSON.stringify(payload) : summariseShowRoom(payload));
+    return canvasResult(include === "json" ? JSON.stringify(payload) : summariseShowRoom(payload));
   },
 );
 

@@ -51,7 +51,7 @@ export function isNotInRoom(text: string | null): boolean {
  * `room: <link>` (summariseShowRoom in src/view.ts). This is how the view
  * learns the link at all in a host that routes its calls to a second server
  * process: the seed is the model's summary, taken over the connection that is
- * in the room, so it names the room even when the view's own polls cannot
+ * in the room, so it names the room even when the view's own calls cannot
  * reach it. Anything that is not a collaboration link is rejected, so the
  * value can only be handed back to the server as a room to join.
  */
@@ -190,9 +190,9 @@ export function parsePayload(result: unknown): ShowRoomPayload | null {
 
 /**
  * The shape of a result the parser could not read, short enough for the status
- * line: the top-level keys, and those of any `result` or `toolResult` inside
- * it. A host whose envelope this view does not handle names itself here instead
- * of leaving an operator to guess from a bare "unreadable" count.
+ * bar: the top-level keys, and those of any `result` or `toolResult` inside it.
+ * A host whose envelope this view does not handle names itself here instead of
+ * leaving an operator to guess at what arrived.
  */
 export function envelopeShape(result: unknown): string {
   if (result === undefined) return "undefined";
