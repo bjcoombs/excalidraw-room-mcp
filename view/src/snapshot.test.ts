@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
+import type { AppState } from "@excalidraw/excalidraw/types";
 import {
   afterPaint,
   blobToBase64,
@@ -11,6 +13,7 @@ import {
   snapshotElements,
   snapshotText,
   SNAPSHOT_CLIPBOARD_HINT,
+  elementBox,
   type ClipboardScope,
   type ExportToBlobLike,
   type ModelContextBlock,
@@ -28,17 +31,23 @@ function png(): Blob {
   return new Blob([PNG_BYTES], { type: "image/png" });
 }
 
+/**
+ * An element as the canvas hands it over, carrying only the fields these
+ * functions read. A whole ExcalidrawElement is two dozen style fields none of
+ * this looks at, so the geometry is written out and the rest is asserted away.
+ */
+function element(fields: Record<string, unknown> & { id: string }): ExcalidrawElement {
+  return fields as unknown as ExcalidrawElement;
+}
+
 /** A viewport 800x600 at the origin, at zoom 1: the default the tests draw in. */
-function appState(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return { scrollX: 0, scrollY: 0, width: 800, height: 600, zoom: { value: 1 }, ...over };
+function appState(over: Record<string, unknown> = {}): Partial<AppState> {
+  return { scrollX: 0, scrollY: 0, width: 800, height: 600, zoom: { value: 1 }, ...over } as unknown as Partial<AppState>;
 }
 
 function scene(over: Partial<SnapshotScene> = {}): SnapshotScene {
   return {
-    elements: [
-      { id: "r", x: 0, y: 0, width: 200, height: 100 },
-      { id: "t", x: 10, y: 10, width: 80, height: 20, containerId: "r" },
-    ],
+    elements: [element({ id: "r", x: 0, y: 0, width: 200, height: 100 }), element({ id: "t", x: 10, y: 10, width: 80, height: 20, containerId: "r" })],
     appState: appState(),
     files: null,
     link: LINK,
@@ -72,7 +81,7 @@ function host(behaviour: "accept" | "refuse" | "throw" | "none"): SnapshotHost &
   const app: SnapshotHost & { context: ModelContextBlock[][]; downloads: unknown[] } = { context, downloads };
   if (behaviour !== "none") {
     app.updateModelContext = async (params) => {
-      context.push(params.content);
+      context.push(params.content ?? []);
       return answer();
     };
     app.downloadFile = async (params) => {
@@ -164,10 +173,10 @@ test("a render that fails is reported and never thrown out of the handler", asyn
 
 test("a snapshot renders the selection when there is one, and what the viewport shows otherwise", () => {
   const elements = [
-    { id: "r", x: 0, y: 0, width: 200, height: 100 },
-    { id: "t", x: 10, y: 10, width: 80, height: 20, containerId: "r" },
-    { id: "far", x: 5000, y: 5000, width: 50, height: 50 },
-    { id: "gone", x: 0, y: 0, width: 10, height: 10, isDeleted: true },
+    element({ id: "r", x: 0, y: 0, width: 200, height: 100 }),
+    element({ id: "t", x: 10, y: 10, width: 80, height: 20, containerId: "r" }),
+    element({ id: "far", x: 5000, y: 5000, width: 50, height: 50 }),
+    element({ id: "gone", x: 0, y: 0, width: 10, height: 10, isDeleted: true }),
   ];
   // No selection: everything the 800x600 viewport overlaps, and nothing beyond it.
   assert.deepEqual(elementIds(snapshotElements(elements, appState())), ["r", "t"]);
@@ -179,6 +188,28 @@ test("a snapshot renders the selection when there is one, and what the viewport 
   // Before the canvas is laid out there is no viewport to intersect, so the
   // whole scene is the honest answer.
   assert.deepEqual(elementIds(snapshotElements(elements, {})), ["r", "t", "far"]);
+});
+
+test("a rotated element is filtered on the box it is actually drawn in", () => {
+  const RIGHT_ANGLE = Math.PI / 2;
+  // 20 wide, 400 tall, just past the viewport's right edge at x=800. Upright it
+  // is outside; on its side it spans x 620..1020 and crosses well into view.
+  const tall = (angle: number) => element({ id: "tall", x: 810, y: 0, width: 20, height: 400, angle });
+  assert.deepEqual(elementIds(snapshotElements([tall(0)], appState())), []);
+  assert.deepEqual(elementIds(snapshotElements([tall(RIGHT_ANGLE)], appState())), ["tall"]);
+  // The converse: 400 wide and 20 tall, crossing the left edge upright, but on
+  // its side it spans x -160..-140 and is off screen entirely.
+  const wide = (angle: number) => element({ id: "wide", x: -350, y: 300, width: 400, height: 20, angle });
+  assert.deepEqual(elementIds(snapshotElements([wide(0)], appState())), ["wide"]);
+  assert.deepEqual(elementIds(snapshotElements([wide(RIGHT_ANGLE)], appState())), []);
+  // A quarter turn swaps the extents about the centre, and the sign of the
+  // angle cannot change the box's size.
+  assert.deepEqual(elementBox(tall(RIGHT_ANGLE)), { left: 620, top: 190, right: 1020, bottom: 210 });
+  assert.deepEqual(elementBox(tall(-RIGHT_ANGLE)), elementBox(tall(RIGHT_ANGLE)));
+  // An element with unusable geometry has no box and is left out rather than
+  // poisoning the filter.
+  assert.equal(elementBox(element({ id: "bad", x: Number.NaN, y: 0 })), null);
+  assert.deepEqual(elementIds(snapshotElements([element({ id: "bad", x: Number.NaN, y: 0 })], appState())), []);
 });
 
 test("the snapshot line names the room and the elements", () => {

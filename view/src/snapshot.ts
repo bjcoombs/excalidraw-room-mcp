@@ -3,11 +3,15 @@
  *
  * The two actions that carry a picture out of the widget - sending a snapshot
  * to the model and saving the image - are decided here, in plain functions that
- * take the host methods they need and a renderer shaped like Excalidraw's
- * `exportToBlob`. Nothing in this module imports Excalidraw or touches a DOM
- * global directly, so it compiles and runs under Node with the rest of the
- * tests (tsconfig.view-test.json), the way announce.ts and status.tsx do; the
- * binding to the real component is menu-excalidraw.tsx.
+ * take the host methods they need and Excalidraw's `exportToBlob`.
+ *
+ * Every import here is `import type`, which the compiler erases, so the module
+ * has no runtime dependency on Excalidraw or on a DOM global and runs under
+ * Node with the rest of the tests (tsconfig.view-test.json), the way announce.ts
+ * and status.tsx do. The contracts are taken from the two packages rather than
+ * restated: a hand-written copy of a request's shape drifts from the wire
+ * silently and the compiler cannot tell anyone. The binding to the real
+ * component is menu-excalidraw.tsx.
  *
  * Three things about the shape are deliberate.
  *
@@ -28,6 +32,11 @@
  * snapshot of everything answers a question nobody asked.
  */
 
+import type { exportToBlob } from "@excalidraw/excalidraw";
+import type { ExcalidrawElement, NonDeleted } from "@excalidraw/excalidraw/element/types";
+import type { AppState, BinaryFiles } from "@excalidraw/excalidraw/types";
+import type { App } from "@modelcontextprotocol/ext-apps";
+
 /** The status-bar line after the clipboard fallback. The words are pinned by the acceptance contract. */
 export const SNAPSHOT_CLIPBOARD_HINT = "snapshot copied, paste it into the chat";
 
@@ -43,53 +52,51 @@ const PNG = "image/png";
 /** How far outside the elements the render leaves, in canvas pixels. */
 const EXPORT_PADDING = 16;
 
-/**
- * A content block as `ui/update-model-context` takes it. Restated rather than
- * imported so this module stays free of the SDK's class: a fake with one
- * method stands in for the host under test.
- */
-export type ModelContextBlock = { type: "image"; data: string; mimeType: string } | { type: "text"; text: string };
-
 /** A result a host may answer any of these requests with. */
 export interface HostAnswer {
   isError?: boolean;
 }
 
 /**
- * The host methods the menu uses. Every one is optional: a host that does not
- * implement the request simply does not have the method, which is the same
- * answer as a refusal and takes the same fallback.
+ * The three requests this module makes, in the SDK's own parameter types.
+ * `App`'s methods are the only place the package exposes them to a NodeNext
+ * build: its `export *` of the request interfaces resolves to nothing here,
+ * because the declarations it re-exports import each other without the `.js`
+ * suffix NodeNext requires.
  */
-export interface SnapshotHost {
-  updateModelContext?(params: { content: ModelContextBlock[] }): Promise<unknown>;
-  downloadFile?(params: { contents: { type: "resource"; resource: { uri: string; mimeType: string; blob: string } }[] }): Promise<HostAnswer | undefined>;
-  openLink?(params: { url: string }): Promise<HostAnswer | undefined>;
-}
+export type UpdateModelContextParams = Parameters<App["updateModelContext"]>[0];
+export type DownloadFileParams = Parameters<App["downloadFile"]>[0];
+export type OpenLinkParams = Parameters<App["openLink"]>[0];
+
+/** One block of what the model is shown: the image, and the line that names it. */
+export type ModelContextBlock = NonNullable<UpdateModelContextParams["content"]>[number];
 
 /**
- * Excalidraw's `exportToBlob`, as far as this module needs it. The element and
- * app-state types are the component's own; they cross this boundary untouched,
- * so they are opaque here rather than restated wrongly.
+ * The host methods the menu uses. Every one is optional: a host that does not
+ * implement the request simply does not have the method, which is the same
+ * answer as a refusal and takes the same fallback. The result types are widened
+ * to what this module reads, so `App` itself satisfies the interface.
  */
-export type ExportToBlobLike = (options: {
-  elements: readonly never[];
-  appState: Record<string, unknown>;
-  files: Record<string, unknown> | null;
-  mimeType?: string;
-  exportPadding?: number;
-}) => Promise<Blob>;
+export interface SnapshotHost {
+  updateModelContext?(params: UpdateModelContextParams): Promise<unknown>;
+  downloadFile?(params: DownloadFileParams): Promise<HostAnswer | undefined>;
+  openLink?(params: OpenLinkParams): Promise<HostAnswer | undefined>;
+}
+
+/** Excalidraw's renderer, by its own signature. */
+export type ExportToBlobLike = typeof exportToBlob;
+
+/** The scene to render: what the canvas holds now, and the room it belongs to. */
+export interface SnapshotScene {
+  elements: readonly ExcalidrawElement[];
+  appState: Partial<AppState>;
+  files: BinaryFiles | null;
+  link: string | null;
+}
 
 /** The clipboard, as far as this module needs it. Null where the iframe has none. */
 export interface ClipboardWriter {
   (blob: Blob): Promise<void>;
-}
-
-/** The scene to render: what the canvas holds now, and the room it belongs to. */
-export interface SnapshotScene {
-  elements: readonly Record<string, unknown>[];
-  appState: Record<string, unknown>;
-  files: Record<string, unknown> | null;
-  link: string | null;
 }
 
 /** Everything the menu handlers need that is not the scene. */
@@ -115,15 +122,32 @@ function num(value: unknown): number | null {
 }
 
 /** The ids of a list of elements, in the order they are drawn. */
-export function elementIds(elements: readonly Record<string, unknown>[]): string[] {
-  return elements.map((element) => element.id).filter((id): id is string => typeof id === "string");
+export function elementIds(elements: readonly ExcalidrawElement[]): string[] {
+  return elements.map((element) => element.id);
 }
 
 /** The ids the app state reports as selected. */
-function selectedIds(appState: Record<string, unknown>): Set<string> {
+function selectedIds(appState: Partial<AppState>): Set<string> {
   const selected = appState.selectedElementIds;
-  if (!selected || typeof selected !== "object") return new Set();
-  return new Set(Object.entries(selected as Record<string, unknown>).filter(([, on]) => on === true).map(([id]) => id));
+  if (!selected) return new Set();
+  return new Set(
+    Object.entries(selected)
+      .filter(([, on]) => on === true)
+      .map(([id]) => id),
+  );
+}
+
+/** The container a bound label belongs to, or null for everything else. */
+function containerOf(element: ExcalidrawElement): string | null {
+  return "containerId" in element ? element.containerId : null;
+}
+
+/** An axis-aligned box in canvas coordinates. */
+interface Box {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
 }
 
 /**
@@ -131,30 +155,76 @@ function selectedIds(appState: Record<string, unknown>): Set<string> {
  * the app state does not describe a viewport, which is the case before the
  * canvas has been laid out.
  */
-function viewport(appState: Record<string, unknown>): { left: number; top: number; right: number; bottom: number } | null {
+function viewport(appState: Partial<AppState>): Box | null {
   const scrollX = num(appState.scrollX);
   const scrollY = num(appState.scrollY);
   const width = num(appState.width);
   const height = num(appState.height);
-  const zoomValue = num((appState.zoom as { value?: unknown } | undefined)?.value) ?? 1;
+  const zoomValue = num(appState.zoom?.value) ?? 1;
   if (scrollX === null || scrollY === null || width === null || height === null || zoomValue <= 0) return null;
   const left = -scrollX;
   const top = -scrollY;
   return { left, top, right: left + width / zoomValue, bottom: top + height / zoomValue };
 }
 
-/** Whether an element's box overlaps a rectangle. A negative width is normalised, as in bounds.ts. */
-function overlaps(element: Record<string, unknown>, rect: { left: number; top: number; right: number; bottom: number }): boolean {
+/**
+ * The box an element actually occupies on the canvas, rotation included, or
+ * null when its geometry is unusable.
+ *
+ * `x`, `y`, `width` and `height` describe the element before its `angle` is
+ * applied, and Excalidraw rotates about the box's centre. A tall thin shape
+ * just off the right edge of the viewport, turned on its side, reaches well
+ * into it while that unrotated box stays outside - so filtering on the
+ * unrotated box both drops elements the reader can see and keeps elements they
+ * cannot. Excalidraw's own `elementsOverlappingBBox` would answer this, but it
+ * is a value import from a package that assumes a DOM, and this module has to
+ * run under Node; the rotated corner box is the same arithmetic upstream's
+ * bounds do for a shape's own box.
+ *
+ * The sign of the angle does not matter to the result: a box rotated by +a and
+ * by -a has the same extent.
+ */
+export function elementBox(element: ExcalidrawElement): Box | null {
   const x = num(element.x);
   const y = num(element.y);
-  if (x === null || y === null) return false;
+  if (x === null || y === null) return null;
   const width = num(element.width) ?? 0;
   const height = num(element.height) ?? 0;
-  const minX = Math.min(x, x + width);
-  const maxX = Math.max(x, x + width);
-  const minY = Math.min(y, y + height);
-  const maxY = Math.max(y, y + height);
-  return maxX >= rect.left && minX <= rect.right && maxY >= rect.top && minY <= rect.bottom;
+  // A negative width is legal in a raw element (a shape dragged leftwards), so
+  // normalise rather than assume x is the left edge, as bounds.ts does.
+  const box = {
+    left: Math.min(x, x + width),
+    top: Math.min(y, y + height),
+    right: Math.max(x, x + width),
+    bottom: Math.max(y, y + height),
+  };
+  const angle = num(element.angle) ?? 0;
+  if (angle === 0) return box;
+  const centreX = (box.left + box.right) / 2;
+  const centreY = (box.top + box.bottom) / 2;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const [cornerX, cornerY] of [
+    [box.left, box.top],
+    [box.right, box.top],
+    [box.right, box.bottom],
+    [box.left, box.bottom],
+  ]) {
+    const dx = cornerX - centreX;
+    const dy = cornerY - centreY;
+    xs.push(centreX + dx * cos - dy * sin);
+    ys.push(centreY + dx * sin + dy * cos);
+  }
+  return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+}
+
+/** Whether an element overlaps a rectangle, as it is drawn. */
+function overlaps(element: ExcalidrawElement, rect: Box): boolean {
+  const box = elementBox(element);
+  if (!box) return false;
+  return box.right >= rect.left && box.left <= rect.right && box.bottom >= rect.top && box.top <= rect.bottom;
 }
 
 /**
@@ -165,27 +235,24 @@ function overlaps(element: Record<string, unknown>, rect: { left: number; top: n
  *
  * Deleted elements are dropped either way: the renderer would draw them.
  */
-export function snapshotElements(elements: readonly Record<string, unknown>[], appState: Record<string, unknown>): Record<string, unknown>[] {
-  const live = elements.filter((element) => element.isDeleted !== true);
+export function snapshotElements(elements: readonly ExcalidrawElement[], appState: Partial<AppState>): NonDeleted<ExcalidrawElement>[] {
+  const live = elements.filter((element): element is NonDeleted<ExcalidrawElement> => !element.isDeleted);
   const selected = selectedIds(appState);
   if (selected.size) {
-    return live.filter((element) => {
-      const id = element.id;
-      const container = element.containerId;
-      return (typeof id === "string" && selected.has(id)) || (typeof container === "string" && selected.has(container));
-    });
+    return live.filter((element) => selected.has(element.id) || withContainer(element, selected));
   }
   const rect = viewport(appState);
   if (!rect) return live;
-  const visible = live.filter((element) => overlaps(element, rect));
-  const shown = new Set(elementIds(visible));
+  const shown = new Set(elementIds(live.filter((element) => overlaps(element, rect))));
   // A label whose container is on screen is on screen, even where its own box
   // rounds outside the viewport.
-  return live.filter((element) => {
-    const id = element.id;
-    const container = element.containerId;
-    return (typeof id === "string" && shown.has(id)) || (typeof container === "string" && shown.has(container));
-  });
+  return live.filter((element) => shown.has(element.id) || withContainer(element, shown));
+}
+
+/** Whether this element is a label bound to one of the given ids. */
+function withContainer(element: ExcalidrawElement, ids: Set<string>): boolean {
+  const container = containerOf(element);
+  return container !== null && ids.has(container);
 }
 
 /**

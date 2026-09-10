@@ -15,16 +15,7 @@
 import { CaptureUpdateAction, exportToBlob, MainMenu } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { RoomMenuItems, type MenuParts } from "./menu.js";
-import {
-  afterPaint,
-  browserClipboard,
-  saveImage,
-  sendSnapshot,
-  type ExportToBlobLike,
-  type SnapshotEnv,
-  type SnapshotHost,
-  type SnapshotScene,
-} from "./snapshot.js";
+import { afterPaint, browserClipboard, saveImage, sendSnapshot, type SnapshotEnv, type SnapshotHost, type SnapshotScene } from "./snapshot.js";
 
 /** Excalidraw's menu pieces, in the shape menu.tsx declares them. */
 const PARTS: MenuParts = {
@@ -53,7 +44,7 @@ export interface RoomMenuProps {
 export function RoomMenu({ app, api, link, onHint, onOpen }: RoomMenuProps) {
   const env = (): SnapshotEnv => ({
     app,
-    exportToBlob: exportToBlob as unknown as ExportToBlobLike,
+    exportToBlob,
     clipboard: browserClipboard(),
     pixelRatio: window.devicePixelRatio || 1,
   });
@@ -62,12 +53,7 @@ export function RoomMenu({ app, api, link, onHint, onOpen }: RoomMenuProps) {
   const scene = (): SnapshotScene | null => {
     const instance = api();
     if (!instance) return null;
-    return {
-      elements: instance.getSceneElements() as unknown as Record<string, unknown>[],
-      appState: instance.getAppState() as unknown as Record<string, unknown>,
-      files: instance.getFiles() as unknown as Record<string, unknown>,
-      link,
-    };
+    return { elements: instance.getSceneElements(), appState: instance.getAppState(), files: instance.getFiles(), link };
   };
 
   /** Excalidraw's own image export dialog, whose clipboard copy works in the sandbox. */
