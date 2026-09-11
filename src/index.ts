@@ -17,6 +17,7 @@ import {
   randomId,
   stampAuthor,
   summarise,
+  translate,
   type ElementSpec,
   type ExcalidrawElement,
 } from "./elements.js";
@@ -85,7 +86,7 @@ import {
   type PlacementResult,
 } from "./placement.js";
 import { buildPollPayload, pollText } from "./poll.js";
-import { RoomClient } from "./room.js";
+import { commitLine, persistedLine, RoomClient } from "./room.js";
 import { selectElements, unknownIdsText } from "./scene.js";
 import { DEFAULT_MAX_DIMENSION, MAX_SCALE, snapshotScene } from "./snapshot.js";
 import {
@@ -463,6 +464,7 @@ function statusText(): string {
     `sceneVersion: ${s.sceneVersion}`,
     `initial scene from: ${s.source ?? "-"}`,
     `last remote update: ${s.lastRemoteUpdate ?? "-"}`,
+    persistedLine(s),
   ].join("\n");
 }
 
@@ -689,7 +691,7 @@ server.registerTool(
   "add_elements",
   {
     description:
-      "Add elements to the drawing from compact specs. Shapes take x, y, width, height and an optional label. Arrows take start/end element ids (edges are computed) or absolute points. Any element may take a link (a URL), which makes it clickable on the canvas. Later specs may reference ids of earlier specs in the same call. Pass place instead of x and y to have the server find a free slot beside an element or inside a cluster, so two agents drawing at once never overlap; the result reports the coordinates it chose.",
+      "Add elements to the drawing from compact specs. Shapes take x, y, width, height and an optional label. Arrows take start/end element ids (edges are computed) or absolute points. Any element may take a link (a URL), which makes it clickable on the canvas. Later specs may reference ids of earlier specs in the same call. Pass place instead of x and y to have the server find a free slot beside an element or inside a cluster, so two agents drawing at once never overlap; the result reports the coordinates it chose. The change reaches connected peers immediately and the room's stored copy shortly after; a result line beginning NOT PERSISTED means the stored copy is behind and the server is retrying in the background.",
     inputSchema: { elements: z.array(elementSpec).min(1) },
   },
   async ({ elements }) => {
@@ -736,7 +738,7 @@ server.registerTool(
     const stamped = clustered.map((el) => stampAuthor(el, room.handle));
     const result = await room.commit([...stamped, ...updated]);
     const lines = [
-      `added ${stamped.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}`,
+      commitLine(`added ${stamped.length} element(s)`, result),
       ...stamped.map((e) => `${e.id} ${e.type}`),
       ...placements.flatMap(({ id, result: placed }) => placementLines(id, placed)),
     ];
@@ -748,7 +750,7 @@ server.registerTool(
   "add_raw_elements",
   {
     description:
-      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent. An element carrying customData is stamped with this server's handle as its author, keeping the keys it came with; an element with no customData is left unattributed, so a scene imported from a file still reads as the work of whoever drew it. Hosts cap tool-argument size, so keep each call's arguments under the limit in README Limits (4 KB on Claude Desktop, 16 KB on Claude Code) and send a large scene as several batches; a later batch may reference ids from an earlier one.",
+      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent. An element carrying customData is stamped with this server's handle as its author, keeping the keys it came with; an element with no customData is left unattributed, so a scene imported from a file still reads as the work of whoever drew it. Hosts cap tool-argument size, so keep each call's arguments under the limit in README Limits (4 KB on Claude Desktop, 16 KB on Claude Code) and send a large scene as several batches; a later batch may reference ids from an earlier one. The change reaches connected peers immediately and the room's stored copy shortly after; a result line beginning NOT PERSISTED means the stored copy is behind and the server is retrying in the background.",
     inputSchema: { elements: z.array(z.record(z.unknown())).min(1) },
   },
   async ({ elements }) => {
@@ -779,7 +781,9 @@ server.registerTool(
       prepared.push(raw.customData === undefined ? el : stampAuthor(el, room.handle));
     }
     const result = await room.commit(prepared);
-    return text(`added ${prepared.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}\n${prepared.map((e) => `${e.id} ${e.type}`).join("\n")}`);
+    return text(
+      `${commitLine(`added ${prepared.length} element(s)`, result)}\n${prepared.map((e) => `${e.id} ${e.type}`).join("\n")}`,
+    );
   },
 );
 
@@ -787,7 +791,7 @@ server.registerTool(
   "update_elements",
   {
     description:
-      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. 'set' accepts any element field, including link (a URL, or null to remove it). Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given, keeps originalText in step, and, for a label bound to a shape, re-centres it and grows the shape to fit so the canvas redraws the new label. An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded.",
+      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. 'set' accepts any element field, including link (a URL, or null to remove it). Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given, keeps originalText in step, and, for a label bound to a shape, re-centres it and grows the shape to fit so the canvas redraws the new label. Changing 'x', 'y', 'width' or 'height' carries the element's bound label with it and re-computes the endpoint of every arrow bound to it, leaving each arrow's other end alone; use translate_elements to move a shape with its group, its frame's children and the arrows between moved shapes. An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded. The change reaches connected peers immediately and the room's stored copy shortly after; a result line beginning NOT PERSISTED means the stored copy is behind and the server is retrying in the background.",
     inputSchema: {
       updates: z.array(z.object({ id: z.string(), set: z.record(z.unknown()) })).min(1),
       force: forceSchema,
@@ -819,7 +823,39 @@ server.registerTool(
     if (!matched) return text(`no elements updated${unknown}${guard}`);
     const result = await room.commit([...changed.values()]);
     const note = missing.length ? `\nunknown ids: ${missing.join(", ")}` : "";
-    return text(`updated ${matched} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}${note}${guard}`);
+    return text(`${commitLine(`updated ${matched} element(s)`, result)}${note}${guard}`);
+  },
+);
+
+server.registerTool(
+  "translate_elements",
+  {
+    description:
+      "Move elements by a delta, carrying everything that must travel with them: each element's bound label, every other member of a group the ids belong to, the children of a moved frame, and any arrow bound at both ends to elements that are moving. An arrow bound at one end is re-attached to the moved shape instead of moved, and reported on its own line. Each element moves exactly once however many ways the closure reaches it. The result reports how many moved and which ids the closure added. An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded.",
+    inputSchema: {
+      ids: z.array(z.string()).min(1),
+      dx: z.number().describe("Horizontal delta in scene pixels; positive is right."),
+      dy: z.number().describe("Vertical delta in scene pixels; positive is down."),
+      force: forceSchema,
+    },
+  },
+  async ({ ids, dx, dy, force }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const { allowed, refusals } = guardIds(ids, force);
+    const guard = guardNote(refusals, force);
+    // The closure runs over the whole scene, including elements the guard
+    // refused: a refused id is not moved, but a group it is in still is.
+    const { moved, rebound, added, missing } = translate(allowed, dx, dy, room.getElements());
+    const unknown = missing.length ? `; unknown ids: ${missing.join(", ")}` : "";
+    if (!moved.length) return text(`nothing moved${unknown}${guard}`);
+    const result = await room.commit([...moved, ...rebound]);
+    const lines = [
+      commitLine(`moved ${moved.length} element(s)`, result),
+      ...(added.length ? [`added by closure: ${added.join(", ")}`] : []),
+      ...(rebound.length ? [`re-attached: ${rebound.map((e) => e.id).join(", ")}`] : []),
+      ...(missing.length ? [`unknown ids: ${missing.join(", ")}`] : []),
+    ];
+    return text(`${lines.join("\n")}${guard}`);
   },
 );
 
@@ -827,7 +863,7 @@ server.registerTool(
   "delete_elements",
   {
     description:
-      "Soft-delete elements by id (Excalidraw keeps tombstones so peers converge). An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded.",
+      "Soft-delete elements by id (Excalidraw keeps tombstones so peers converge). An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded. The change reaches connected peers immediately and the room's stored copy shortly after; a result line beginning NOT PERSISTED means the stored copy is behind and the server is retrying in the background.",
     inputSchema: { ids: z.array(z.string()).min(1), force: forceSchema },
   },
   async ({ ids, force }) => {
@@ -847,7 +883,7 @@ server.registerTool(
     if (!changed.length) return text(`nothing deleted${unknown}${guard}`);
     const result = await room.commit(changed);
     const note = missing.length ? `\nunknown ids: ${missing.join(", ")}` : "";
-    return text(`deleted ${changed.length} element(s)${result.persisted ? "" : ` (not persisted: ${result.error})`}${note}${guard}`);
+    return text(`${commitLine(`deleted ${changed.length} element(s)`, result)}${note}${guard}`);
   },
 );
 

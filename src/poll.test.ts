@@ -19,6 +19,7 @@ function status(over: Partial<RoomStatus> = {}): RoomStatus {
     sceneVersion: 120,
     lastRemoteUpdate: "2026-01-01T00:00:00.000Z",
     source: "peer",
+    persistPendingSince: null,
     ...over,
   };
 }

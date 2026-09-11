@@ -13,11 +13,14 @@ import {
   measureText,
   randomId,
   randomInteger,
+  rebindLinear,
   stampAuthor,
   summarise,
+  translate,
   type Binding,
   type ExcalidrawElement,
 } from "./elements.js";
+import { protectedBy } from "./guard.js";
 
 const REQUIRED = [
   "id", "type", "x", "y", "width", "height", "angle", "strokeColor", "backgroundColor",
@@ -1078,4 +1081,257 @@ test("summary names the author of every line, and person for what nothing stampe
 test("the author is the last thing on a line, after the reason it is listed", () => {
   const el = stampAuthor(raw({ id: "a", type: "rectangle", width: 10, height: 10 }), "alpha");
   assert.equal(summarise([el], new Map([["a", "via group"]])), "a rectangle @(0,0) 10x10 via group by alpha");
+});
+
+// ---------------------------------------------------------------------------
+// Container geometry: what has to travel with a shape that moves.
+// https://github.com/bjcoombs/excalidraw-room-mcp/issues/112
+
+/** Absolute scene coordinates of a linear element's points. */
+const absPoints = (el: ExcalidrawElement): [number, number][] =>
+  (el.points ?? []).map(([px, py]) => [el.x + px, el.y + py] as [number, number]);
+
+const inside = (el: ExcalidrawElement, [px, py]: [number, number]): boolean =>
+  px >= el.x && px <= el.x + el.width && py >= el.y && py <= el.y + el.height;
+
+/** r1 and r2 labelled, with an arrow bound between them: the #112 repro scene. */
+function boundScene(): ExcalidrawElement[] {
+  return buildElements(
+    [
+      { type: "rectangle", id: "r1", x: 0, y: 0, width: 200, height: 100, label: "Box" },
+      { type: "rectangle", id: "r2", x: 600, y: 0, width: 200, height: 100, label: "Other" },
+      { type: "arrow", id: "a1", start: "r1", end: "r2" },
+    ],
+    ctx(),
+  ).created;
+}
+
+test("update x,y on a labelled rectangle moves the bound text by the same delta and bumps both", () => {
+  const scene = boundScene();
+  const rect = scene.find((e) => e.id === "r1")!;
+  const label = scene.find((e) => e.containerId === "r1")!;
+
+  const out = applyUpdate(rect, { x: 40, y: 300 }, lookupIn(scene));
+  const movedRect = out.find((e) => e.id === "r1")!;
+  const movedLabel = out.find((e) => e.id === label.id)!;
+
+  assert.equal(movedLabel.x - label.x, 40, "the label travels the same delta on x");
+  assert.equal(movedLabel.y - label.y, 300, "and on y");
+  assert.equal(movedRect.version, rect.version + 1, "the container is bumped");
+  assert.equal(movedLabel.version, label.version + 1, "and so is the label, or peers discard it");
+  assert.ok(
+    inside(movedRect, [movedLabel.x + movedLabel.width / 2, movedLabel.y + movedLabel.height / 2]),
+    "the label's centre is inside the moved container",
+  );
+
+  // The other shape and its label are nobody's business here.
+  assert.equal(out.find((e) => e.id === "r2"), undefined);
+  assert.equal(out.find((e) => e.id === scene.find((e2) => e2.containerId === "r2")!.id), undefined);
+});
+
+test("update width on a labelled rectangle re-centres the label", () => {
+  const scene = boundScene();
+  const rect = scene.find((e) => e.id === "r1")!;
+  const label = scene.find((e) => e.containerId === "r1")!;
+
+  const out = applyUpdate(rect, { width: 400 }, lookupIn(scene));
+  const wider = out.find((e) => e.id === "r1")!;
+  const centred = out.find((e) => e.id === label.id)!;
+
+  assert.equal(wider.width, 400);
+  assert.equal(centred.x, wider.x + (wider.width - centred.width) / 2, "re-centred horizontally");
+  assert.equal(centred.y, label.y, "the height did not change, so neither does the label's y");
+  assert.equal(centred.version, label.version + 1);
+
+  // Shrinking below the label grows the container back to fit it, and the
+  // label is centred on the box that results rather than the one asked for.
+  const shrunk = applyUpdate(rect, { width: 5 }, lookupIn(scene));
+  const narrow = shrunk.find((e) => e.id === "r1")!;
+  const fitted = shrunk.find((e) => e.id === label.id)!;
+  assert.equal(narrow.width, label.width + LABEL_PADDING);
+  assert.equal(fitted.x, narrow.x + (narrow.width - fitted.width) / 2);
+});
+
+test("update x,y on a shape re-computes the endpoint of an arrow bound to it and leaves the other endpoint", () => {
+  const scene = boundScene();
+  const rect = scene.find((e) => e.id === "r1")!;
+  const arrow = scene.find((e) => e.id === "a1")!;
+  const before = absPoints(arrow);
+
+  const out = applyUpdate(rect, { y: 300 }, lookupIn(scene));
+  const moved = out.find((e) => e.id === "r1")!;
+  const rebound = out.find((e) => e.id === "a1")!;
+  assert.ok(rebound, "the arrow bound to the moved shape is returned");
+  assert.equal(rebound.version, arrow.version + 1);
+
+  const after = absPoints(rebound);
+  assert.equal(after.length, before.length, "no point is added or dropped");
+  assert.ok(inside(moved, after[0]), `start ${after[0]} is on or inside the moved box`);
+  assert.deepEqual(after[after.length - 1], before[before.length - 1], "the end bound to r2 does not move");
+  assert.notDeepEqual(after[0], before[0], "the start did move");
+  assert.equal(rebound.startBinding!.elementId, "r1");
+  assert.deepEqual(rebound.endBinding, arrow.endBinding, "the untouched binding is left verbatim");
+  assert.notDeepEqual(
+    rebound.startBinding!.fixedPoint,
+    arrow.startBinding!.fixedPoint,
+    "the binding ratio follows the new meeting point",
+  );
+
+  // A shape with no arrow into it returns itself alone.
+  const plain = applyUpdate(raw({ id: "p", type: "rectangle", width: 10, height: 10 }), { x: 5 }, () => undefined);
+  assert.equal(plain.length, 1);
+});
+
+test("update x on an arrow with a label moves the label", () => {
+  const { created } = buildElements(
+    [{ type: "arrow", id: "ar", points: [[0, 0], [100, 40]], label: "calls" }],
+    ctx(),
+  );
+  const arrow = created.find((e) => e.id === "ar")!;
+  const label = created.find((e) => e.containerId === "ar")!;
+
+  const out = applyUpdate(arrow, { x: arrow.x + 70, y: arrow.y - 25 }, lookupIn(created));
+  const movedArrow = out.find((e) => e.id === "ar")!;
+  const movedLabel = out.find((e) => e.id === label.id)!;
+  assert.equal(movedLabel.x - label.x, 70, "an arrow's label is carried by the delta, not re-centred in a box");
+  assert.equal(movedLabel.y - label.y, -25);
+  assert.equal(movedArrow.width, arrow.width, "the arrow's box still comes from its points");
+  assert.equal(movedArrow.height, arrow.height);
+  assert.equal(movedLabel.version, label.version + 1);
+});
+
+test("summary marks a bound label outside its container", () => {
+  const container = raw({ id: "r3", type: "rectangle", x: 0, y: 900, width: 200, height: 100 });
+  const adrift = raw({ id: "t3", type: "text", containerId: "r3", x: 900, y: 900, width: 60, height: 25, text: "far" });
+  const line = summarise([container, adrift]);
+  assert.equal(line, 'r3 rectangle @(0,900) 200x100 "far" (label at 900,900, outside container) by person');
+
+  // Inside on both axes is the quiet case, and each edge is inclusive.
+  const home = { ...adrift, x: 70, y: 937 };
+  assert.equal(summarise([container, home]), 'r3 rectangle @(0,900) 200x100 "far" by person');
+  for (const corner of [
+    { x: -70, y: 937 },
+    { x: 180, y: 937 },
+    { x: 70, y: 800 },
+    { x: 70, y: 1000 },
+  ]) {
+    assert.match(summarise([container, { ...adrift, ...corner }]), /outside container/, JSON.stringify(corner));
+  }
+  assert.doesNotMatch(summarise([container, { ...adrift, x: -30, y: 887.5 }]), /outside container/, "the top-left corner counts as inside");
+});
+
+test("translate_elements moves a group member, its label, and an arrow between two translated shapes once each", () => {
+  const scene = boundScene().map((el) =>
+    el.id === "r1" || el.id === "r2" ? { ...el, groupIds: ["g1"] } : el,
+  );
+  const before = new Map(scene.map((e) => [e.id, e]));
+  const { moved, rebound, added, missing } = translate(["r1"], 50, 50, scene);
+
+  assert.deepEqual(missing, []);
+  assert.deepEqual(rebound, [], "both of a1's ends are moving, so it travels rather than re-attaching");
+  assert.equal(moved.length, 5, moved.map((e) => e.id).join(", "));
+  assert.equal(new Set(moved.map((e) => e.id)).size, 5, "each element moves exactly once");
+  for (const el of moved) {
+    const was = before.get(el.id)!;
+    assert.equal(el.x - was.x, 50, `${el.id} x`);
+    assert.equal(el.y - was.y, 50, `${el.id} y`);
+    assert.equal(el.version, was.version + 1, `${el.id} version`);
+  }
+  const labels = scene.filter((e) => e.containerId).map((e) => e.id);
+  assert.deepEqual([...added].sort(), ["a1", "r2", ...labels].sort(), "r2 via the group, both labels, a1 via both ends");
+
+  // The arrow keeps its shape: both of its ends moved by the same delta.
+  const a1 = moved.find((e) => e.id === "a1")!;
+  assert.deepEqual(
+    absPoints(a1),
+    absPoints(before.get("a1")!).map(([px, py]) => [px + 50, py + 50]),
+  );
+
+  // Asking for every id by name pulls nothing in and still moves each once.
+  const all = translate(scene.map((e) => e.id), 1, 2, scene);
+  assert.deepEqual(all.added, []);
+  assert.equal(all.moved.length, scene.length);
+});
+
+test("translate_elements carries frame children and refuses foreign elements without force", () => {
+  const frame = raw({ id: "f1", type: "frame", x: 0, y: 0, width: 400, height: 300 });
+  const child = raw({ id: "c1", type: "rectangle", x: 20, y: 20, width: 60, height: 40, frameId: "f1" });
+  const outside = raw({ id: "o1", type: "rectangle", x: 900, y: 0, width: 60, height: 40 });
+  const theirs = stampAuthor(raw({ id: "b1", type: "rectangle", x: 0, y: 500, width: 10, height: 10 }), "beta");
+  const scene = [frame, child, outside, theirs];
+
+  const { moved, added, missing } = translate(["f1", "nope"], 10, -5, scene);
+  assert.deepEqual(missing, ["nope"], "an id that is not in the scene is reported, not moved");
+  assert.deepEqual(moved.map((e) => e.id), ["f1", "c1"], "the frame takes its children and nothing else");
+  assert.deepEqual(added, ["c1"]);
+  assert.equal(moved[1].x, 30);
+  assert.equal(moved[1].y, 15);
+
+  // The guard runs before the closure: another present agent's element is not
+  // an allowed id, so translate never sees it. Its owner is named instead.
+  assert.equal(protectedBy(theirs, ["beta"], "alpha"), "beta");
+  assert.equal(protectedBy(child, ["beta"], "alpha"), null, "a person's element is never guarded");
+  assert.deepEqual(translate([], 10, -5, scene).moved, [], "with nothing allowed, nothing moves");
+  assert.equal(protectedBy(theirs, [], "alpha"), null, "an agent that has left cannot be surprised");
+});
+
+test("a deleted scene element is neither moved nor carried", () => {
+  const container = raw({ id: "r", type: "rectangle", width: 100, height: 50, boundElements: [{ id: "t", type: "text" }] });
+  const gone = raw({ id: "t", type: "text", containerId: "r", width: 40, height: 25, isDeleted: true });
+  const { moved, added } = translate(["r", "t"], 5, 5, [container, gone]);
+  assert.deepEqual(moved.map((e) => e.id), ["r"]);
+  assert.deepEqual(added, []);
+  // Nor does an update re-lay it out.
+  assert.deepEqual(applyUpdate(container, { x: 9 }, lookupIn([container, gone])).map((e) => e.id), ["r"]);
+});
+
+test("an arrow bound at one end to a moved shape is re-attached rather than moved", () => {
+  const scene = boundScene();
+  const { moved, rebound, added } = translate(["r1"], 0, 400, scene);
+  assert.deepEqual(moved.map((e) => e.id).sort(), ["r1", scene.find((e) => e.containerId === "r1")!.id].sort());
+  assert.equal(rebound.length, 1, "a1 binds r1 at one end only, so it is re-attached");
+  const a1 = rebound[0];
+  const was = scene.find((e) => e.id === "a1")!;
+  assert.equal(a1.version, was.version + 1);
+  const after = absPoints(a1);
+  assert.deepEqual(after[after.length - 1], absPoints(was)[absPoints(was).length - 1], "the r2 end stays put");
+  assert.ok(inside(moved.find((e) => e.id === "r1")!, after[0]));
+  assert.ok(!added.includes("a1"));
+
+  // An arrow bound to nothing that moved is left entirely alone.
+  const detached = translate([scene.find((e) => e.containerId === "r2")!.id], 3, 3, scene);
+  assert.deepEqual(detached.rebound, []);
+});
+
+test("re-binding keeps an older focus/gap binding's shape and skips a degenerate arrow", () => {
+  const shape = raw({ id: "s", type: "rectangle", x: 0, y: 0, width: 100, height: 100 });
+  const legacy = raw({
+    id: "old",
+    type: "arrow",
+    x: 200,
+    y: 50,
+    points: [[0, 0], [-100, 0]],
+    endBinding: { elementId: "s", fixedPoint: null, focus: 0, gap: 1 },
+  });
+  const rebound = rebindLinear(legacy, shape)!;
+  assert.ok(rebound, "an arrow written before upstream moved to fixedPoint still re-attaches");
+  assert.equal(rebound.endBinding!.elementId, "s");
+  assert.deepEqual((rebound.endBinding as Binding).fixedPoint, [1, 0.5001]);
+  assert.equal((rebound.endBinding as Binding).mode, "orbit");
+  assert.deepEqual(absPoints(rebound)[1], [100, 50], "the end lands on the outline, not a gap outside it");
+  assert.deepEqual(absPoints(rebound)[0], [200, 50], "the free end is untouched");
+
+  // Nothing to re-compute: a binding naming someone else, and an arrow with
+  // fewer than two points.
+  assert.equal(rebindLinear(legacy, { ...shape, id: "other" }), null);
+  const stub = raw({ id: "stub", type: "arrow", points: [[0, 0]], startBinding: { elementId: "s", fixedPoint: [0, 0], mode: "orbit" } });
+  assert.equal(rebindLinear(stub, shape), null);
+});
+
+test("an update that changes no geometry leaves bound elements alone", () => {
+  const scene = boundScene();
+  const rect = scene.find((e) => e.id === "r1")!;
+  const same = applyUpdate(rect, { x: rect.x, y: rect.y, backgroundColor: "#ffec99" }, lookupIn(scene));
+  assert.deepEqual(same.map((e) => e.id), ["r1"], "setting x and y to what they already are moves nothing");
+  assert.equal(same[0].backgroundColor, "#ffec99");
 });

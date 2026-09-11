@@ -664,6 +664,7 @@ function pollStatus() {
     sceneVersion: 7,
     lastRemoteUpdate: null,
     source: "peer" as const,
+    persistPendingSince: null,
   };
 }
 
