@@ -2066,6 +2066,10 @@ test("only a near, undeleted post-it answering the same question is read back as
   assert.equal(strippedQuestion(blank.text as string), "");
   assert.equal(previousAnswerNear([blank, blankPostIt, blankLabel], mentionOf(blank)), null);
 
+  // A post-it a person has since deleted is a tombstone, not history.
+  const [gone, goneLabel] = postIt("gone", "what is it?", "an answer", 100, 0);
+  assert.equal(previousAnswerNear([asking, markRemoved(gone), goneLabel], mention), null);
+
   // An element that is itself marked as an answer is not its own history.
   const self = rawElement({
     id: "s",
