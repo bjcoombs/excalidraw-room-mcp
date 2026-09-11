@@ -5,9 +5,14 @@ import {
   buildElements,
   bump,
   elementAuthor,
+  FALLBACK_AUTHOR,
+  LABEL_PADDING,
+  measureText,
   PERSON_AUTHOR,
   stampAuthor,
   summarise,
+  wrapText,
+  WRAP_WIDTH,
   type ElementSpec,
   type ExcalidrawElement,
 } from "./elements.js";
@@ -41,9 +46,20 @@ import {
   ANSWER_WITH_REPLY_TEXT,
   ANSWER_WITH_STATUS_TEXT,
   answerSchema,
-  attributedAnswerText,
+  boundLabelOf,
+  buildAnswerPostIt,
+  DEFAULT_INK,
+  findAnswerPostIt,
   isSourceUrl,
-  markAnswered,
+  markReplied,
+  POSTIT_FILL,
+  POSTIT_WIDTH,
+  postItParagraphs,
+  postItText,
+  preSeenStroke,
+  previousAnswerNear,
+  strippedQuestion,
+  STROKE_CUSTOM_DATA_KEY,
   MAX_ANSWER_LENGTH,
   MENTION_POLICY_HOSTING_RULE,
   MENTION_SCOPE_RULE_ANSWERING,
@@ -790,7 +806,7 @@ test("planAcknowledgement writes one attributed line for a status or a reply, an
 test("an attributed line sits under the note, in its font, greyed, linked back to it", () => {
   const [note] = buildElements([{ type: "text", id: "note", x: 20, y: 120, text: "@claude which box" }], ctx()).created;
   const existing = new Map([[note.id, note]]);
-  const reply = buildAttributedLine(note, attributedReplyText("The left or the right one?"), { existing, lastIndex: null });
+  const reply = buildAttributedLine(note, attributedReplyText("Which box?"), { existing, lastIndex: null });
 
   // Directly below the note, same column, so the two read as one annotation.
   assert.equal(reply.x, note.x);
@@ -804,7 +820,7 @@ test("an attributed line sits under the note, in its font, greyed, linked back t
   assert.ok(typeof reply.index === "string" && reply.index.length > 0);
 
   // The attributed question, then the line that makes it a two-way channel.
-  assert.equal(reply.text, `claude: The left or the right one?\n${REPLY_PROMPT_LINE}`);
+  assert.equal(reply.text, `claude: Which box?\n${REPLY_PROMPT_LINE}`);
   assert.ok(String(reply.text).startsWith(ATTRIBUTION_PREFIX));
   assert.ok(String(reply.text).endsWith(REPLY_PROMPT_LINE));
   assert.equal((reply.customData as Record<string, unknown>)[REPLY_CUSTOM_DATA_KEY], "note");
@@ -1229,77 +1245,250 @@ test("the mention policy starts off, is set in memory and reset on join", () => 
   assert.match(MENTION_POLICY_HOSTING_RULE, /never write client-identifiable/);
 });
 
-test("an answer keeps the question in colour with a tick and groups it with the attributed line", () => {
+test("an answer becomes a 360 px post-it that replaces the note", () => {
   const blue = "#1971c2";
   const [question] = buildElements(
-    [{ type: "text", id: "q", x: 40, y: 80, text: "@claude what is a 303", strokeColor: blue }],
+    [{ type: "text", id: "q", x: 40, y: 80, text: `@claude what is a 303${SEEN_MARKER}`, strokeColor: blue }],
     ctx(),
   ).created;
-  const answer = "A 303 tells the client to GET the Location; a 302 lets it repeat the original method.";
+  const answer = `${"A 303 tells the client to GET the Location. ".repeat(7)}A 302 lets it repeat the method.`;
+  assert.ok(answer.length >= 300, `${answer.length} characters`);
   const source = "https://www.rfc-editor.org/rfc/rfc9110";
 
   const plan = planAcknowledgement({ answer, source }, "@claude", "alpha");
   assert.equal(plan.refusal, undefined);
-  assert.equal(plan.kept, true);
-  assert.equal(plan.replies, false);
   assert.equal(plan.answers, true);
-  assert.equal(plan.line, `alpha: ${answer}`);
-  assert.equal(plan.line, attributedAnswerText(answer, "alpha"));
-  assert.equal(attributedAnswerText(answer), `claude: ${answer}`);
+  assert.equal(plan.answer, answer);
+  assert.equal(plan.kept, false, "the note goes and the post-it takes its place");
+  assert.equal(plan.replies, false);
+  assert.equal(plan.line, undefined, "nothing is written under a note that is gone");
   assert.equal(plan.link, source);
   const unsourced = planAcknowledgement({ answer }, "@claude", "alpha");
   assert.equal(unsourced.link, undefined, "no source, no link");
   assert.ok(!("link" in unsourced), "and no link key at all");
-  assert.equal(attributedAnswerText(`  ${answer}  `, "alpha"), `alpha: ${answer}`, "trimmed");
-  assert.match(acknowledgementText("q", plan), /answered it on the canvas/);
+  assert.equal(planAcknowledgement({ answer: `  ${answer}  ` }).answer, answer, "trimmed");
+  assert.match(acknowledgementText("q", plan), /replaced the note with a post-it/);
 
-  // The question is the heading, so it keeps the colour it was written in and
-  // only the mark says it was dealt with.
-  const answered = markAnswered(question);
-  assert.equal(answered.text, `@claude what is a 303 ${ACKNOWLEDGED_MARK}`);
-  assert.equal(answered.strokeColor, blue);
-  assert.notEqual(answered.strokeColor, ACKNOWLEDGED_STROKE);
-  assert.equal(answered.version, question.version + 1);
-  assert.equal(String(answered.text).split(ACKNOWLEDGED_MARK).length - 1, 1, "exactly one mark");
-  // Marked twice, it still carries one mark and its own colour.
-  assert.equal(markAnswered(answered).text, answered.text);
-  assert.equal(markAnswered(answered).strokeColor, blue);
-  assert.equal(markAnswered({ ...question, text: undefined }).text, ` ${ACKNOWLEDGED_MARK}`);
-  // The greying path is untouched: a status still greys the note out.
-  assert.equal(markAcknowledged(question).strokeColor, ACKNOWLEDGED_STROKE);
-
-  // One group holds the two, so dragging the question takes the answer along.
-  const group = newGroupId();
-  assert.ok(group.length > 0);
-  assert.notEqual(group, newGroupId(), "a fresh id each time");
-  const heading = withGroup(answered, group);
-  const line = withGroup(
-    buildAttributedLine(heading, plan.line!, ctx(), "alpha", { link: plan.link, answer: plan.answers }),
-    group,
-  );
-  assert.deepEqual(heading.groupIds, [group]);
-  assert.deepEqual(line.groupIds, [group]);
-  assert.ok(line.groupIds!.some((g) => heading.groupIds!.includes(g)), "a shared group entry");
-  // Applied twice it adds nothing, and a group the element already had stays.
-  assert.deepEqual(withGroup(heading, group).groupIds, [group]);
-  assert.deepEqual(withGroup({ ...question, groupIds: ["old"] }, group).groupIds, ["old", group]);
-  assert.deepEqual(withGroup({ ...question, groupIds: undefined }, group).groupIds, [group]);
-
-  // The line: grey, under the heading, linked to the source, and marked as an
-  // answer so it is read back as one.
-  assert.equal(line.text, `alpha: ${answer}`);
-  assert.equal(line.strokeColor, ACKNOWLEDGED_STROKE);
-  assert.equal(line.x, heading.x);
-  assert.equal(line.y, heading.y + heading.height + ATTRIBUTED_LINE_GAP);
-  assert.equal(line.link, source);
-  const data = line.customData as Record<string, unknown>;
+  const { container, label } = buildAnswerPostIt(question, plan.answer!, ctx(), "alpha", { link: plan.link });
+  assert.equal(container.type, "rectangle");
+  assert.deepEqual(container.roundness, { type: 3 }, "rounded, as a post-it is");
+  assert.equal(container.width, 360);
+  assert.equal(container.width, POSTIT_WIDTH);
+  assert.equal(container.x, question.x, "where the note was");
+  assert.equal(container.y, question.y);
+  assert.equal(container.backgroundColor, POSTIT_FILL);
+  assert.equal(container.backgroundColor, "#fff3bf");
+  assert.equal(container.strokeColor, ACKNOWLEDGED_STROKE);
+  assert.equal(container.strokeColor, "#868e96");
+  assert.equal(container.strokeWidth, 1);
+  assert.equal(container.link, source);
+  assert.equal(container.isDeleted, false);
+  const data = container.customData as Record<string, unknown>;
   assert.equal(data[REPLY_CUSTOM_DATA_KEY], "q");
   assert.equal(data[REPLY_KIND_CUSTOM_DATA_KEY], ANSWER_KIND);
   assert.equal(data.author, "alpha");
-  // A status line carries no link and no answer marker.
-  const statusLine = buildAttributedLine(heading, attributedStatusText("see chat", "alpha"), ctx(), "alpha");
-  assert.equal(statusLine.link, null);
-  assert.equal((statusLine.customData as Record<string, unknown>)[REPLY_KIND_CUSTOM_DATA_KEY], undefined);
+  assert.equal(data.authorKind, AGENT_AUTHOR_KIND);
+  assert.equal(elementAuthor(container), "alpha");
+
+  // The words are bound inside the box, so the two drag as one piece.
+  assert.equal(label.containerId, container.id);
+  assert.deepEqual(container.boundElements, [{ id: label.id, type: "text" }]);
+  assert.equal(label.strokeColor, DEFAULT_INK);
+  assert.equal(label.strokeColor, "#1e1e1e");
+  assert.equal(elementAuthor(label), "alpha");
+  const text = label.text as string;
+  assert.ok(text.startsWith("what is a 303"), text);
+  assert.ok(text.endsWith("- alpha"), text);
+  assert.ok(text.includes("A 303 tells the client"), text);
+  assert.equal(text.split("\n\n").length, 3, "question, answer, signature");
+  const lines = text.split("\n");
+  assert.ok(lines.length >= 4, `${lines.length} lines`);
+  for (const line of lines) {
+    assert.ok(measureText(line, Number(label.fontSize)).width <= POSTIT_WIDTH, `too wide: ${line}`);
+  }
+  assert.equal(label.height, measureText(text, Number(label.fontSize)).height);
+  assert.equal(container.height, label.height + 2 * LABEL_PADDING);
+  assert.ok(container.height > label.height, "the words fit with padding to spare");
+  assert.equal(label.y, container.y + LABEL_PADDING, "against the top, read from the first line down");
+  assert.ok(label.x >= container.x, "and inside the box");
+  assert.ok(label.x + label.width <= container.x + container.width);
+  assert.equal(label.textAlign, "left");
+  assert.equal(label.verticalAlign, "top");
+  assert.equal(label.fontFamily, question.fontFamily, "the note's own font");
+
+  const plain = buildAnswerPostIt(question, answer, ctx());
+  assert.equal(plain.container.link, null, "no source, no link icon");
+  assert.ok((plain.label.text as string).endsWith(`- ${FALLBACK_AUTHOR}`), "and the fallback signature");
+
+  // The note itself is gone: nothing on the canvas asks the question twice.
+  const removed = markRemoved(question);
+  assert.equal(removed.isDeleted, true);
+  assert.equal(findMentions([removed, container, label]).length, 0);
+
+  // A later acknowledgement finds the post-it it wrote, and its words with it.
+  const scene = [removed, container, label];
+  assert.equal(findAnswerPostIt(scene, "q")?.id, container.id);
+  assert.equal(findAnswerPostIt(scene, "other"), null);
+  assert.equal(findAnswerPostIt([markRemoved(container), label], "q"), null);
+  assert.equal(findAnswerPostIt([label], "q"), null, "the bound text is not the post-it");
+  assert.equal(boundLabelOf(scene, container)?.id, label.id);
+  assert.equal(boundLabelOf([container, markRemoved(label)], container), null);
+  assert.equal(boundLabelOf([container], container), null);
+});
+
+test("reply and status lines wrap at 360 px", () => {
+  const [note] = buildElements([{ type: "text", id: "n", x: 0, y: 0, text: "@claude explain this" }], ctx()).created;
+  const long = `${"The capital of France is Paris. ".repeat(9)}Ask again if you need more.`;
+  assert.equal(long.length, 315);
+
+  const reply = buildAttributedLine(note, attributedReplyText(long, "alpha"), ctx(), "alpha");
+  const lines = (reply.text as string).split("\n");
+  assert.ok(lines.length > 2, `${lines.length} lines`);
+  assert.ok(reply.width <= POSTIT_WIDTH + 10, `${reply.width} px wide`);
+  for (const line of lines) {
+    assert.ok(measureText(line, Number(reply.fontSize)).width <= WRAP_WIDTH, `too wide: ${line}`);
+  }
+  assert.equal(lines[lines.length - 1], REPLY_PROMPT_LINE, "the prompt keeps a line of its own");
+  assert.ok(lines[0].startsWith(attributionPrefix("alpha")), lines[0]);
+  assert.equal(
+    lines.slice(0, -1).join(" ").replace(attributionPrefix("alpha"), ""),
+    long,
+    "every word survives the wrapping",
+  );
+  assert.equal(reply.height, measureText(reply.text as string, Number(reply.fontSize)).height);
+
+  const status = buildAttributedLine(note, attributedStatusText("out of scope", "alpha"), ctx(), "alpha");
+  assert.equal(status.text, "alpha: out of scope", "a line that already fits is left alone");
+  const longStatus = buildAttributedLine(note, `alpha: ${long}`, ctx(), "alpha");
+  assert.ok((longStatus.text as string).includes("\n"), "a long one is broken");
+
+  // A reply is now as long as an answer may be, because it is no longer one line.
+  assert.equal(MAX_REPLY_LENGTH, 400);
+  assert.equal(MAX_REPLY_LENGTH, MAX_ANSWER_LENGTH);
+  assert.equal(replySchema.safeParse(long).success, true);
+  assert.equal(replySchema.safeParse("a".repeat(MAX_REPLY_LENGTH)).success, true);
+  assert.equal(replySchema.safeParse("a".repeat(MAX_REPLY_LENGTH + 1)).success, false);
+  assert.match(REPLY_TOO_LONG_TEXT, /400/);
+
+  // The wrapper itself: at the width, on word boundaries, paragraphs kept.
+  assert.equal(WRAP_WIDTH, 360);
+  assert.equal(wrapText("short enough"), "short enough");
+  assert.equal(wrapText("a\n\nb"), "a\n\nb", "blank lines are paragraph breaks");
+  const wrapped = wrapText(long).split("\n");
+  assert.ok(wrapped.length > 1);
+  assert.equal(wrapped.join(" "), long);
+  for (const line of wrapped) assert.ok(measureText(line, 20).width <= WRAP_WIDTH, line);
+  const unbreakable = "x".repeat(80);
+  const broken = wrapText(unbreakable).split("\n");
+  assert.ok(broken.length > 1, "a word wider than the column is broken rather than left to overflow");
+  assert.equal(broken.join(""), unbreakable);
+  for (const line of broken) assert.ok(measureText(line, 20).width <= WRAP_WIDTH, line);
+  const narrow = wrapText("one two three", 60, 20).split("\n");
+  assert.deepEqual(narrow, ["one", "two", "three"], "the width is the argument, not a constant");
+});
+
+test("a kept note is restored to its colour from before it was marked seen", () => {
+  const blue = "#1971c2";
+  const [note] = buildElements(
+    [{ type: "text", id: "n", x: 0, y: 0, text: "@claude keep me", strokeColor: blue }],
+    ctx(),
+  ).created;
+  assert.equal(note.customData, undefined, "a fresh note records nothing");
+  assert.equal(preSeenStroke(note), DEFAULT_INK, "and nothing recorded reads as the canvas ink");
+  assert.equal(STROKE_CUSTOM_DATA_KEY, "excalidrawRoomStroke");
+  assert.equal(DEFAULT_INK, "#1e1e1e");
+
+  const seen = markSeen(note)!;
+  assert.equal(seen.strokeColor, SEEN_STROKE);
+  assert.equal((seen.customData as Record<string, unknown>)[STROKE_CUSTOM_DATA_KEY], blue);
+  assert.equal(preSeenStroke(seen), blue);
+  assert.equal(elementAuthor(seen), null, "the record is not an authorship stamp");
+  assert.equal(elementAuthor(markSeen(stampAuthor(note, "beta"))!), "beta", "and it keeps one that is there");
+
+  // Re-marked after an edit the note is already amber, so the first record stands.
+  const reSeen = markSeen(bump({ ...seen, text: "@claude keep me please" }))!;
+  assert.equal((reSeen.customData as Record<string, unknown>)[STROKE_CUSTOM_DATA_KEY], blue);
+  const amber = markSeen({ ...note, strokeColor: SEEN_STROKE })!;
+  assert.equal((amber.customData as Record<string, unknown>)[STROKE_CUSTOM_DATA_KEY], DEFAULT_INK, "amber is not a colour to restore");
+
+  // A reply leaves a live question in its own ink.
+  const replied = markReplied(seen);
+  assert.equal(replied.strokeColor, blue);
+  assert.notEqual(replied.strokeColor, SEEN_STROKE);
+  assert.notEqual(replied.strokeColor, ACKNOWLEDGED_STROKE);
+  assert.equal(replied.isDeleted, false);
+  assert.equal(replied.text, `@claude keep me ${ACKNOWLEDGED_MARK}`);
+  assert.equal(replied.version, seen.version + 1);
+  assert.equal(markReplied({ ...seen, customData: undefined }).strokeColor, DEFAULT_INK);
+
+  // keep and status grey it: it passes back through its own colour on the way.
+  const kept = markAcknowledged(seen);
+  assert.equal(kept.strokeColor, ACKNOWLEDGED_STROKE);
+  assert.equal(kept.text, `@claude keep me ${ACKNOWLEDGED_MARK}`);
+  assert.equal(kept.isDeleted, false);
+  assert.equal((kept.customData as Record<string, unknown>)[STROKE_CUSTOM_DATA_KEY], blue, "and the record survives for the next round");
+  assert.equal(preSeenStroke(kept), blue);
+});
+
+test("a new note near a post-it with the same question reports previous answer", () => {
+  const [asked] = buildElements(
+    [{ type: "text", id: "q1", x: 100, y: 100, text: "@alpha what is the capital of France?" }],
+    ctx(),
+  ).created;
+  const answer = `${"The capital of France is Paris. ".repeat(9)}Ask again if you need more.`;
+  const { container, label } = buildAnswerPostIt(asked, answer, ctx(), "alpha");
+
+  const paragraphs = postItParagraphs(label.text as string);
+  assert.equal(paragraphs.question, "what is the capital of France?");
+  assert.equal(paragraphs.answer, answer, "unwrapped back to the line it was given as");
+  assert.equal(paragraphs.signature, "- alpha");
+  assert.equal(postItText("q", "a", "alpha"), "q\n\na\n\n- alpha");
+  assert.equal(postItText("q", "a", null), `q\n\na\n\n- ${FALLBACK_AUTHOR}`);
+  assert.equal(strippedQuestion(`@alpha @claude what is a 303 ${ACKNOWLEDGED_MARK}`), "what is a 303");
+  assert.equal(strippedQuestion("what an @alpha does"), "what an @alpha does", "only leading tags");
+
+  const scene = [markRemoved(asked), container, label];
+  const [again] = buildElements(
+    [{ type: "text", id: "q4", x: 120, y: 140, text: "@alpha what is the capital of France?" }],
+    ctx(),
+  ).created;
+  const previous = previousAnswerNear([...scene, again], mentionOf(again));
+  assert.deepEqual(previous, { kind: "answer", text: answer });
+  const block = formatMention(mentionOf(again), [], { previous });
+  assert.ok(block.includes(`previous answer: ${answer}`), block);
+  assert.ok(block.indexOf("previous answer:") > block.indexOf(UNTRUSTED_OPEN), "inside the untrusted block");
+  const reported = block.split("\n").find((l) => l.startsWith("previous answer:"))!;
+  assert.ok(reported.includes("Paris"), "on one line, so the answer is read whole");
+
+  // Far away, a different question, a post-it that is gone, or one with no
+  // words left: nothing to report.
+  const [far] = buildElements(
+    [{ type: "text", id: "q5", x: 5000, y: 5000, text: "@alpha what is the capital of France?" }],
+    ctx(),
+  ).created;
+  assert.equal(previousAnswerNear([...scene, far], mentionOf(far)), null);
+  assert.deepEqual(previousAnswerNear([...scene, far], mentionOf(far), 100000), { kind: "answer", text: answer }, "the radius is the gate");
+  const [other] = buildElements(
+    [{ type: "text", id: "q6", x: 120, y: 140, text: "@alpha what is the capital of Spain?" }],
+    ctx(),
+  ).created;
+  assert.equal(previousAnswerNear([...scene, other], mentionOf(other)), null);
+  assert.equal(previousAnswerNear([markRemoved(container), label, again], mentionOf(again)), null);
+  assert.equal(previousAnswerNear([container, again], mentionOf(again)), null, "a post-it with no words says nothing");
+  assert.equal(previousAnswerNear(scene, { ...mentionOf(again), text: "" }), null);
+  assert.equal(previousAnswerNear([...scene, again], mentionOf(container)), null, "and a post-it is not its own history");
+
+  // An answer line written by an older release is still read back as an answer.
+  const old = buildAttributedLine(asked, "alpha: Paris.", ctx(), "alpha", { answer: true });
+  assert.deepEqual(previousLine(old), { kind: "answer", text: "Paris." });
+  assert.deepEqual(previousLine({ ...old, customData: { [REPLY_CUSTOM_DATA_KEY]: "q1" } }), { kind: "status", text: "Paris." });
+  assert.deepEqual(previousLine({ ...old, text: `alpha: Which one?\n${REPLY_PROMPT_LINE}` }), { kind: "reply", text: "Which one?" });
+  assert.equal(findAttributedLine([old], "q1")?.id, old.id);
+});
+
+test("the answer arguments are refused as a pair, and the older outcomes are untouched", () => {
+  const answer = "A 303 tells the client to GET the Location.";
+  const source = "https://www.rfc-editor.org/rfc/rfc9110";
 
   // The refusals name both arguments, so a caller that passed two outcomes is
   // told which two rather than that one of them is unknown.
@@ -1309,6 +1498,7 @@ test("an answer keeps the question in colour with a tick and groups it with the 
   assert.match(withStatus.refusal!, /status/);
   assert.equal(withStatus.kept, false, "nothing on the canvas is touched");
   assert.equal(withStatus.line, undefined);
+  assert.equal(withStatus.answer, undefined);
   const withReply = planAcknowledgement({ answer, reply: "Which one?" });
   assert.equal(withReply.refusal, ANSWER_WITH_REPLY_TEXT);
   assert.match(withReply.refusal!, /answer/);
@@ -1347,53 +1537,20 @@ test("an answer keeps the question in colour with a tick and groups it with the 
   assert.deepEqual(planAcknowledgement({}), { kept: false, replies: false });
   assert.equal(planAcknowledgement({ status: "see chat" }).answers, undefined);
   assert.equal(planAcknowledgement({ reply: "Which one?" }).answers, undefined);
-});
-
-test("a new answer replaces the previous line and the previous answer is reported", () => {
-  const first = "A 303 tells the client to GET the Location; a 302 lets it repeat the original method.";
-  const second = "A 307 also preserves the method.";
-  const [question] = buildElements([{ type: "text", id: "q", x: 0, y: 0, text: "@claude what is a 303" }], ctx()).created;
-  const line = buildAttributedLine(question, attributedAnswerText(first, "alpha"), ctx(), "alpha", {
-    link: "https://www.rfc-editor.org/rfc/rfc9110",
-    answer: true,
-  });
-
-  // Read back off the canvas as an answer, not as a status: an answer is free
-  // prose and looks like anything, so the line says what it is.
-  assert.deepEqual(previousLine(line), { kind: "answer", text: first });
-  // A line with no marker is still read the way it always was.
-  assert.deepEqual(previousLine({ ...line, customData: { [REPLY_CUSTOM_DATA_KEY]: "q" } }), {
-    kind: "status",
-    text: first,
-  });
-  assert.deepEqual(previousLine({ ...line, text: `alpha: Which one?\n${REPLY_PROMPT_LINE}` }), {
-    kind: "reply",
-    text: "Which one?",
-  });
-
-  // The person edits the question; it is pending again and carries what was
-  // answered last time, so the two are read together.
-  const edited = { ...bump(question), text: "@claude what is a 303 vs 307" };
-  const [reopened] = findMentions([edited]);
-  const block = formatMention(reopened, [], { previous: previousLine(line) });
-  assert.ok(block.includes(`previous answer: ${first}`), block);
-  assert.ok(block.indexOf("previous answer:") > block.indexOf(UNTRUSTED_OPEN), "inside the untrusted block");
-
-  // The second answer replaces the first: the old line is tombstoned in the
-  // same commit that writes the new one, so exactly one line answers q.
-  const replacement = buildAttributedLine(edited, attributedAnswerText(second, "alpha"), ctx(), "alpha", { answer: true });
-  const scene = [edited, markRemoved(line), replacement];
-  assert.equal(findAttributedLine(scene, "q")?.id, replacement.id);
-  assert.equal(scene.filter((el) => !el.isDeleted && findAttributedLine([el], "q")).length, 1);
-  assert.deepEqual(previousLine(findAttributedLine(scene, "q")!), { kind: "answer", text: second });
-  assert.equal(replacement.link, null, "a replacement with no source carries no link");
-
-  // A bare acknowledgement takes both away.
-  const cleared = [markRemoved(edited), markRemoved(replacement)];
-  assert.deepEqual(cleared.map((el) => el.isDeleted), [true, true]);
-  assert.equal(findAttributedLine(cleared, "q"), null);
-  assert.equal(findMentions(cleared).length, 0);
+  assert.equal(planAcknowledgement({ status: "see chat" }).kept, true);
+  assert.equal(planAcknowledgement({ reply: "Which one?" }).replies, true);
   assert.equal(acknowledgementText("q", planAcknowledgement({})), "acknowledged and removed q from the canvas");
+
+  // One group still holds a kept note and the line under it.
+  const group = newGroupId();
+  assert.ok(group.length > 0);
+  assert.notEqual(group, newGroupId(), "a fresh id each time");
+  const [note] = buildElements([{ type: "text", id: "n", x: 0, y: 0, text: "@claude do it" }], ctx()).created;
+  const grouped = withGroup(note, group);
+  assert.deepEqual(grouped.groupIds, [group]);
+  assert.deepEqual(withGroup(grouped, group).groupIds, [group]);
+  assert.deepEqual(withGroup({ ...note, groupIds: ["old"] }, group).groupIds, ["old", group]);
+  assert.deepEqual(withGroup({ ...note, groupIds: undefined }, group).groupIds, [group]);
 });
 
 /**
@@ -1418,7 +1575,7 @@ test("the refusal messages, the marker colours and the custom-data keys are what
   );
   assert.equal(
     REPLY_TOO_LONG_TEXT,
-    "reply is longer than 200 characters; the canvas is not a reply channel. " +
+    "reply is longer than 400 characters; the canvas is not a reply channel. " +
       "Ask the shorter question on the canvas and put the detail in the chat reply.",
   );
   assert.equal(
@@ -1433,13 +1590,13 @@ test("the refusal messages, the marker colours and the custom-data keys are what
   );
   assert.equal(
     ANSWER_WITH_STATUS_TEXT,
-    "answer and status exclude each other: an answer keeps the question in its own colour as the heading of what you " +
-      "wrote, a status greys it out as handled. Pass one or the other.",
+    "answer and status exclude each other: an answer replaces the note with a post-it holding the question and what " +
+      "you wrote, a status greys the note out as handled. Pass one or the other.",
   );
   assert.equal(
     ANSWER_WITH_REPLY_TEXT,
-    "answer and reply exclude each other: both write one attributed line under the note, an answer with what you know " +
-      "and a reply with the question you need answered. Pass one or the other.",
+    "answer and reply exclude each other: an answer replaces the note with a post-it holding what you know, a reply " +
+      "keeps it and writes the question you need answered under it. Pass one or the other.",
   );
 
   assert.equal(
