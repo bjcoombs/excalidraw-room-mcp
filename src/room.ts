@@ -58,6 +58,17 @@ const IDLE_BROADCAST_MS = 30_000;
  */
 const AGENT_MARKER = "excalidrawRoomAgent";
 const RE_COLLAB_LINK = /#room=([a-zA-Z0-9_-]+),([a-zA-Z0-9_-]+)$/;
+/**
+ * Persistence retry policy. A browser peer saves the scene on its own
+ * schedule, so two writers in a busy room can lose the precondition race
+ * several times in a row; one retry left the stored copy behind while the
+ * result line still read like a success (issue #113).
+ */
+const PERSIST_ATTEMPTS = 5;
+/** First backoff between persist attempts, doubling thereafter. */
+const PERSIST_BACKOFF_MS = 250;
+/** How long after an exhausted persist the background attempt runs. */
+const BACKGROUND_PERSIST_MS = 2000;
 
 type Message =
   | { type: "SCENE_INIT" | "SCENE_UPDATE"; payload: { elements: ExcalidrawElement[] } }
@@ -91,6 +102,40 @@ export interface RoomStatus {
   sceneVersion: number;
   lastRemoteUpdate: string | null;
   source: "peer" | "firestore" | "empty" | null;
+  /**
+   * When the scene has edits the stored copy does not have yet: the ISO time
+   * the first of them failed to persist. Null when the stored copy is current.
+   */
+  persistPendingSince: string | null;
+}
+
+/**
+ * Seams for tests and embedders. The defaults are the real Firestore calls,
+ * a real sleep, and an unref'd `setTimeout` - unref'd so a pending background
+ * persist never holds the process open.
+ */
+export interface RoomDeps {
+  saveScene?: typeof saveScene;
+  loadScene?: typeof loadScene;
+  delay?: (ms: number) => Promise<void>;
+  schedule?: (fn: () => void, ms: number) => void;
+}
+
+/**
+ * A write tool's result line. When the scene reached the peers but not the
+ * stored copy the line leads with that, because an agent reading the first
+ * word of `updated 12 element(s) (not persisted: ...)` took it as done
+ * (issue #113). The success form is the caller's line, unchanged.
+ */
+export function commitLine(base: string, result: { persisted: boolean; error?: string }): string {
+  return result.persisted ? base : `NOT PERSISTED (retrying in background): ${base}; ${result.error}`;
+}
+
+/** The `persisted:` line of room_status. */
+export function persistedLine(status: RoomStatus): string {
+  return status.persistPendingSince === null
+    ? "persisted: yes"
+    : `persisted: pending since ${status.persistPendingSince}`;
 }
 
 function log(...args: unknown[]): void {
@@ -127,6 +172,32 @@ export class RoomClient extends EventEmitter {
   private serverUrl = DEFAULT_SERVER_URL;
   /** Update time of the Firestore document we last read or wrote; null if unknown or absent. */
   private storedUpdateTime: string | null = null;
+  /** When the stored copy is behind: the time the first failed persist happened. */
+  private dirtySince: number | null = null;
+  /** A background persist is already scheduled, so a second one is not queued. */
+  private backgroundScheduled = false;
+  /** The final persist `leave` started on a dirty scene; awaited by tests and embedders. */
+  private leavePersist: Promise<void> | null = null;
+  /** Set by joinOffline: in a room with no relay, so commits skip the socket. */
+  private offline = false;
+  private onBroadcast: ((elements: ExcalidrawElement[]) => void) | null = null;
+  private readonly saveSceneFn: typeof saveScene;
+  private readonly loadSceneFn: typeof loadScene;
+  private readonly delay: (ms: number) => Promise<void>;
+  private readonly schedule: (fn: () => void, ms: number) => void;
+
+  constructor(deps: RoomDeps = {}) {
+    super();
+    this.saveSceneFn = deps.saveScene ?? saveScene;
+    this.loadSceneFn = deps.loadScene ?? loadScene;
+    this.delay = deps.delay ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.schedule =
+      deps.schedule ??
+      ((fn, ms) => {
+        const timer = setTimeout(fn, ms);
+        timer.unref?.();
+      });
+  }
 
   static parseLink(link: string): { roomId: string; roomKey: string } {
     const trimmed = link.trim();
@@ -145,7 +216,29 @@ export class RoomClient extends EventEmitter {
   }
 
   get isConnected(): boolean {
-    return !!this.socket?.connected && !!this.roomId;
+    return (this.offline || !!this.socket?.connected) && !!this.roomId;
+  }
+
+  /**
+   * Stand the client in a room with no relay: `commit` hands its broadcast to
+   * `onBroadcast` instead of a socket, and everything after it - persist,
+   * retry, the dirty flag - runs as in a real room. The offline sibling of
+   * `ingestRemote`, so the persistence paths can be driven without a network.
+   */
+  joinOffline(link: string, onBroadcast?: (elements: ExcalidrawElement[]) => void): void {
+    const { roomId, roomKey } = RoomClient.parseLink(link);
+    this.roomId = roomId;
+    this.roomKey = roomKey;
+    this.offline = true;
+    this.onBroadcast = onBroadcast ?? null;
+  }
+
+  /**
+   * The final persist `leave` started on a dirty scene, or null when there
+   * was nothing to flush. Await it to know the stored copy is settled.
+   */
+  get pendingPersist(): Promise<void> | null {
+    return this.leavePersist;
   }
 
   /** The handle taken in the current room, for other tools in this process. */
@@ -182,6 +275,7 @@ export class RoomClient extends EventEmitter {
       sceneVersion: sceneVersion(all),
       lastRemoteUpdate: this.lastRemoteUpdate ? new Date(this.lastRemoteUpdate).toISOString() : null,
       source: this.source,
+      persistPendingSince: this.dirtySince === null ? null : new Date(this.dirtySince).toISOString(),
     };
   }
 
@@ -229,6 +323,7 @@ export class RoomClient extends EventEmitter {
     this.peers.clear();
     this.source = null;
     this.storedUpdateTime = null;
+    this.dirtySince = null;
     this.desiredHandle = opts.handle ?? defaultHandle();
     this.currentHandle = null;
     this.roomRadius = opts.nearbyRadius ?? DEFAULT_NEARBY_RADIUS;
@@ -400,7 +495,12 @@ export class RoomClient extends EventEmitter {
 
   private async loadFromFirestore(): Promise<void> {
     if (!this.roomId || !this.roomKey) return;
-    const stored = await loadScene(this.roomId, this.roomKey);
+    await this.reloadStored(this.roomId, this.roomKey);
+  }
+
+  /** Read the stored scene and reconcile it into ours. */
+  private async reloadStored(roomId: string, roomKey: string): Promise<void> {
+    const stored = await this.loadSceneFn(roomId, roomKey);
     if (stored) {
       this.mergeRemote(stored.elements);
       this.storedUpdateTime = stored.updateTime;
@@ -413,25 +513,65 @@ export class RoomClient extends EventEmitter {
 
   /**
    * Conditional save. If another client wrote since we last read (or the
-   * document appeared), reload it, reconcile into our scene, and retry once.
+   * document appeared), back off, reload it, reconcile into our scene, and
+   * try again - up to PERSIST_ATTEMPTS attempts, the wait doubling each time.
+   * The room ids are passed in by `leave`, which persists after it has already
+   * let go of the room.
    */
-  private async persist(): Promise<void> {
-    for (let attempt = 0; attempt < 2; attempt++) {
+  private async persist(ctx?: { roomId: string; roomKey: string }): Promise<void> {
+    const roomId = ctx?.roomId ?? this.roomId;
+    const roomKey = ctx?.roomKey ?? this.roomKey;
+    if (!roomId || !roomKey) throw new Error("not in a room");
+    for (let attempt = 1; ; attempt++) {
       const all = this.getElements(true);
       try {
-        this.storedUpdateTime = await saveScene(
-          this.roomId!,
-          this.roomKey!,
+        this.storedUpdateTime = await this.saveSceneFn(
+          roomId,
+          roomKey,
           all,
           sceneVersion(all),
           this.storedUpdateTime,
         );
         return;
       } catch (err) {
-        if (!(err instanceof SceneConflictError) || attempt === 1) throw err;
-        log("persist conflict, reloading and retrying");
-        await this.loadFromFirestore();
+        if (!(err instanceof SceneConflictError) || attempt === PERSIST_ATTEMPTS) throw err;
+        log("persist conflict, attempt", attempt, "of", PERSIST_ATTEMPTS);
+        await this.delay(PERSIST_BACKOFF_MS * 2 ** (attempt - 1));
+        await this.reloadStored(roomId, roomKey);
       }
+    }
+  }
+
+  /** The stored copy is current again. */
+  private markPersisted(): void {
+    this.dirtySince = null;
+  }
+
+  /**
+   * The stored copy is behind. Remember since when, and schedule one
+   * background attempt; a failed attempt schedules the next, so a room that
+   * is busy now repairs its stored copy once it quietens.
+   */
+  private markDirty(): void {
+    if (this.dirtySince === null) this.dirtySince = Date.now();
+    if (this.backgroundScheduled) return;
+    const roomId = this.roomId;
+    const roomKey = this.roomKey;
+    if (!roomId || !roomKey) return;
+    this.backgroundScheduled = true;
+    this.schedule(() => void this.backgroundPersist(roomId, roomKey), BACKGROUND_PERSIST_MS);
+  }
+
+  private async backgroundPersist(roomId: string, roomKey: string): Promise<void> {
+    this.backgroundScheduled = false;
+    if (this.dirtySince === null) return;
+    try {
+      await this.persist({ roomId, roomKey });
+      this.markPersisted();
+      log("background persist caught the stored copy up");
+    } catch (err) {
+      log("background persist failed", err);
+      this.markDirty();
     }
   }
 
@@ -516,6 +656,10 @@ export class RoomClient extends EventEmitter {
   }
 
   private async broadcast(type: "SCENE_INIT" | "SCENE_UPDATE", elements: ExcalidrawElement[]): Promise<void> {
+    if (this.offline) {
+      this.onBroadcast?.(elements);
+      return;
+    }
     await this.emitEncrypted({ type, payload: { elements } });
   }
 
@@ -541,14 +685,28 @@ export class RoomClient extends EventEmitter {
     await this.broadcast("SCENE_UPDATE", changed);
     try {
       await this.persist();
+      this.markPersisted();
       return { persisted: true };
     } catch (err) {
       log("persist failed", err);
+      this.markDirty();
       return { persisted: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 
   leave(): void {
+    // One last attempt for a scene the stored copy never caught up with,
+    // started while the room ids are still here and awaitable through
+    // `pendingPersist`.
+    const roomId = this.roomId;
+    const roomKey = this.roomKey;
+    this.leavePersist =
+      this.dirtySince !== null && roomId && roomKey
+        ? this.persist({ roomId, roomKey }).then(
+            () => this.markPersisted(),
+            (err) => log("final persist on leave failed", err),
+          )
+        : null;
     if (this.presenceTimer) clearInterval(this.presenceTimer);
     this.presenceTimer = null;
     this.socket?.close();
@@ -559,5 +717,7 @@ export class RoomClient extends EventEmitter {
     this.currentHandle = null;
     this.firstInRoom = false;
     this.source = null;
+    this.offline = false;
+    this.onBroadcast = null;
   }
 }
