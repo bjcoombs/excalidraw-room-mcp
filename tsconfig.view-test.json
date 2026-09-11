@@ -23,6 +23,8 @@
   "include": [
     "view/src/payload.ts",
     "view/src/payload.test.ts",
+    "view/src/link.ts",
+    "view/src/link.test.ts",
     "view/src/bounds.ts",
     "view/src/scene.ts",
     "view/src/scene.test.ts",

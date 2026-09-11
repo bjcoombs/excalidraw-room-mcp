@@ -94,10 +94,10 @@ import {
   CANVAS_RESOURCE_URI,
   NOT_IN_ROOM_TEXT,
   canvasHtmlUrl,
-  ensureJoined,
   registerCanvasResource,
   summariseShowRoom,
 } from "./view.js";
+import { resolveShowRoom, ViewerPool, viewersLine } from "./viewers.js";
 import { PACKAGE_VERSION } from "./version.js";
 
 // The `install-agent` subcommand copies the bundled canvas-listener subagent
@@ -109,6 +109,13 @@ if (process.argv[2] === "install-agent") {
 }
 
 const room = new RoomClient();
+/**
+ * Read-only clients for rooms this process is asked to render but is not
+ * working in. A host may route a canvas widget's calls to a process other than
+ * the one its conversation uses, so `show_room {link}` is answered from here
+ * rather than by moving the process. See src/viewers.ts.
+ */
+const viewers = new ViewerPool();
 /**
  * Mentions already surfaced to an agent, by element id -> the words they
  * carried, the server's markers stripped. Reset on join. This is what stops
@@ -447,6 +454,16 @@ function filterByAuthor(elements: readonly ExcalidrawElement[], handles: string[
   return elements.filter((el) => wanted.has(elementAuthor(el) ?? PERSON_AUTHOR));
 }
 
+/**
+ * Let go of the viewer for the room this process has just joined, if it was
+ * holding one. A room needs one client per process: the working one reads the
+ * same scene, and a second anonymous socket would show up as an extra peer.
+ */
+function dropViewerForCurrentRoom(): void {
+  const roomId = room.status().roomId;
+  if (roomId) viewers.closeRoom(roomId);
+}
+
 function statusText(): string {
   const s = room.status();
   const peers = s.peers.length
@@ -460,6 +477,7 @@ function statusText(): string {
     agentReplyDepthLine(s.agentReplyDepth),
     policyLine(mentionPolicy),
     `peers: ${peers}`,
+    viewersLine(viewers),
     `elements: ${s.elementCount} (${s.deletedCount} deleted)`,
     `sceneVersion: ${s.sceneVersion}`,
     `initial scene from: ${s.source ?? "-"}`,
@@ -487,6 +505,7 @@ server.registerTool(
     if (refusal) return errorText(refusal);
     const link = await RoomClient.createLink();
     await room.join(link, { initTimeoutMs: 1500, handle, nearbyRadius, agentReplyDepth });
+    dropViewerForCurrentRoom();
     return text(`${link}\n\n${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
@@ -509,6 +528,7 @@ server.registerTool(
     const refusal = handleRefusal(handle) ?? agentReplyDepthRefusal(agentReplyDepth);
     if (refusal) return errorText(refusal);
     await room.join(link, { serverUrl, origin, handle, nearbyRadius, agentReplyDepth });
+    dropViewerForCurrentRoom();
     return text(`${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
@@ -519,14 +539,14 @@ registerAppTool(
   {
     _meta: CANVAS_META,
     description:
-      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending mentions addressed to this agent with the ids of the elements around each. The canvas view fetches the elements for itself, so they never pass through this result unless you ask: pass include: \"json\" only if you need the element array in the text; read_scene with ids or near is the cheaper way to inspect elements. Pass link only to point this server at a room it is not in; without it the current room is used, which is what you want. The in-chat view depends on the host; prefer open_room to watch the canvas.",
+      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending mentions addressed to this agent with the ids of the elements around each. The canvas view fetches the elements for itself, so they never pass through this result unless you ask: pass include: \"json\" only if you need the element array in the text; read_scene with ids or near is the cheaper way to inspect elements. Pass link only to render a room this server is not in - it is read from a read-only viewer and the current room is untouched; without it the current room is used, which is what you want. The in-chat view depends on the host; prefer open_room to watch the canvas.",
     inputSchema: {
       tag: tagSchema,
       link: z
         .string()
         .optional()
         .describe(
-          "Collaboration link to join first if this server is in no room, or in a different one. The canvas view sends the link it was shown, because some hosts route the view's calls to a second server process that has joined nothing. Leave it unset: the model's own calls should use the room already joined.",
+          "Collaboration link of the room to render. The canvas view sends the link it was seeded with, because some hosts route the view's calls to a server process other than the one its conversation uses. A link for another room is served from a read-only viewer: this server stays in the room it is working in, and room_status lists the viewers it holds. Leave it unset: the model's own calls should use the room already joined.",
         ),
       radius: z.number().min(0).optional().describe("How far around each mention to look for related elements, in canvas px. Defaults to the room's nearbyRadius."),
       include: z
@@ -536,14 +556,16 @@ registerAppTool(
     },
   },
   async ({ tag, radius, include, link }) => {
-    // A link joins this process to the room before anything is read, so a view
-    // whose calls the host routed to a second process is not stuck reporting
-    // NOT_IN_ROOM_TEXT forever. See ensureJoined in view.ts.
-    const { error } = await ensureJoined(room, link);
-    if (!room.isConnected) return canvasResult(error ? `${NOT_IN_ROOM_TEXT}\n${error}` : NOT_IN_ROOM_TEXT, true);
-    const elements = room.getElements();
+    // A link for another room is answered from a viewer, so a widget whose
+    // calls the host routed to this process is served without moving it out of
+    // the room its own conversation is working in. See src/viewers.ts.
+    const { client, error } = await resolveShowRoom(room, viewers, link);
+    if (!client.isConnected) return canvasResult(error ? `${NOT_IN_ROOM_TEXT}\n${error}` : NOT_IN_ROOM_TEXT, true);
+    const elements = client.getElements();
+    // A viewer answers no mentions; the notes are still listed so the canvas
+    // can highlight them, and acknowledging one remains the current room's.
     const pending = pendingMentions(resolveTags(tag, room.handle), elements);
-    const payload = buildShowRoomPayload(room.status(), elements, pending, nearRadius(room.nearbyRadius, radius));
+    const payload = buildShowRoomPayload(client.status(), elements, pending, nearRadius(room.nearbyRadius, radius));
     // Text only, deliberately: a host that inlines structuredContent into the
     // model-visible transcript charges the reader for the element array on
     // every call, which is what a split payload was meant to avoid. The view
@@ -576,7 +598,7 @@ server.registerTool(
   "room_status",
   {
     description:
-      "Connection state, the handle this server took in the room, the room's nearbyRadius and agentReplyDepth, the session's answerQuestions policy, the peers with their handles and whether each is an agent or a browser, and scene counters for the current room.",
+      "Connection state, the handle this server took in the room, the room's nearbyRadius and agentReplyDepth, the session's answerQuestions policy, the peers with their handles and whether each is an agent or a browser, the rooms this server is holding read-only viewers for, and scene counters for the current room.",
     inputSchema: {},
   },
   async () => text(statusText()),

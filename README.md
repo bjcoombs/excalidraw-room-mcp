@@ -35,6 +35,8 @@ The agent joins under a handle (your OS username followed by `-claude` unless yo
 
 In a host that renders MCP Apps (Claude Desktop), `show_room` puts the live canvas in the chat window. It is the only tool that does: `create_room` and `join_room` answer with text. The view refreshes every two seconds while visible. Under it is a status bar with the connection state, counts, pending `@claude` mentions and an **Open in browser** button. Its menu has five items: **Send snapshot to Claude** (a PNG of the selection or viewport handed to the model, or copied to your clipboard with the hint `snapshot copied, paste it into the chat` when the host will not take images), **Export image**, **Open in browser**, **Find on canvas** and **Help**. The first two depend on host support for image content and file downloads. In a host without MCP Apps, `show_room` returns a text summary and `open_room` opens the room in your browser.
 
+Each chat's canvas shows that chat's room. The canvas in the chat may be served by a different server process from the one the model uses; the room link in the first show_room result is what ties it to the right room. A process asked for a room it is not working in reads that room through a read-only viewer - no handle, no presence, closed after five minutes without a poll - so rendering a canvas never moves a session into another chat's room, and `room_status` lists the rooms being viewed on its `viewers:` line. A canvas handed a payload for some other room paints nothing and says so in its status bar.
+
 ## Working with the canvas
 
 ### Notes to the agent

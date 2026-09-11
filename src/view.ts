@@ -70,18 +70,23 @@ export interface EnsureJoinedResult {
 }
 
 /**
- * Join the room a `show_room` call names, if this process is not already in it.
+ * Join the room an `open_room` call names, if this process is not already in
+ * it. `open_room` hands a link to a person's browser, and the point of its
+ * `link` argument is that the process ends up in the room the person is
+ * watching, so this one really does move it.
  *
- * The canvas view calls `show_room` over the host's own connection, and some
- * hosts - Claude Desktop among them - route an iframe's `callServerTool` to a
- * second server process rather than the one the model is talking to. One room
- * per process means that process is in no room, so every poll the view makes
- * returns {@link NOT_IN_ROOM_TEXT} while the model sees the scene perfectly
- * well. Passing the link the view was shown lets that process join for itself.
+ * `show_room` used to come through here too, for the same reason its `link`
+ * argument exists: a host may route the canvas widget's `callServerTool` to a
+ * second server process, which has joined nothing and answers every poll with
+ * {@link NOT_IN_ROOM_TEXT}. Joining made that process serve the canvas at the
+ * cost of moving it, and with two widgets on one process the room flipped
+ * every two seconds and drawings landed in the wrong room. Rendering is now
+ * read-only: see `resolveShowRoom` and the pool in src/viewers.ts.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/92
  *
- * Without a link nothing happens, which is the model's path unchanged. With
- * one, a process already connected to that same room is left alone; a process
- * in no room, or in a different one, joins.
+ * Without a link nothing happens. With one, a process already connected to
+ * that same room is left alone; a process in no room, or in a different one,
+ * joins.
  */
 export async function ensureJoined(room: ShowRoomClient, link: string | undefined): Promise<EnsureJoinedResult> {
   if (!link) return { joined: false, error: null };
