@@ -304,9 +304,9 @@ export const MAX_REPLY_LENGTH = 200;
 
 /**
  * The second line of every reply element. It is what makes the reply a
- * two-way channel rather than a comment: editing the note above bumps its
- * version, which re-pends the mention, and the agent sees the answer next to
- * the question it asked.
+ * two-way channel rather than a comment: editing the note above changes the
+ * words it was handled under, which re-pends the mention, and the agent sees
+ * the answer next to the question it asked.
  */
 export const REPLY_PROMPT_LINE = "edit the note above to answer";
 
@@ -895,8 +895,38 @@ export function mentionOf(el: ExcalidrawElement): Mention {
   };
 }
 
-/** id -> version already dealt with. A newer version of the same text is a new mention. */
-export type HandledVersions = Map<string, number>;
+/**
+ * id -> the words already dealt with: the note's text with the server's own
+ * markers stripped. A mention is new again only when a person changes those
+ * words.
+ *
+ * Keyed by text rather than by version, because `version` is the wrong proxy
+ * for "the text changed": Excalidraw bumps it on a move, a resize, a recolour
+ * and a group change too, so a version key re-pends a kept note the moment
+ * anyone tidies the canvas.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/106
+ */
+export type HandledNotes = Map<string, string>;
+
+/**
+ * The handled-map value for an element: its text without whatever the server
+ * last marked on it. Both sides of the comparison go through `stripStatus`, so
+ * the seen marker and the check mark the server writes are invisible to it.
+ */
+export function handledKey(el: Pick<ExcalidrawElement, "text">): string {
+  return stripStatus(el.text ?? "");
+}
+
+/** Record an element as dealt with, under the words {@link isHandled} compares. */
+export function markHandled(handled: HandledNotes, el: ExcalidrawElement): HandledNotes {
+  return handled.set(el.id, handledKey(el));
+}
+
+/** Whether the words this element now carries are the ones recorded as dealt with. */
+export function isHandled(handled: HandledNotes, el: ExcalidrawElement): boolean {
+  const done = handled.get(el.id);
+  return done !== undefined && done === handledKey(el);
+}
 
 export function isMentionText(text: string | undefined, tag: string | readonly string[]): boolean {
   if (!text) return false;
@@ -908,14 +938,13 @@ export function isMentionText(text: string | undefined, tag: string | readonly s
 export function findMentions(
   elements: readonly ExcalidrawElement[],
   tag: string | readonly string[] = DEFAULT_TAG,
-  handled: HandledVersions = new Map(),
+  handled: HandledNotes = new Map(),
 ): Mention[] {
   const out: Mention[] = [];
   for (const el of elements) {
     if (el.isDeleted || el.type !== "text") continue;
     if (!isMentionText(el.text, tag)) continue;
-    const seen = handled.get(el.id);
-    if (seen !== undefined && el.version <= seen) continue;
+    if (isHandled(handled, el)) continue;
     out.push(mentionOf(el));
   }
   return out;
@@ -928,20 +957,20 @@ export function findMentions(
  * the pending list, so without this an agent has no way to find the notes it
  * left behind and tidy them up.
  *
- * A note whose text a person has edited since has a version above the recorded
- * one and is pending again, so it is deliberately not here.
+ * A note whose words a person has edited since no longer matches the recorded
+ * ones and is pending again, so it is deliberately not here. A note that was
+ * only moved, resized or recoloured still reads as handled and is.
  */
 export function findHandledMentions(
   elements: readonly ExcalidrawElement[],
   tag: string | readonly string[] = DEFAULT_TAG,
-  acknowledged: HandledVersions = new Map(),
+  acknowledged: HandledNotes = new Map(),
 ): Mention[] {
   const out: Mention[] = [];
   for (const el of elements) {
     if (el.isDeleted || el.type !== "text") continue;
     if (!isMentionText(el.text, tag)) continue;
-    const seen = acknowledged.get(el.id);
-    if (seen === undefined || el.version > seen) continue;
+    if (!isHandled(acknowledged, el)) continue;
     out.push(mentionOf(el));
   }
   return out;

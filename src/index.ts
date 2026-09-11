@@ -39,7 +39,9 @@ import {
   findMentions,
   formatMention,
   nearbyNeighbourhood,
+  handledKey,
   markAcknowledged,
+  markHandled,
   markRemoved,
   markSeen,
   acknowledgementText,
@@ -64,7 +66,7 @@ import {
   withGroup,
   withRequestPreamble,
   withScopeRule,
-  type HandledVersions,
+  type HandledNotes,
   type FormatMentionOptions,
   type Mention,
   type PreviousLine,
@@ -108,20 +110,22 @@ if (process.argv[2] === "install-agent") {
 
 const room = new RoomClient();
 /**
- * Mentions already surfaced to an agent, by element id -> version. Reset on
- * join. This is what stops wait_for_mention returning the same note twice in a
- * row; it is deliberately not what "pending" means.
+ * Mentions already surfaced to an agent, by element id -> the words they
+ * carried, the server's markers stripped. Reset on join. This is what stops
+ * wait_for_mention returning the same note twice in a row; it is deliberately
+ * not what "pending" means.
  */
-let handledMentions: HandledVersions = new Map();
+let handledMentions: HandledNotes = new Map();
 /**
- * Mentions an agent has answered, by element id -> version. Reset on join.
+ * Mentions an agent has answered, by element id -> the words they carried,
+ * keyed exactly as above. Reset on join.
  *
  * Pending means unacknowledged, not unseen. A note an agent has looked at but
  * not acted on is still an open request: the canvas widget has to be able to
  * announce it from its button, list_mentions has to be able to show it again, and poll_room
  * has to keep reporting it. Only acknowledge_mention closes a mention.
  */
-let acknowledgedMentions: HandledVersions = new Map();
+let acknowledgedMentions: HandledNotes = new Map();
 /**
  * Whether this session answers knowledge questions on the canvas. In memory
  * beside the two handled maps, off until a person asks for it in chat, and
@@ -198,16 +202,18 @@ function mentionBlock(
 /**
  * Commit the "seen" state for a mention the moment it is surfaced, so the
  * person who wrote it gets an immediate signal without an agent round trip.
- * The post-bump version goes into handledMentions: our own edit must not read
- * back as a new mention, while a later human edit (a higher version still)
+ * The words the note carried go into handledMentions: our own marker must not
+ * read back as a new mention, while a later human edit changes those words,
  * re-pends it and the next seen pass rewrites the marker.
  *
- * Only the exact version the tool returned is marked. list_mentions commits
- * one mention at a time, so a person can edit a later one while an earlier
- * commit is in flight; marking that newer text would record a version the
- * caller never saw and swallow the edit. Leave it pending instead.
+ * Only the words the tool returned are marked. list_mentions commits one
+ * mention at a time, so a person can edit a later one while an earlier commit
+ * is in flight; marking that newer text would record words the caller never
+ * saw and swallow the edit. Leave it pending instead. A note somebody merely
+ * dragged in the meantime still carries the words that were returned, so the
+ * seen state lands on it as it should.
  *
- * The version is recorded either way. The broadcast has already gone out and
+ * The words are recorded either way. The broadcast has already gone out and
  * the local element already carries the marker, so treating a failed persist
  * as unhandled would return the same mention on every poll. A failure is
  * reported on the debug channel instead; it is not the caller's to act on.
@@ -215,11 +221,11 @@ function mentionBlock(
 async function commitSeen(mention: Mention): Promise<void> {
   const current = room.getElement(mention.id);
   if (!current || current.type !== "text") return;
-  if (current.version !== mention.version) return;
+  if (handledKey(current) !== handledKey(mention)) return;
   const updated = markSeen(current);
   if (!updated) return;
   const result = await room.commit([updated]);
-  handledMentions.set(mention.id, updated.version);
+  markHandled(handledMentions, updated);
   if (!result.persisted && process.env.EXCALIDRAW_ROOM_DEBUG) {
     console.error("[mentions] seen state for", mention.id, "not persisted:", result.error);
   }
@@ -1014,8 +1020,9 @@ server.registerTool(
     if (plan.refusal) return errorText(plan.refusal);
     if (!room.isConnected) return text("not in a room; call join_room or create_room first");
     if (!current || current.type !== "text") return text(`no text element with id ${id}`);
-    // Either way the post-bump version is recorded, so our own edit never
-    // reads back as a new mention. An answered question keeps its own colour:
+    // Either way the words the person wrote are recorded, so our own edit
+    // never reads back as a new mention, and neither does a later move.
+    // An answered question keeps its own colour:
     // it is the heading of the line under it, not spent work.
     let updated = plan.answers ? markAnswered(current) : plan.kept ? markAcknowledged(current) : markRemoved(current);
     // Whatever this acknowledgement does, whatever the last one wrote is spent:
@@ -1054,8 +1061,8 @@ server.registerTool(
     // the line, and after the grouping so it carries the group id.
     changed.unshift(updated);
     const result = await room.commit(changed);
-    handledMentions.set(id, updated.version);
-    acknowledgedMentions.set(id, updated.version);
+    markHandled(handledMentions, updated);
+    markHandled(acknowledgedMentions, updated);
     return text(`${acknowledgementText(id, plan)}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
   },
 );
