@@ -243,3 +243,25 @@ test("create_room and join_room take agentReplyDepth from 0 to 5, and room_statu
   assert.equal(seen.tooDeep.isError, true, resultText(seen.tooDeep));
   assert.match(resultText(seen.tooDeep), /agentReplyDepth/);
 });
+
+/**
+ * Issue #113: the four write tools say where a change has got to, and
+ * room_status always carries the persistence line. Over stdio, because the
+ * description is what the model reads before it trusts a result line.
+ */
+test("the four write tools name NOT PERSISTED and the stored copy, and room_status reports persistence", async () => {
+  for (const name of ["add_elements", "add_raw_elements", "update_elements", "delete_elements"]) {
+    const tool = tools.find((t) => t.name === name);
+    assert.ok(tool, `${name} is not in tools/list`);
+    assert.match(tool.description ?? "", /NOT PERSISTED/, name);
+    assert.match(tool.description ?? "", /stored copy/, name);
+    assert.match(tool.description ?? "", /connected peers immediately/, name);
+  }
+
+  const status = await use(async (client) =>
+    resultText((await client.callTool({ name: "room_status", arguments: {} })) as ToolResult),
+  );
+  // Nothing has failed to persist in a fresh process, so the line is the
+  // settled form; the pending form is covered in persist.test.ts.
+  assert.match(status, /^persisted: yes$/m);
+});
