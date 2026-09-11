@@ -17,6 +17,7 @@ import {
   randomId,
   stampAuthor,
   summarise,
+  translate,
   type ElementSpec,
   type ExcalidrawElement,
 } from "./elements.js";
@@ -784,7 +785,7 @@ server.registerTool(
   "update_elements",
   {
     description:
-      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. 'set' accepts any element field, including link (a URL, or null to remove it). Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given, keeps originalText in step, and, for a label bound to a shape, re-centres it and grows the shape to fit so the canvas redraws the new label. An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded. The change reaches connected peers immediately and the room's stored copy shortly after; a result line beginning NOT PERSISTED means the stored copy is behind and the server is retrying in the background.",
+      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. 'set' accepts any element field, including link (a URL, or null to remove it). Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given, keeps originalText in step, and, for a label bound to a shape, re-centres it and grows the shape to fit so the canvas redraws the new label. Changing 'x', 'y', 'width' or 'height' carries the element's bound label with it and re-computes the endpoint of every arrow bound to it, leaving each arrow's other end alone; use translate_elements to move a shape with its group, its frame's children and the arrows between moved shapes. An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded. The change reaches connected peers immediately and the room's stored copy shortly after; a result line beginning NOT PERSISTED means the stored copy is behind and the server is retrying in the background.",
     inputSchema: {
       updates: z.array(z.object({ id: z.string(), set: z.record(z.unknown()) })).min(1),
       force: forceSchema,
@@ -817,6 +818,38 @@ server.registerTool(
     const result = await room.commit([...changed.values()]);
     const note = missing.length ? `\nunknown ids: ${missing.join(", ")}` : "";
     return text(`${commitLine(`updated ${matched} element(s)`, result)}${note}${guard}`);
+  },
+);
+
+server.registerTool(
+  "translate_elements",
+  {
+    description:
+      "Move elements by a delta, carrying everything that must travel with them: each element's bound label, every other member of a group the ids belong to, the children of a moved frame, and any arrow bound at both ends to elements that are moving. An arrow bound at one end is re-attached to the moved shape instead of moved, and reported on its own line. Each element moves exactly once however many ways the closure reaches it. The result reports how many moved and which ids the closure added. An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded.",
+    inputSchema: {
+      ids: z.array(z.string()).min(1),
+      dx: z.number().describe("Horizontal delta in scene pixels; positive is right."),
+      dy: z.number().describe("Vertical delta in scene pixels; positive is down."),
+      force: forceSchema,
+    },
+  },
+  async ({ ids, dx, dy, force }) => {
+    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    const { allowed, refusals } = guardIds(ids, force);
+    const guard = guardNote(refusals, force);
+    // The closure runs over the whole scene, including elements the guard
+    // refused: a refused id is not moved, but a group it is in still is.
+    const { moved, rebound, added, missing } = translate(allowed, dx, dy, room.getElements());
+    const unknown = missing.length ? `; unknown ids: ${missing.join(", ")}` : "";
+    if (!moved.length) return text(`nothing moved${unknown}${guard}`);
+    const result = await room.commit([...moved, ...rebound]);
+    const lines = [
+      commitLine(`moved ${moved.length} element(s)`, result),
+      ...(added.length ? [`added by closure: ${added.join(", ")}`] : []),
+      ...(rebound.length ? [`re-attached: ${rebound.map((e) => e.id).join(", ")}`] : []),
+      ...(missing.length ? [`unknown ids: ${missing.join(", ")}`] : []),
+    ];
+    return text(`${lines.join("\n")}${guard}`);
   },
 );
 

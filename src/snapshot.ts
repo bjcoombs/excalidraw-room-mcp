@@ -292,9 +292,13 @@ function anchorFor(align: string | undefined): { anchor: string; offset: number 
 }
 
 /**
- * Text at the element's own font size and alignment. A bound label is centred
- * in its container, which is where the canvas draws it; a free text element
- * sits in its own box.
+ * Text at the element's own font size and alignment, drawn from its own box.
+ *
+ * A bound label is centred in that box rather than in its container's: the two
+ * agree while the scene is consistent, and where they disagree the canvas
+ * draws the label at its own coordinates, so drawing it from the container
+ * would hide exactly the fault a snapshot is taken to catch (issue #112).
+ * Rotation still comes from the container, which is what the label turns with.
  */
 function textSvg(el: ExcalidrawElement, container: ExcalidrawElement | undefined): string {
   const lines = (el.text ?? "").split("\n");
@@ -302,7 +306,7 @@ function textSvg(el: ExcalidrawElement, container: ExcalidrawElement | undefined
   const fontSize = (el as { fontSize?: number }).fontSize ?? DEFAULT_FONT_SIZE;
   const lineHeight = (el as { lineHeight?: number }).lineHeight ?? DEFAULT_LINE_HEIGHT;
   const step = fontSize * lineHeight;
-  const box = elementBox(container ?? el);
+  const box = elementBox(el);
   const { anchor, offset } = container ? { anchor: "middle", offset: 0.5 } : anchorFor((el as { textAlign?: string }).textAlign);
   const x = box.x + box.width * offset;
   const top = container ? box.y + (box.height - lines.length * step) / 2 : box.y;
