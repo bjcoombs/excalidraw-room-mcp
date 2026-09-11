@@ -180,6 +180,13 @@ export class RoomClient extends EventEmitter {
   private leavePersist: Promise<void> | null = null;
   /** Set by joinOffline: in a room with no relay, so commits skip the socket. */
   private offline = false;
+  /**
+   * A read-only presence: joined to watch a room this process is not working
+   * in. A viewer takes no handle, sends no presence, and broadcasts nothing,
+   * so the peers in that room see a browser-shaped socket and no agent. See
+   * src/viewers.ts.
+   */
+  private viewerOnly = false;
   private onBroadcast: ((elements: ExcalidrawElement[]) => void) | null = null;
   private readonly saveSceneFn: typeof saveScene;
   private readonly loadSceneFn: typeof loadScene;
@@ -307,6 +314,12 @@ export class RoomClient extends EventEmitter {
       nearbyRadius?: number;
       /** Agent-reply bound for this room, 0 to 5. Out-of-range values are refused here. */
       agentReplyDepth?: number;
+      /**
+       * Join to watch only: no handle, no presence broadcast, no scene sent to
+       * a peer that arrives. The room counts this socket as a browser and this
+       * client answers no mentions in it.
+       */
+      viewer?: boolean;
     } = {},
   ): Promise<RoomStatus> {
     if (opts.handle !== undefined && !isValidHandle(opts.handle)) {
@@ -329,6 +342,7 @@ export class RoomClient extends EventEmitter {
     this.roomRadius = opts.nearbyRadius ?? DEFAULT_NEARBY_RADIUS;
     this.roomReplyDepth = opts.agentReplyDepth ?? DEFAULT_AGENT_REPLY_DEPTH;
     this.firstInRoom = false;
+    this.viewerOnly = opts.viewer === true;
 
     // The public relay rejects handshakes without a browser Origin (400 on
     // websocket, 403 on polling), so present the app's origin.
@@ -376,6 +390,9 @@ export class RoomClient extends EventEmitter {
       });
       socket.on("new-user", (socketId: string) => {
         log("new-user", socketId);
+        // A viewer writes nothing into the room it watches, not even the scene
+        // it has just read back out of it.
+        if (this.viewerOnly) return;
         void this.broadcast("SCENE_INIT", this.getElements(true));
         // A peer learns our name only from a presence message it was there to
         // receive, so send one to whoever just arrived.
@@ -425,15 +442,21 @@ export class RoomClient extends EventEmitter {
     });
 
     await initialised;
-    // Names arrive with the presence of the peers already here, so a handle
-    // can only be made unique once we have heard from them.
-    if (!this.firstInRoom) await this.awaitPeerPresence(opts.handleWaitMs ?? HANDLE_WAIT_MS);
-    this.currentHandle = uniqueHandle(this.desiredHandle, this.agentHandles());
-    await this.broadcastPresence("MOUSE_LOCATION").catch((err) => log("presence failed", err));
-    this.presenceTimer = setInterval(() => {
-      void this.broadcastPresence("IDLE_STATUS").catch((err) => log("presence refresh failed", err));
-    }, IDLE_BROADCAST_MS);
-    this.presenceTimer.unref();
+    // A viewer announces nothing: no handle to make unique, so no wait for the
+    // peers to name themselves either, and no presence timer. Its socket is
+    // one more anonymous participant, which is what keeps it out of the room's
+    // agent list.
+    if (!this.viewerOnly) {
+      // Names arrive with the presence of the peers already here, so a handle
+      // can only be made unique once we have heard from them.
+      if (!this.firstInRoom) await this.awaitPeerPresence(opts.handleWaitMs ?? HANDLE_WAIT_MS);
+      this.currentHandle = uniqueHandle(this.desiredHandle, this.agentHandles());
+      await this.broadcastPresence("MOUSE_LOCATION").catch((err) => log("presence failed", err));
+      this.presenceTimer = setInterval(() => {
+        void this.broadcastPresence("IDLE_STATUS").catch((err) => log("presence refresh failed", err));
+      }, IDLE_BROADCAST_MS);
+      this.presenceTimer.unref();
+    }
     this.emit("joined", this.status());
     return this.status();
   }
@@ -718,6 +741,7 @@ export class RoomClient extends EventEmitter {
     this.firstInRoom = false;
     this.source = null;
     this.offline = false;
+    this.viewerOnly = false;
     this.onBroadcast = null;
   }
 }

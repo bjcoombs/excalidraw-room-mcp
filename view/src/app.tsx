@@ -25,13 +25,17 @@
  * stopped moving can be told from a room that has.
  *
  * A third thing exists because a host may not route the view to the same
- * server process the model is talking to. Claude Desktop routes an iframe's
- * callServerTool to a second process, and one room per process means that
- * process has joined nothing, so every refresh answers with the not-in-a-room
- * refusal while the model reads the scene perfectly well. So the view learns
- * the room link from the summary it is seeded with and passes it on every call:
- * show_room joins that room first when it is in none, and the widget shows up
- * in the room as an extra peer.
+ * server process the model is talking to. Claude Desktop routes every widget's
+ * callServerTool to one shared extension process, and in Cowork the model's
+ * process runs in the VM while the widget runs on the host. So the view learns
+ * the room link from the summary it is seeded with and passes it on every
+ * call, and the server serves that room from a read-only viewer.
+ *
+ * That link is also this widget's identity, which is the fourth thing. The
+ * seeded room is the room this canvas is for, and a payload for any other room
+ * is refused with a line in the bar rather than painted: a widget that drew
+ * whatever arrived showed another conversation's room (issue #92). Before any
+ * link is known the canvas stays empty and the bar asks for one.
  */
 import { CaptureUpdateAction, Excalidraw } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
@@ -40,6 +44,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { sendAnnouncement } from "./announce.js";
 import { boundsChanged, FIT_PADDING, sceneBounds, type SceneBounds } from "./bounds.js";
 import { highlightElements } from "./highlights.js";
+import { paintRefusal, WAITING_FOR_LINK_TEXT } from "./link.js";
 import { RoomMenu } from "./menu-excalidraw.js";
 import { envelopeShape, isNotInRoom, linkFromSummary, parseResult, resultText, roomLink, sceneSignature, type ShowRoomPayload } from "./payload.js";
 import { canvasElements } from "./scene.js";
@@ -80,8 +85,10 @@ export function RoomView({ app }: { app: App }) {
   /** The newest scene that has not reached the canvas, or null when the canvas is current. */
   const pending = useRef<ShowRoomPayload | null>(null);
   /**
-   * The room link, once anything has named it. Sent on every call so a server
-   * process that has joined nothing joins this room rather than refusing.
+   * The room this canvas is for, taken from the first result that names one -
+   * the seed, in practice. Sent on every call so the server renders that room,
+   * and held for the life of the widget: a later payload naming a different
+   * room is a wrong answer, not a new room to follow.
    */
   const link = useRef<string | null>(null);
   // Bumping this is how a flush from an effect reaches the bar.
@@ -195,20 +202,27 @@ export function RoomView({ app }: { app: App }) {
       // thing that does when the view's own calls land on a process that has
       // joined nothing.
       const named = roomLink(next?.link ?? null) ?? linkFromSummary(resultText(result));
-      if (named) link.current = named;
+      // Only the seed, or the first result of any kind to name a room, sets
+      // it. A payload that arrives naming another room does not move this
+      // canvas to it; the guard below refuses it.
+      if (named && (seed || link.current === null)) link.current = named;
       if (next) {
-        apply(next);
+        // The canvas shows one room: the one this widget was seeded with. See
+        // link.ts.
+        const refusal = paintRefusal(link.current, next.link);
+        if (refusal) setNote(refusal);
+        else apply(next);
         return;
       }
       if (seed) {
-        setNote("Loading the room…");
+        setNote(link.current ? "Loading the room…" : WAITING_FOR_LINK_TEXT);
         return;
       }
       // A refusal from a server that has joined nothing, with no link yet to
       // send it, is the expected state: the next seed or summary carrying a
       // link is what ends it.
       if (link.current === null && isNotInRoom(resultText(result))) {
-        setNote("Waiting for a room link. Ask for show_room once the room is joined.");
+        setNote(WAITING_FOR_LINK_TEXT);
         return;
       }
       // A result with no text at all: name the envelope the parser was given,
