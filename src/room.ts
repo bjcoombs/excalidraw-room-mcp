@@ -39,7 +39,7 @@ import {
   DEFAULT_NEARBY_RADIUS,
   findMentions,
   isMentionText,
-  type HandledVersions,
+  type HandledNotes,
   type Mention,
 } from "./mentions.js";
 import { orderByIndex, reconcile, sceneVersion } from "./reconcile.js";
@@ -454,7 +454,7 @@ export class RoomClient extends EventEmitter {
    */
   async waitForMention(
     tags: string | readonly string[],
-    handled: HandledVersions,
+    handled: HandledNotes,
     opts: { timeoutMs?: number; settleMs?: number; accept?: (mention: Mention) => boolean } = {},
   ): Promise<Mention | null> {
     const timeoutMs = opts.timeoutMs ?? 60_000;

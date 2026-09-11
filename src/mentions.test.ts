@@ -109,7 +109,10 @@ import {
   untrustedBlock,
   withRequestPreamble,
   withScopeRule,
-  type HandledVersions,
+  handledKey,
+  isHandled,
+  markHandled,
+  type HandledNotes,
   type Mention,
 } from "./mentions.js";
 import { RoomClient } from "./room.js";
@@ -130,15 +133,15 @@ function scene(): ExcalidrawElement[] {
   ).created;
 }
 
-test("findMentions is case-insensitive, skips deleted and handled versions", () => {
+test("findMentions is case-insensitive, skips deleted and handled notes", () => {
   const els = scene();
   const found = findMentions(els);
   assert.deepEqual(found.map((m) => m.id).sort(), ["far", "note"]);
 
-  const handled = new Map([["note", found.find((m) => m.id === "note")!.version]]);
+  const handled = markHandled(new Map(), els.find((e) => e.id === "note")!);
   assert.deepEqual(findMentions(els, "@claude", handled).map((m) => m.id), ["far"]);
 
-  // an edit bumps the version, so it is pending again
+  // an edit changes the words it was handled under, so it is pending again
   const edited = els.map((e) => (e.id === "note" ? bump({ ...e, text: "@claude actually a queue" }) : e));
   assert.deepEqual(findMentions(edited, "@claude", handled).map((m) => m.id).sort(), ["far", "note"]);
 
@@ -361,7 +364,7 @@ test("formatMention renders the text, where it is, and a summary of neighbours",
 
 test("waitForMention resolves when a mention arrives from a peer and settles, and times out otherwise", async () => {
   const room = new RoomClient();
-  const handled = new Map<string, number>();
+  const handled = new Map<string, string>();
 
   const none = await room.waitForMention("@claude", handled, { timeoutMs: 50, settleMs: 5 });
   assert.equal(none, null);
@@ -378,8 +381,8 @@ test("waitForMention resolves when a mention arrives from a peer and settles, an
   assert.equal(got!.text, "@claude rename this");
   assert.equal(got!.version, second.version);
 
-  // once handled at that version it is not returned again
-  handled.set("m", got!.version);
+  // once handled under those words it is not returned again
+  handled.set("m", handledKey(got!));
   const again = await room.waitForMention("@claude", handled, { timeoutMs: 50, settleMs: 5 });
   assert.equal(again, null);
 });
@@ -430,9 +433,9 @@ test("acknowledging by default removes the note, and the removed note never re-s
   assert.ok(removed.versionNonce !== seen.versionNonce);
   assert.equal(removed.text, seen.text, "the text is untouched; the element is simply gone");
 
-  // What index.ts records after committing: the post-bump version. The note is
-  // both deleted and handled, so neither rule can surface it again.
-  const handled: HandledVersions = new Map([[note.id, removed.version]]);
+  // What index.ts records after committing: the words the person wrote. The
+  // note is both deleted and handled, so neither rule can surface it again.
+  const handled: HandledNotes = markHandled(new Map(), removed);
   const after = els.map((e) => (e.id === note.id ? removed : e));
   assert.deepEqual(
     findMentions(after, "@claude", handled).map((m) => m.id),
@@ -498,8 +501,8 @@ test("the server's own seen edit does not re-pend, but a later human edit does a
   const note = els.find((e) => e.id === "note")!;
   const seen = markSeen(note)!;
 
-  // What index.ts records after committing: the post-bump version.
-  const handled: HandledVersions = new Map([[note.id, seen.version]]);
+  // What index.ts records after committing: the words the person wrote.
+  const handled: HandledNotes = markHandled(new Map(), seen);
   const after = els.map((e) => (e.id === note.id ? seen : e));
   assert.deepEqual(
     findMentions(after, "@claude", handled).map((m) => m.id),
@@ -518,6 +521,82 @@ test("the server's own seen edit does not re-pend, but a later human edit does a
   const reSeen = markSeen(edited)!;
   assert.equal(reSeen.text, `${note.text} and a queue${SEEN_MARKER}`, "the stale marker is cleared and one is appended");
   assert.equal(reSeen.text!.split(SEEN_MARKER).length - 1, 1);
+});
+
+/**
+ * Issue #106: handled notes are keyed by the words a person wrote, not by
+ * version. Excalidraw bumps `version` on a move, a resize, a recolour and a
+ * group change, so a version key made every kept note one drag away from being
+ * re-read and re-answered. The three tests below are named in the wave 5
+ * acceptance contract.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/106
+ */
+
+/** A note kept on the canvas with a status, and the map index.ts holds after it. */
+function keptNote(text = "@claude keep me"): { kept: ExcalidrawElement; acknowledged: HandledNotes } {
+  const [note] = buildElements([{ type: "text", id: "n1", x: 0, y: 0, text }], ctx()).created;
+  const kept = markAcknowledged(markSeen(note)!);
+  return { kept, acknowledged: markHandled(new Map(), kept) };
+}
+
+test("a handled note moved is not pending", () => {
+  const { kept, acknowledged } = keptNote();
+
+  // What a person tidying the canvas leaves: a new position and a higher
+  // version, the same words.
+  const moved = bump({ ...kept, x: 500, y: 500 });
+  assert.ok(moved.version > kept.version, "the move bumps the version");
+  assert.equal(isHandled(acknowledged, moved), true);
+  assert.deepEqual(findMentions([moved], "@claude", acknowledged), [], "the moved note is not pending");
+  // includeHandled still finds it, keyed the same way, so it can be tidied up.
+  assert.deepEqual(findHandledMentions([moved], "@claude", acknowledged).map((m) => m.id), ["n1"]);
+
+  // A resize, a recolour and a regroup are the same story.
+  const rearranged = bump({ ...moved, width: moved.width + 40, strokeColor: "#1971c2", groupIds: ["g1"] });
+  assert.deepEqual(findMentions([rearranged], "@claude", acknowledged), []);
+  assert.deepEqual(findHandledMentions([rearranged], "@claude", acknowledged).map((m) => m.id), ["n1"]);
+});
+
+test("a handled note whose stripped text changed is pending", () => {
+  const { kept, acknowledged } = keptNote();
+  // The status the note was kept with is on its own line under it, read back
+  // off the canvas rather than remembered.
+  const line = buildAttributedLine(kept, attributedStatusText("see chat", "alpha"), ctx(), "alpha");
+
+  // The person adds a word. The check mark rides along in the text they
+  // edited, and stripStatus takes it off both sides of the comparison.
+  const edited = bump({ ...kept, text: `@claude keep me please ${ACKNOWLEDGED_MARK}` });
+  assert.equal(isHandled(acknowledged, edited), false);
+  const [pending] = findMentions([edited], "@claude", acknowledged);
+  assert.equal(pending.id, "n1");
+  assert.deepEqual(findHandledMentions([edited], "@claude", acknowledged), [], "no longer handled");
+
+  // It comes back with what the agent said last time, so the two are read
+  // together and the same status is not written twice.
+  const block = formatMention(pending, [], { previous: previousLine(findAttributedLine([edited, line], "n1")!) });
+  assert.ok(block.includes("previous status: see chat"), block);
+
+  // Only the words count: the same edit undone is handled again.
+  const reverted = bump({ ...edited, text: kept.text });
+  assert.deepEqual(findMentions([reverted], "@claude", acknowledged), []);
+});
+
+test("a note re-marked seen by the server is not pending", () => {
+  const [note] = buildElements([{ type: "text", id: "n1", x: 0, y: 0, text: "@claude look here" }], ctx()).created;
+  const seen = markSeen(note)!;
+  const handled: HandledNotes = markHandled(new Map(), seen);
+  assert.deepEqual(findMentions([seen], "@claude", handled), []);
+
+  // A second seen pass over the same note, as a later list_mentions runs it:
+  // the marker is rewritten, not stacked, and the words are untouched.
+  const reSeen = markSeen(bump({ ...seen, x: 40 })) ?? seen;
+  assert.equal(stripStatus(String(reSeen.text)), stripStatus(String(seen.text)));
+  assert.deepEqual(findMentions([reSeen], "@claude", handled), [], "the server's own marker is not a new mention");
+
+  // Nor is the check mark an acknowledgement writes over it.
+  const kept = markAcknowledged(reSeen);
+  assert.equal(isHandled(handled, kept), true);
+  assert.deepEqual(findMentions([kept], "@claude", handled), []);
 });
 
 test("autoSeen false is the opt-out: nothing is computed, so the element is untouched", () => {
@@ -826,17 +905,17 @@ test("findHandledMentions lists acknowledged notes still on the canvas and nothi
     ],
     ctx(),
   ).created;
-  const acknowledged: HandledVersions = new Map();
+  const acknowledged: HandledNotes = new Map();
   assert.deepEqual(findHandledMentions(els, "@claude", acknowledged), []);
 
   const kept = markAcknowledged(els[0]);
-  acknowledged.set("kept", kept.version);
+  markHandled(acknowledged, kept);
   const scene = [kept, els[1], els[2]];
   assert.deepEqual(findHandledMentions(scene, "@claude", acknowledged).map((m) => m.id), ["kept"]);
   // The two lists partition the mentions: handled here, pending there.
   assert.deepEqual(findMentions(scene, "@claude", acknowledged).map((m) => m.id), ["open"]);
 
-  // A person editing the note bumps it past the recorded version: pending
+  // A person editing the note changes the words it was handled under: pending
   // again, and no longer handled.
   const edited = bump({ ...kept, text: "@claude keep me, the left one" });
   assert.deepEqual(findHandledMentions([edited], "@claude", acknowledged), []);
@@ -880,19 +959,19 @@ test("formatMention marks a handled mention and carries the previous line inside
 });
 
 test("pending means unacknowledged, so a seen mention is still listed", () => {
-  const acknowledged: HandledVersions = new Map();
+  const acknowledged: HandledNotes = new Map();
   const [note] = buildElements([{ type: "text", id: "note", x: 0, y: 0, text: "@claude add a box here" }], ctx()).created;
   const seen = markSeen(note)!;
 
-  // wait_for_mention records the seen version and stops returning the note.
-  const handled: HandledVersions = new Map([[note.id, seen.version]]);
+  // wait_for_mention records the words it saw and stops returning the note.
+  const handled: HandledNotes = markHandled(new Map(), seen);
   assert.deepEqual(findMentions([seen], "@claude", handled), []);
 
   // The same note is still pending: nobody has answered it.
   assert.deepEqual(findMentions([seen], "@claude", acknowledged).map((m) => m.id), ["note"]);
 
   // Acknowledging is what closes it.
-  acknowledged.set(note.id, seen.version);
+  markHandled(acknowledged, seen);
   assert.deepEqual(findMentions([seen], "@claude", acknowledged), []);
 });
 
@@ -919,7 +998,7 @@ test("an element without an author reads as from person", () => {
   assert.equal(out.split("\n")[1], "from: beta", "directly under the first line");
 
   // A handled note listed by list_mentions carries it too.
-  const acked = new Map([["p", written[0].version]]);
+  const acked = markHandled(new Map(), written[0]);
   assert.equal(findHandledMentions(written, "@claude", acked)[0].author, "beta");
 });
 
@@ -1003,7 +1082,7 @@ test("the default tag is the handle and @claude is heard by everyone", () => {
   assert.deepEqual(ids(findMentions(els, "@beta")), ["x1"]);
   assert.deepEqual(ids(findMentions(els, BROADCAST_TAG)), ["x2"]);
   // The handled-note listing addresses the same way.
-  const acked = new Map(els.map((el) => [el.id, el.version]));
+  const acked = new Map(els.map((el) => [el.id, handledKey(el)]));
   assert.deepEqual(ids(findHandledMentions(els, defaultTags("beta"), acked)), ["x1", "x2"]);
 
   // A reply may not carry any tag the agent answers to, or it would come back
@@ -1417,7 +1496,7 @@ function seen(
   elements: readonly ExcalidrawElement[],
   handle: string,
   agentReplyDepth: number,
-  acknowledged: Map<string, number> = new Map(),
+  acknowledged: HandledNotes = new Map(),
 ): Mention[] {
   return visibleMentions(findMentions(elements, defaultTags(handle), acknowledged), handle, true, agentReplyDepth);
 }
@@ -1520,12 +1599,12 @@ test("an agent-rooted chain stops at the room depth", () => {
   const root = buildElements([{ type: "text", id: "b3", x: 0, y: 0, text: "@alpha direct" }], ctx()).created.map((el) =>
     stampAuthor(el, "beta"),
   );
-  const acked = new Map<string, number>();
+  const acked = new Map<string, string>();
 
   // The root itself is depth 0, so alpha hears it at the default bound.
   assert.deepEqual(ids(seen(root, "alpha", 1, acked)), ["b3"]);
   const hop1 = replyHop(root, "b3", "alpha", "ok");
-  acked.set("b3", hop1.elements.find((el) => el.id === "b3")!.version);
+  markHandled(acked, hop1.elements.find((el) => el.id === "b3")!);
   // One hop: beta hears it, because 1 is below beta's bound of 2.
   assert.deepEqual(ids(seen(hop1.elements, "beta", 2, acked)), [hop1.line.id]);
   assert.equal(seen(hop1.elements, "beta", 2, acked)[0].author, "alpha", "still says who wrote it");
@@ -1533,7 +1612,7 @@ test("an agent-rooted chain stops at the room depth", () => {
   assert.deepEqual(ids(seen(hop1.elements, "beta", 1, acked)), []);
 
   const hop2 = replyHop(hop1.elements, hop1.line.id, "beta", "thanks");
-  acked.set(hop1.line.id, hop2.elements.find((el) => el.id === hop1.line.id)!.version);
+  markHandled(acked, hop2.elements.find((el) => el.id === hop1.line.id)!);
   // Two hops: alpha does not hear it, because 2 is not below 1.
   assert.deepEqual(ids(seen(hop2.elements, "alpha", 1, acked)), []);
   // Raised, alpha hears it: the bound is the room's setting, not a rule.
@@ -1541,7 +1620,7 @@ test("an agent-rooted chain stops at the room depth", () => {
   // Acknowledging by id still works, whether or not the list showed it, so a
   // third hop can be written - and beta does not hear that one either.
   const hop3 = replyHop(hop2.elements, hop2.line.id, "alpha", "welcome");
-  acked.set(hop2.line.id, hop3.elements.find((el) => el.id === hop2.line.id)!.version);
+  markHandled(acked, hop3.elements.find((el) => el.id === hop2.line.id)!);
   assert.deepEqual(ids(seen(hop3.elements, "beta", 2, acked)), [], "the bound bites at the upper end too");
   assert.deepEqual(ids(seen(hop3.elements, "beta", 4, acked)), [hop3.line.id]);
   // Every hop of it is agent-rooted, and the count is what grew.
@@ -1571,21 +1650,21 @@ test("a person-rooted chain is not bounded", () => {
   // is the bug rather than the feature: every hop is delivered.
   const root = buildElements([{ type: "text", id: "pn", x: 0, y: 0, text: "@alpha from a person" }], ctx()).created;
   assert.equal(root[0].customData, undefined, "a browser writes no customData at all");
-  const acked = new Map<string, number>();
+  const acked = new Map<string, string>();
 
   // Hop by hop, each read at the moment it lands, at the default bound of 1.
   const q1 = replyHop(root, "pn", "alpha", "can you confirm?", "beta");
-  acked.set("pn", q1.elements.find((el) => el.id === "pn")!.version);
+  markHandled(acked, q1.elements.find((el) => el.id === "pn")!);
   assert.deepEqual(ids(seen(q1.elements, "beta", 1, acked)), [q1.line.id], "depth 1 at a bound of 1");
   // Even at 0, which hides every agent-rooted chain, a person's stands.
   assert.deepEqual(ids(seen(q1.elements, "beta", 0, acked)), [q1.line.id]);
 
   const q2 = replyHop(q1.elements, q1.line.id, "beta", "confirmed");
-  acked.set(q1.line.id, q2.elements.find((el) => el.id === q1.line.id)!.version);
+  markHandled(acked, q2.elements.find((el) => el.id === q1.line.id)!);
   assert.deepEqual(ids(seen(q2.elements, "alpha", 1, acked)), [q2.line.id], "depth 2 at a bound of 1");
 
   const q3 = replyHop(q2.elements, q2.line.id, "alpha", "great");
-  acked.set(q2.line.id, q3.elements.find((el) => el.id === q2.line.id)!.version);
+  markHandled(acked, q3.elements.find((el) => el.id === q2.line.id)!);
   assert.deepEqual(ids(seen(q3.elements, "beta", 1, acked)), [q3.line.id], "depth 3 at a bound of 1");
   assert.deepEqual(ids(seen(q3.elements, "beta", 0, acked)), [q3.line.id]);
 
