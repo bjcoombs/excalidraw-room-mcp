@@ -128,6 +128,7 @@ import {
   handledKey,
   isHandled,
   markHandled,
+  escapeUntrusted,
   type HandledNotes,
   type Mention,
 } from "./mentions.js";
@@ -1972,4 +1973,261 @@ test("root author kind and depth are copied down a chain", () => {
   // An explicit depth always wins over the fallback, 0 included: a line this
   // server wrote says where it sits and is believed.
   assert.equal(chainOf({ ...chainless, customData: { ...(chainless.customData as object), [DEPTH_CUSTOM_DATA_KEY]: 0 } }).depth, 0);
+});
+
+// The neighbourhood, the post-it history and the text helpers, each pinned at
+// the boundary its own guard draws: a container out of radius, a marker a
+// person typed, a note with no text at all.
+
+test("a picked container brings its bound label however far away the label sits", () => {
+  const note = rawElement({ id: "n", type: "text", x: 0, y: 0, width: 100, height: 25, text: "@claude look" });
+  const box = rawElement({ id: "c", type: "rectangle", x: 150, y: 0, width: 100, height: 100 });
+  const adrift = rawElement({ id: "cl", type: "text", containerId: "c", x: 5000, y: 5000, width: 40, height: 25, text: "label" });
+  const elsewhere = rawElement({ id: "u", type: "rectangle", x: 9000, y: 9000, width: 10, height: 10 });
+
+  const { elements, reasons } = nearbyNeighbourhood([note, box, adrift, elsewhere], mentionOf(note));
+  assert.deepEqual(elements.map((e) => e.id).sort(), ["c", "cl"], "the label travels with its container, the far shape does not");
+  assert.deepEqual([...reasons.keys()], [], "a label is not a hop and carries no marker");
+});
+
+test("a mention is never in its own neighbourhood, whatever reaches it", () => {
+  // The mention is itself a bound label, and its container is out of radius:
+  // the container is listed because it holds the note, not because it is near.
+  const inside = rawElement({ id: "m", type: "text", containerId: "far", x: 900, y: 900, width: 60, height: 25, text: "@claude here" });
+  const container = rawElement({ id: "far", type: "rectangle", x: 0, y: 900, width: 200, height: 100 });
+  assert.ok(boxDistance(container, mentionOf(inside)) > DEFAULT_NEARBY_RADIUS, "the container is out of radius");
+  const held = nearbyNeighbourhood([inside, container], mentionOf(inside));
+  assert.deepEqual(held.elements.map((e) => e.id), ["far"], "the container it is bound inside, and not itself");
+
+  // Reached by a group it shares with a neighbour: still not listed, and the
+  // neighbour keeps the reason the radius gave it, which is none.
+  const grouped = rawElement({ id: "g", type: "text", x: 0, y: 0, width: 100, height: 25, text: "@claude here", groupIds: ["gg"] });
+  const neighbour = rawElement({ id: "nb", type: "rectangle", x: 150, y: 0, width: 50, height: 50, groupIds: ["gg"] });
+  const viaGroup = nearbyNeighbourhood([grouped, neighbour], mentionOf(grouped));
+  assert.deepEqual(viaGroup.elements.map((e) => e.id), ["nb"]);
+  assert.deepEqual([...viaGroup.reasons.keys()], [], "the neighbour was picked by the radius, so it is not a hop");
+});
+
+/** A post-it for `question` answering `answer`, at (x, y), as the room stores it. */
+function postIt(
+  id: string,
+  question: string,
+  answer: string,
+  x: number,
+  y: number,
+): [ExcalidrawElement, ExcalidrawElement] {
+  const text = postItText(question, answer, "alpha");
+  const container = rawElement({
+    id,
+    type: "rectangle",
+    x,
+    y,
+    width: POSTIT_WIDTH,
+    height: measureText(text, 20).height + 2 * LABEL_PADDING,
+    customData: { [REPLY_CUSTOM_DATA_KEY]: `${id}-for`, [REPLY_KIND_CUSTOM_DATA_KEY]: ANSWER_KIND },
+  });
+  const label = rawElement({
+    id: `${id}-label`,
+    type: "text",
+    containerId: id,
+    x,
+    y,
+    width: POSTIT_WIDTH,
+    height: measureText(text, 20).height,
+    text,
+  });
+  return [container, label];
+}
+
+test("only a near, undeleted post-it answering the same question is read back as history", () => {
+  const asking = rawElement({ id: "q", type: "text", x: 0, y: 0, width: 60, height: 25, text: "@alpha what is it?" });
+  const mention = mentionOf(asking);
+
+  // Exactly at the radius still counts: the gate is further away than this.
+  const [atEdge, edgeLabel] = postIt("edge", "what is it?", "an answer", 310, 0);
+  assert.equal(boxDistance(atEdge, mention), DEFAULT_NEARBY_RADIUS, "310 - 60 is the radius exactly");
+  assert.deepEqual(previousAnswerNear([asking, atEdge, edgeLabel], mention), { kind: "answer", text: "an answer" });
+
+  // A container with the same words but no answer kind is a reply box, not a
+  // post-it, and it carries no customData at all to be read.
+  const [plainBox, plainLabel] = postIt("plain", "what is it?", "the wrong one", 100, 0);
+  const stripped = { ...plainBox, customData: undefined };
+  assert.equal(previousAnswerNear([asking, stripped, plainLabel], mention), null);
+
+  // A post-it whose answer paragraph is empty has nothing to report.
+  const [empty, emptyLabel] = postIt("empty", "what is it?", "", 100, 0);
+  assert.equal(postItParagraphs(emptyLabel.text as string).answer, "");
+  assert.equal(previousAnswerNear([asking, empty, emptyLabel], mention), null);
+
+  // A note that asks nothing matches nothing, even a post-it that also asks
+  // nothing: an empty question is not a key.
+  const blank = rawElement({ id: "b", type: "text", x: 0, y: 0, width: 60, height: 25, text: "   " });
+  const [blankPostIt, blankLabel] = postIt("blank", "", "an answer", 100, 0);
+  assert.equal(strippedQuestion(blank.text as string), "");
+  assert.equal(previousAnswerNear([blank, blankPostIt, blankLabel], mentionOf(blank)), null);
+
+  // A post-it a person has since deleted is a tombstone, not history.
+  const [gone, goneLabel] = postIt("gone", "what is it?", "an answer", 100, 0);
+  assert.equal(previousAnswerNear([asking, markRemoved(gone), goneLabel], mention), null);
+
+  // An element that is itself marked as an answer is not its own history.
+  const self = rawElement({
+    id: "s",
+    type: "text",
+    x: 0,
+    y: 0,
+    width: 60,
+    height: 25,
+    text: "@alpha what is it?",
+    customData: { [REPLY_KIND_CUSTOM_DATA_KEY]: ANSWER_KIND },
+  });
+  const selfLabel = rawElement({
+    id: "s-label",
+    type: "text",
+    containerId: "s",
+    text: postItText("what is it?", "an answer", "alpha"),
+  });
+  assert.equal(previousAnswerNear([self, selfLabel], mentionOf(self)), null);
+});
+
+test("postItParagraphs unwraps each paragraph and reads a lone one as a bare question", () => {
+  // Four paragraphs: everything between the question and the signature is the answer.
+  assert.deepEqual(postItParagraphs("q\n\nfirst\n\nsecond\n\n- alpha"), {
+    question: "q",
+    answer: "first second",
+    signature: "- alpha",
+  });
+  // One paragraph is a question with nothing written under it.
+  assert.deepEqual(postItParagraphs("just a question"), { question: "just a question", answer: "", signature: "" });
+  // The wrapping the server added is taken back off, spaces included.
+  assert.deepEqual(postItParagraphs("  q  \n\n  a  \n\n  - alpha  "), { question: "q", answer: "a", signature: "- alpha" });
+});
+
+test("a note that types either untrusted marker, indented or not, cannot forge the block edges", () => {
+  for (const marker of [UNTRUSTED_OPEN, UNTRUSTED_CLOSE]) {
+    for (const typed of [marker, `   ${marker}`, `${marker}  `]) {
+      assert.deepEqual(
+        escapeUntrusted(`before\n${typed}\nafter`).split("\n"),
+        ["before", `${typed} (quoted)`, "after"],
+        JSON.stringify(typed),
+      );
+    }
+  }
+  assert.equal(escapeUntrusted("nothing to quote"), "nothing to quote");
+});
+
+test("the post-it and the attributed line fall back to the canvas defaults when the note carries none", () => {
+  // No text, no font size, no font family: what a peer may hand over.
+  const bare = rawElement({ id: "n", type: "text", x: 10, y: 20, width: 40, height: 25 });
+  const line = buildAttributedLine(bare, "alpha: see chat", ctx(), "alpha");
+  assert.equal(line.fontSize, 20, "the default font size");
+  assert.equal(line.fontFamily, 5, "the font a text element is built with");
+
+  const { container, label } = buildAnswerPostIt(bare, "Paris", ctx(), "alpha");
+  assert.equal(label.fontSize, 20);
+  assert.equal(label.fontFamily, 5);
+  assert.equal(label.text, postItText("", "Paris", "alpha"), "no words on the note means no question on the post-it");
+  assert.equal(container.height, (label.height as number) + 2 * LABEL_PADDING);
+});
+
+test("the seen and acknowledged marks hold on a note with no text, font size or autoResize", () => {
+  const bare = rawElement({ id: "n", type: "text", x: 0, y: 0, width: 40, height: 25 });
+  const seen = markSeen(bare)!;
+  assert.equal(seen.text, SEEN_MARKER, "an empty note still takes exactly one marker");
+  assert.equal(seen.width, measureText(SEEN_MARKER, 20).width, "re-measured at the default font size");
+  assert.equal(markAcknowledged(bare).text, ` ${ACKNOWLEDGED_MARK}`);
+  assert.equal(markReplied(bare).text, ` ${ACKNOWLEDGED_MARK}`);
+
+  // autoResize false is a note a person sized by hand: its width is kept, and
+  // any other value is a box that follows its words.
+  const fixed = rawElement({ id: "f", type: "text", width: 500, height: 25, text: "@claude hi", autoResize: false });
+  const measured = measureText(acknowledgedText("@claude hi"), 20).width;
+  assert.notEqual(measured, 500, "the two answers have to differ for this to say anything");
+  assert.equal(markAcknowledged(fixed).width, 500);
+  assert.equal(markAcknowledged({ ...fixed, autoResize: true }).width, measured);
+  assert.equal(markAcknowledged({ ...fixed, autoResize: undefined }).width, measured);
+
+  // Already amber with nothing recorded: there is no colour it was written in
+  // to remember, so the canvas ink stands in rather than the amber.
+  const amber = rawElement({ id: "a", type: "text", text: "@claude hi", strokeColor: SEEN_STROKE });
+  assert.equal(preSeenStroke(markSeen({ ...amber, text: "@claude hi edited" })!), DEFAULT_INK);
+});
+
+test("the strip helpers take off the server's marks and the leading tags, and nothing else", () => {
+  assert.equal(stripStatus(`@claude hi ${ACKNOWLEDGED_MARK}`), "@claude hi");
+  assert.equal(hasSeenMarker(seenText("@claude hi")), true);
+  assert.equal(hasSeenMarker("@claude hi"), false);
+  assert.equal(hasSeenMarker(undefined), false);
+
+  // However many tags, however punctuated, and the words around them trimmed.
+  assert.equal(strippedQuestion("  @alpha, @beta: what is the capital?  "), "what is the capital?");
+  assert.equal(strippedQuestion(`@alpha  what is it? ${ACKNOWLEDGED_MARK}`), "what is it?");
+  assert.equal(strippedQuestion("@Alpha what is it?"), "what is it?", "a handle is matched whatever case it was typed in");
+
+  // A note with no text at all reads as the empty question it is.
+  assert.equal(handledKey(rawElement({ id: "n", type: "text" })), "");
+  const m = mentionOf(rawElement({ id: "n", type: "text", x: 1, y: 2, width: 3, height: 4 }));
+  assert.equal(m.text, "");
+  assert.equal(m.containerId, null, "absent is null, not undefined: callers read the field");
+});
+
+test("the scene scans look only at the shape of element each one is about", () => {
+  const note = rawElement({ id: "n1", type: "text", text: "@claude hi" });
+  // A shape whose own text carries the tag is not a mention: notes are text.
+  const shapeWithText = rawElement({ id: "r1", type: "rectangle", text: "@claude hi" });
+  assert.deepEqual(findMentions([shapeWithText, note], "@claude").map((m) => m.id), ["n1"]);
+  const acknowledged = markHandled(markHandled(new Map(), shapeWithText), note);
+  assert.deepEqual(findHandledMentions([shapeWithText, note], "@claude", acknowledged).map((m) => m.id), ["n1"]);
+
+  // The attributed line is the text line, not the post-it holding the same
+  // back reference; the post-it is the container, not a text carrying the kind.
+  const box = rawElement({
+    id: "p",
+    type: "rectangle",
+    customData: { [REPLY_CUSTOM_DATA_KEY]: "n1", [REPLY_KIND_CUSTOM_DATA_KEY]: ANSWER_KIND },
+  });
+  const textLine = rawElement({ id: "l", type: "text", customData: { [REPLY_CUSTOM_DATA_KEY]: "n1" } });
+  assert.equal(findAttributedLine([box, textLine], "n1")!.id, "l");
+  const textAnswer = rawElement({
+    id: "ta",
+    type: "text",
+    customData: { [REPLY_CUSTOM_DATA_KEY]: "n1", [REPLY_KIND_CUSTOM_DATA_KEY]: ANSWER_KIND },
+  });
+  const unstamped = rawElement({ id: "plain", type: "rectangle" });
+  const replyBox = rawElement({ id: "rb", type: "rectangle", customData: { [REPLY_CUSTOM_DATA_KEY]: "n1" } });
+  assert.equal(findAnswerPostIt([textAnswer, unstamped, box], "n1")!.id, "p");
+  assert.equal(findAnswerPostIt([unstamped, replyBox], "n1"), null, "a container with no answer kind is not a post-it");
+
+  // A bound label is a text bound to this container and no other.
+  const shapeInside = rawElement({ id: "si", type: "rectangle", containerId: "p" });
+  const otherLabel = rawElement({ id: "ol", type: "text", containerId: "other" });
+  const label = rawElement({ id: "pl", type: "text", containerId: "p" });
+  assert.equal(boundLabelOf([shapeInside, otherLabel, label], box)!.id, "pl");
+});
+
+test("previousLine gives back the words alone, whatever whitespace the note carried", () => {
+  const spaced = rawElement({ id: "l", type: "text", text: "alpha: see chat  " });
+  assert.deepEqual(previousLine(spaced), { kind: "status", text: "see chat" });
+});
+
+test("a mention inside a container says so, and an empty neighbourhood is one line", () => {
+  const held = mentionOf(rawElement({ id: "n", type: "text", x: 5, y: 6, width: 10, height: 10, containerId: "box", text: "@claude hi" }));
+  const block = formatMention(held, []);
+  assert.equal(block.split("\n")[0], "mention n v1 inside box:");
+  assert.deepEqual(block.split("\n").slice(-1), ["nearby: none"], "nothing is appended when there is nothing to append");
+
+  const loose = mentionOf(rawElement({ id: "n2", type: "text", x: 5.4, y: 6.6, text: "@claude hi" }));
+  assert.equal(formatMention(loose, []).split("\n")[0], "mention n2 v1 at (5,7):");
+});
+
+test("a depth that is not a whole number is read the bounded way", () => {
+  // The two keys arrive from peers unsanitised: a string depth is not a depth.
+  const answering = rawElement({
+    id: "x",
+    type: "text",
+    customData: { [DEPTH_CUSTOM_DATA_KEY]: "3", [REPLY_CUSTOM_DATA_KEY]: "n1" },
+  });
+  assert.equal(chainOf(answering).depth, 1, "a line answering something is at least one hop from a root");
+  const fractional = rawElement({ id: "y", type: "text", customData: { [DEPTH_CUSTOM_DATA_KEY]: 2.5 } });
+  assert.equal(chainOf(fractional).depth, 0);
 });
