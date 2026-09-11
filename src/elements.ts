@@ -631,6 +631,122 @@ export function layoutBoundLabel(
   };
 }
 
+/** Absolute scene coordinates of a linear element's points. */
+function absolutePoints(el: ExcalidrawElement): [number, number][] {
+  return (el.points ?? []).map(([px, py]) => [el.x + px, el.y + py] as [number, number]);
+}
+
+/**
+ * `linear` with one end moved to `point`: the origin, the relative points and
+ * the derived box all follow, because an arrow's `x`/`y` is its first point
+ * and everything else is stored relative to it.
+ */
+function withEndpoint(
+  linear: ExcalidrawElement,
+  which: "start" | "end",
+  point: [number, number],
+): ExcalidrawElement {
+  const abs = absolutePoints(linear);
+  if (abs.length < 2) return linear;
+  abs[which === "start" ? 0 : abs.length - 1] = point;
+  const [ox, oy] = abs[0];
+  const rel = abs.map(([px, py]) => [px - ox, py - oy] as [number, number]);
+  const xs = rel.map((p) => p[0]);
+  const ys = rel.map((p) => p[1]);
+  return {
+    ...linear,
+    x: ox,
+    y: oy,
+    points: rel,
+    width: Math.max(...xs) - Math.min(...xs),
+    height: Math.max(...ys) - Math.min(...ys),
+  };
+}
+
+/**
+ * `linear` re-attached to `shape` wherever it binds to it, or null when it
+ * binds to something else.
+ *
+ * Excalidraw stores an arrow's endpoints absolutely and re-derives them from
+ * the binding only while the app itself drags the shape. Nothing re-derives
+ * them for a scene this server writes, so moving or resizing a shape leaves
+ * every arrow into it pointing at where the shape used to be (issue #112).
+ *
+ * The new end lands on the shape's outline (outset 0) rather than the
+ * EDGE_OUTSET gap `buildElements` leaves on creation: an end that has been
+ * re-attached should read as touching the box it is bound to, and the
+ * `fixedPoint` recorded alongside it is a ratio of that same outline point.
+ */
+export function rebindLinear(
+  linear: ExcalidrawElement,
+  shape: ExcalidrawElement,
+): ExcalidrawElement | null {
+  let next = linear;
+  let changed = false;
+  for (const which of ["start", "end"] as const) {
+    const binding = which === "start" ? next.startBinding : next.endBinding;
+    if (!binding || binding.elementId !== shape.id) continue;
+    const abs = absolutePoints(next);
+    if (abs.length < 2) continue;
+    // Aim at the end that is staying put, so the arrow keeps its heading.
+    const other = which === "start" ? abs[abs.length - 1] : abs[0];
+    const anchor = edgePoint(shape, other, 0);
+    const rebound: Binding = {
+      elementId: shape.id,
+      fixedPoint: fixedPointFor(shape, anchor),
+      mode: binding.fixedPoint === null ? "orbit" : (binding as Binding).mode,
+    };
+    const moved = withEndpoint(next, which, anchor);
+    next = which === "start" ? { ...moved, startBinding: rebound } : { ...moved, endBinding: rebound };
+    changed = true;
+  }
+  return changed ? next : null;
+}
+
+/**
+ * Everything bound to `after` brought back into agreement with its new box,
+ * plus `after` itself in case fitting a label grew it.
+ *
+ * Bound text is re-laid out inside a shape and carried by the delta along a
+ * linear container (an arrow's label has no box to be centred in - the arrow's
+ * width and height come from its points). Bound arrows are re-attached.
+ */
+function relayoutBindings(
+  before: ExcalidrawElement,
+  after: ExcalidrawElement,
+  lookup: (id: string) => ExcalidrawElement | undefined,
+): { element: ExcalidrawElement; changed: ExcalidrawElement[] } {
+  const dx = after.x - before.x;
+  const dy = after.y - before.y;
+  const resized = after.width !== before.width || after.height !== before.height;
+  const bounds = after.boundElements;
+  if (!bounds || (dx === 0 && dy === 0 && !resized)) return { element: after, changed: [] };
+  const linear = isLinear(after);
+  let element = after;
+  const changed: ExcalidrawElement[] = [];
+  // Text first: fitting a label can grow the container, and the arrows are
+  // then re-attached to the box that grew rather than the one that did not.
+  for (const ref of bounds) {
+    const bound = lookup(ref.id);
+    if (!bound || bound.isDeleted || bound.type !== "text") continue;
+    if (linear) {
+      changed.push(bump({ ...bound, x: bound.x + dx, y: bound.y + dy }));
+      continue;
+    }
+    const laid = layoutBoundLabel(element, bound);
+    element = laid.container;
+    changed.push(bump(laid.label));
+  }
+  for (const ref of bounds) {
+    const bound = lookup(ref.id);
+    if (!bound || bound.isDeleted) continue;
+    if (!isLinear(bound)) continue;
+    const rebound = rebindLinear(bound, element);
+    if (rebound) changed.push(bump(rebound));
+  }
+  return { element, changed };
+}
+
 /**
  * Merge `set` over `current` and return every element that changed, bumped.
  *
@@ -641,6 +757,11 @@ export function layoutBoundLabel(
  * (issue #90). Here `originalText` follows `text`, the box is re-measured
  * unless the caller gave explicit dimensions, and a bound label is re-laid out
  * inside its container, which is returned bumped alongside it.
+ *
+ * Geometry is the mirror image of that (issue #112): a bound label and a bound
+ * arrow carry their own absolute coordinates, so changing `x`, `y`, `width` or
+ * `height` on a container without moving them leaves the label floating at the
+ * old position and the arrows pointing at empty canvas.
  */
 export function applyUpdate(
   current: ExcalidrawElement,
@@ -656,10 +777,153 @@ export function applyUpdate(
       next = { ...next, width: m.width, height: m.height };
     }
   }
+  const changed: ExcalidrawElement[] = [];
   const container = reflowed && next.containerId ? lookup(next.containerId) : undefined;
-  if (!container) return [bump(next)];
-  const laid = layoutBoundLabel(container, next);
-  return [bump(laid.label), bump(laid.container)];
+  if (container) {
+    const laid = layoutBoundLabel(container, next);
+    next = laid.label;
+    changed.push(bump(laid.container));
+  }
+  const relaid = relayoutBindings(current, next, lookup);
+  return [bump(relaid.element), ...changed, ...relaid.changed];
+}
+
+/** What `translate` moved, what it pulled in, and what it could not find. */
+export interface TranslateResult {
+  /** Elements moved by the delta, bumped, in scene order. */
+  moved: ExcalidrawElement[];
+  /** Arrows bound at one end to something moved: re-attached rather than moved. */
+  rebound: ExcalidrawElement[];
+  /** Ids the closure added: everything moved that was not asked for, in scene order. */
+  added: string[];
+  /** Requested ids that are not in the scene. */
+  missing: string[];
+}
+
+/** Arrows and lines: the two types whose geometry is a list of points. */
+function isLinear(el: ExcalidrawElement): boolean {
+  return el.type === "arrow" || el.type === "line";
+}
+
+function pushInto(map: Map<string, string[]>, key: string, id: string): void {
+  const existing = map.get(key);
+  if (existing) existing.push(id);
+  else map.set(key, [id]);
+}
+
+/**
+ * Every id that travels when `requested` moves: the ids themselves, their
+ * bound labels, their groups' other members, a translated frame's children,
+ * and any arrow whose two ends are both in the set. A both-ends arrow may
+ * itself carry a label, so the worklist is re-run until nothing new arrives.
+ */
+function translationClosure(requested: readonly string[], live: readonly ExcalidrawElement[]): Set<string> {
+  const byId = new Map(live.map((e) => [e.id, e]));
+  const members = new Map<string, string[]>();
+  const children = new Map<string, string[]>();
+  for (const el of live) {
+    for (const group of el.groupIds ?? []) pushInto(members, group, el.id);
+    if (el.frameId) pushInto(children, el.frameId, el.id);
+  }
+  const picked = new Set<string>();
+  const queue = [...requested];
+  let growing = true;
+  while (growing) {
+    while (queue.length) {
+      const id = queue.pop() as string;
+      const el = byId.get(id);
+      if (!el || picked.has(id)) continue;
+      picked.add(id);
+      for (const group of el.groupIds ?? []) queue.push(...(members.get(group) ?? []));
+      queue.push(...(children.get(id) ?? []));
+      for (const ref of el.boundElements ?? []) {
+        if (byId.get(ref.id)?.type === "text") queue.push(ref.id);
+      }
+    }
+    const spanning = arrowsSpanning(live, picked);
+    queue.push(...spanning);
+    growing = spanning.length > 0;
+  }
+  return picked;
+}
+
+/** Ids of the arrows and lines not yet picked whose two ends are both picked. */
+function arrowsSpanning(live: readonly ExcalidrawElement[], picked: ReadonlySet<string>): string[] {
+  const ids: string[] = [];
+  for (const el of live) {
+    if (picked.has(el.id) || !isLinear(el)) continue;
+    const from = el.startBinding?.elementId;
+    const to = el.endBinding?.elementId;
+    if (from === undefined || to === undefined) continue;
+    if (picked.has(from) && picked.has(to)) ids.push(el.id);
+  }
+  return ids;
+}
+
+/** The arrows left behind by a translation, each re-attached to what moved under it. */
+function reattachArrows(
+  live: readonly ExcalidrawElement[],
+  picked: ReadonlySet<string>,
+  moved: ReadonlyMap<string, ExcalidrawElement>,
+): ExcalidrawElement[] {
+  const rebound: ExcalidrawElement[] = [];
+  for (const el of live) {
+    if (picked.has(el.id) || !isLinear(el)) continue;
+    const ends = [el.startBinding?.elementId, el.endBinding?.elementId];
+    let next = el;
+    let touched = false;
+    for (const [i, id] of ends.entries()) {
+      // Both ends bound to one shape are re-computed together by the first
+      // call, so the duplicate is skipped rather than re-computed off itself.
+      if (id === undefined || ends.indexOf(id) !== i) continue;
+      const shape = moved.get(id);
+      if (!shape) continue;
+      const re = rebindLinear(next, shape);
+      if (re) {
+        next = re;
+        touched = true;
+      }
+    }
+    if (touched) rebound.push(bump(next));
+  }
+  return rebound;
+}
+
+/**
+ * Move `ids` by (dx, dy) together with everything that must travel with them.
+ *
+ * Excalidraw's own drag resolves this closure in the app; a scene written from
+ * outside has to resolve it here or the drawing comes apart (issue #112). What
+ * travels: a bound label, because it holds its own coordinates; every other
+ * member of a group one of the ids belongs to, because a group moves as one;
+ * the children of a translated frame; and an arrow bound at *both* ends to
+ * elements that are moving, because both of its ends are moving by the same
+ * delta. An arrow bound at one end is not moved - the shape moved under it and
+ * the other end stayed - so it is re-attached instead, and reported separately.
+ *
+ * Each element is moved exactly once however many ways the closure reaches it.
+ */
+export function translate(
+  ids: readonly string[],
+  dx: number,
+  dy: number,
+  elements: readonly ExcalidrawElement[],
+): TranslateResult {
+  const live = elements.filter((e) => !e.isDeleted);
+  const present = new Set(live.map((e) => e.id));
+  const missing = ids.filter((id) => !present.has(id));
+  const asked = new Set(ids.filter((id) => present.has(id)));
+  const picked = translationClosure([...asked], live);
+
+  const moved: ExcalidrawElement[] = [];
+  const added: string[] = [];
+  for (const el of live) {
+    if (!picked.has(el.id)) continue;
+    moved.push(bump({ ...el, x: el.x + dx, y: el.y + dy }));
+    if (!asked.has(el.id)) added.push(el.id);
+  }
+  const rebound = reattachArrows(live, picked, new Map(moved.map((e) => [e.id, e])));
+  return { moved, rebound, added, missing };
 }
 
 /** Return a copy with version bumped and a fresh nonce, as Excalidraw does on every mutation. */
@@ -698,10 +962,10 @@ export type SummaryReasons = ReadonlyMap<string, string>;
  */
 export function summarise(elements: readonly ExcalidrawElement[], reasons: SummaryReasons = new Map()): string {
   const byId = new Map(elements.map((e) => [e.id, e]));
-  const labelFor = new Map<string, string>();
+  const labelFor = new Map<string, ExcalidrawElement>();
   for (const el of elements) {
     if (el.type === "text" && el.containerId && !el.isDeleted) {
-      labelFor.set(el.containerId, el.text ?? "");
+      labelFor.set(el.containerId, el);
     }
   }
   const lines: string[] = [];
@@ -713,8 +977,21 @@ export function summarise(elements: readonly ExcalidrawElement[], reasons: Summa
   return lines.join("\n");
 }
 
+/**
+ * Whether a bound label's centre has come adrift from its container's box.
+ *
+ * The summary folds a label into its container's line, so a scene where the
+ * two disagree - the container moved and the label did not - reads as if
+ * nothing were wrong. This is what puts the disagreement on the line.
+ */
+function labelEscaped(container: ExcalidrawElement, label: ExcalidrawElement): boolean {
+  const cx = label.x + label.width / 2;
+  const cy = label.y + label.height / 2;
+  return cx < container.x || cx > container.x + container.width || cy < container.y || cy > container.y + container.height;
+}
+
 /** One element's line: what it is, where, what it says, and why it is listed. */
-function summaryLine(el: ExcalidrawElement, label: string | undefined, reason: string | undefined): string {
+function summaryLine(el: ExcalidrawElement, label: ExcalidrawElement | undefined, reason: string | undefined): string {
   const parts: string[] = [`${el.id} ${el.type}`];
   if (el.type === "freedraw" || el.type === "arrow" || el.type === "line") {
     const pts = (el.points ?? []).map(([px, py]) => [round(el.x + px), round(el.y + py)] as [number, number]);
@@ -729,7 +1006,10 @@ function summaryLine(el: ExcalidrawElement, label: string | undefined, reason: s
   // A frame's title is a property rather than a child element - frames are the
   // only type carrying one - so it only reaches the model if this prints it.
   if (el.name) parts.push(`"${el.name}"`);
-  if (label !== undefined) parts.push(`"${label}"`);
+  if (label !== undefined) {
+    parts.push(`"${label.text ?? ""}"`);
+    if (labelEscaped(el, label)) parts.push(`(label at ${round(label.x)},${round(label.y)}, outside container)`);
+  }
   if (el.strokeColor && el.strokeColor !== "#1e1e1e") parts.push(`stroke=${el.strokeColor}`);
   if (el.backgroundColor && el.backgroundColor !== "transparent") parts.push(`fill=${el.backgroundColor}`);
   if (reason !== undefined) parts.push(reason);

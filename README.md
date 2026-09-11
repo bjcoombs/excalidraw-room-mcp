@@ -76,7 +76,7 @@ The radius is set per room with `nearbyRadius` on `create_room` or `join_room`. 
 
 ### Labels and text
 
-Container labels may be multi-line: put `\n` in `label` and the container grows to fit. Text is measured by approximation, and the web app re-measures on the next edit.
+Container labels may be multi-line: put `\n` in `label` and the container grows to fit. Text is measured by approximation, and the web app re-measures on the next edit. Moving or resizing a shape with `update_elements` moves its label with it and re-attaches every arrow bound to it, so the label never floats where the shape used to be; use `translate_elements` to move a shape together with its group, its frame's children and the arrows between moved shapes.
 
 ### Saving the scene
 
@@ -120,6 +120,7 @@ Blocking ten minutes on `wait_for_mention` ties up your main session. Split the 
 | `add_elements` | Add shapes, text, arrows, lines and strokes from compact specs, with `label`, `link` and `place:`. |
 | `add_raw_elements` | Add complete Excalidraw elements verbatim, for example from an `.excalidraw` file. |
 | `update_elements` | Patch elements by id (`updates: [{id, set}]`). `force` edits another present agent's work. |
+| `translate_elements` | Move elements by `dx`/`dy`, carrying bound labels, group members, frame children and arrows bound at both ends. `force` as above. |
 | `delete_elements` | Soft-delete by id. `force` as above. |
 | `wait_for_mention` | Block until a mention addressed to this agent appears and settles, then return it with its neighbourhood. `tag`, `answerAgentMentions`, `autoSeen`, `timeoutSeconds`. |
 | `list_mentions` | All pending mentions now, with the same options. `includeHandled: true` also lists notes kept on the canvas. |

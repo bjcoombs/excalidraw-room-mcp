@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { inflateSync } from "node:zlib";
 import { test } from "node:test";
 import { buildElements, type ElementSpec, type ExcalidrawElement } from "./elements.js";
-import { MAX_PNG_BYTES, snapshotScene } from "./snapshot.js";
+import { buildSvg, MAX_PNG_BYTES, snapshotScene } from "./snapshot.js";
 
 /** The four pinned lines of the text block, as a lookup. */
 function lines(text: string): string[] {
@@ -212,4 +212,47 @@ test("snapshot keeps the PNG under 4 MB by reducing the scale and says so", asyn
     `no reduction note in:\n${snapshot.text}`,
   );
   assert.equal(field(snapshot.text, "pixels"), `${pngSize(snapshot.png).width}x${pngSize(snapshot.png).height}`);
+});
+
+// ---------------------------------------------------------------------------
+// A bound label is drawn where it actually is.
+// https://github.com/bjcoombs/excalidraw-room-mcp/issues/112
+
+/** The x, y of every <text> span in an SVG, in document order. */
+function textAnchors(svg: string): { x: number; y: number }[] {
+  return [...svg.matchAll(/<text x="([-\d.]+)" y="([-\d.]+)"/g)].map((m) => ({
+    x: Number(m[1]),
+    y: Number(m[2]),
+  }));
+}
+
+test("snapshot draws a bound label at its own coordinates when they disagree with the container", () => {
+  const scene = build([{ type: "rectangle", id: "r", x: 0, y: 0, width: 200, height: 100, label: "Box" }]);
+  const rect = scene.find((e) => e.id === "r")!;
+  const label = scene.find((e) => e.containerId === "r")!;
+
+  const agreeing = textAnchors(buildSvg(scene, { x: 0, y: 0, width: 400, height: 600 }, 400, 600));
+  assert.equal(agreeing.length, 1);
+  assert.equal(agreeing[0].x, label.x + label.width / 2, "a consistent scene still centres the label");
+
+  // The #112 fault: the container moved and the label did not. The canvas
+  // draws the label where the label says it is, so the snapshot must too.
+  const adrift = [rect, { ...label, x: label.x, y: label.y + 400 }];
+  const drawn = textAnchors(buildSvg(adrift, { x: 0, y: 0, width: 400, height: 600 }, 400, 600));
+  assert.equal(drawn.length, 1);
+  assert.equal(drawn[0].x, agreeing[0].x, "the label did not move sideways");
+  assert.equal(drawn[0].y - agreeing[0].y, 400, "and is drawn 400px down, not back inside the box");
+});
+
+test("snapshot rotates a bound label with its container", () => {
+  const scene = build([{ type: "rectangle", id: "r", x: 0, y: 0, width: 200, height: 100, label: "Box" }]);
+  const rect = { ...scene.find((e) => e.id === "r")!, angle: Math.PI / 2 };
+  const label = scene.find((e) => e.containerId === "r")!;
+  const svg = buildSvg([rect, label], { x: 0, y: 0, width: 400, height: 400 }, 400, 400);
+
+  // The container's centre, not the label's: the label turns about the shape
+  // it is bound to, which is what the canvas does.
+  assert.match(svg, /<g transform="rotate\(90 100 50\)"><text /, svg);
+  const unrotated = buildSvg([scene.find((e) => e.id === "r")!, label], { x: 0, y: 0, width: 400, height: 400 }, 400, 400);
+  assert.doesNotMatch(unrotated, /rotate/, "a container at angle 0 rotates nothing");
 });
