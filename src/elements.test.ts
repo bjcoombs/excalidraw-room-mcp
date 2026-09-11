@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  AGENT_AUTHOR_KIND,
   applyUpdate,
+  AUTHOR_KEY,
+  AUTHOR_KIND_KEY,
   authorLabel,
   buildElements,
   bump,
@@ -17,6 +20,7 @@ import {
   stampAuthor,
   summarise,
   translate,
+  wrapText,
   type Binding,
   type ExcalidrawElement,
 } from "./elements.js";
@@ -1334,4 +1338,246 @@ test("an update that changes no geometry leaves bound elements alone", () => {
   const same = applyUpdate(rect, { x: rect.x, y: rect.y, backgroundColor: "#ffec99" }, lookupIn(scene));
   assert.deepEqual(same.map((e) => e.id), ["r1"], "setting x and y to what they already are moves nothing");
   assert.equal(same[0].backgroundColor, "#ffec99");
+});
+
+// Binding ratios, arrow re-attachment and the wrap helper, pinned to exact
+// numbers. The geometry here is chosen so every term of each formula is
+// visible in the result: a sign, a min for a max, or a dropped guard all move
+// a coordinate rather than cancelling out.
+
+test("a shape too small to bind anchors the arrow at its centre, and a 1 px one still binds by ratio", () => {
+  const { created } = buildElements(
+    [
+      // Zero on one axis each: no interior to anchor into.
+      { type: "rectangle", id: "w0", x: 0, y: 0, width: 0, height: 100 },
+      { type: "rectangle", id: "h0", x: 400, y: 0, width: 100, height: 0 },
+      { type: "arrow", id: "tiny", start: "w0", end: "h0" },
+      // Exactly MIN_BINDABLE_SIZE on one axis: still bindable.
+      { type: "rectangle", id: "w1", x: 0, y: 600, width: 1, height: 100 },
+      { type: "rectangle", id: "h1", x: 400, y: 649.5, width: 100, height: 1 },
+      { type: "arrow", id: "onepx", start: "w1", end: "h1" },
+    ],
+    ctx(),
+  );
+  const tiny = created.find((e) => e.id === "tiny")!;
+  assert.deepEqual((tiny.startBinding as Binding).fixedPoint, [0.5001, 0.5001], "a zero-width shape binds at its centre");
+  assert.deepEqual((tiny.endBinding as Binding).fixedPoint, [0.5001, 0.5001], "and so does a zero-height one");
+
+  const onepx = created.find((e) => e.id === "onepx")!;
+  assert.deepEqual((onepx.startBinding as Binding).fixedPoint, [0.25, 0.5001], "1 px wide is bindable, and the ratio floors its divisor at the binding gap");
+  assert.deepEqual((onepx.endBinding as Binding).fixedPoint, [0, 0.125], "1 px high the same way");
+});
+
+test("a fixed point of exactly 0.5 is nudged off centre on that axis alone", () => {
+  const { created } = buildElements(
+    [
+      { type: "rectangle", id: "v1", x: 0, y: 0, width: 200, height: 100 },
+      { type: "rectangle", id: "v2", x: 0, y: 600, width: 200, height: 100 },
+      { type: "arrow", id: "down", start: "v1", end: "v2" },
+    ],
+    ctx(),
+  );
+  const down = created.find((e) => e.id === "down")!;
+  // A vertical arrow leaves through the middle of the horizontal edges, so the
+  // x ratio is exactly 0.5 and is nudged; the y ratio is 1 and 0 and is not.
+  assert.deepEqual((down.startBinding as Binding).fixedPoint, [0.5001, 1]);
+  // The y ratio is measured from v2's own origin, 600 px down the canvas.
+  assert.deepEqual((down.endBinding as Binding).fixedPoint, [0.5001, 0]);
+});
+
+test("a flat shape on a horizontal arrow still yields a finite edge point", () => {
+  const { created } = buildElements(
+    [
+      { type: "rectangle", id: "f1", x: 0, y: 0, width: 100, height: 0 },
+      { type: "rectangle", id: "f2", x: 400, y: 0, width: 100, height: 0 },
+      { type: "arrow", id: "flat", start: "f1", end: "f2" },
+    ],
+    ctx(),
+  );
+  const flat = created.find((e) => e.id === "flat")!;
+  // Both boxes are zero-height and the arrow runs along their centre line, so
+  // the vertical exit is at no distance at all rather than at none.
+  assert.deepEqual(absPoints(flat), [[104, 0], [396, 0]]);
+});
+
+/** s1 with an arrow whose far end is a waypoint, bound at one end only. */
+function reboundScene(which: "start" | "end"): { shape: ExcalidrawElement; arrow: ExcalidrawElement } {
+  const shape = raw({ id: "s1", type: "rectangle", x: 0, y: 0, width: 200, height: 100 });
+  const binding: Binding = { elementId: "s1", fixedPoint: [0, 0], mode: "inside" };
+  const arrow = raw({
+    id: "a1",
+    type: "arrow",
+    x: 500,
+    y: 50,
+    points: [[0, 0], [-100, -150], [-200, -50]],
+    startBinding: which === "start" ? binding : null,
+    endBinding: which === "end" ? binding : null,
+  });
+  return { shape, arrow };
+}
+
+test("re-attaching the end of an arrow re-derives its origin, its points and its box", () => {
+  const { shape, arrow } = reboundScene("end");
+  const rebound = rebindLinear(arrow, shape)!;
+  // The end aims at the end that is staying put - the first point, at (500,50)
+  // - so it leaves s1 through the middle of the right edge.
+  assert.deepEqual(absPoints(rebound), [[500, 50], [400, -100], [200, 50]]);
+  assert.equal(rebound.x, 500, "the origin is still the first point");
+  assert.equal(rebound.y, 50);
+  assert.deepEqual(rebound.points, [[0, 0], [-100, -150], [-300, 0]]);
+  assert.equal(rebound.width, 300, "the box spans the points, left of the origin included");
+  assert.equal(rebound.height, 150);
+  assert.deepEqual((rebound.endBinding as Binding).fixedPoint, [1, 0.5001]);
+  assert.equal(rebound.startBinding, null, "the free end keeps no binding");
+});
+
+test("re-attaching the start of an arrow aims at the far end and keeps the bind mode", () => {
+  const { shape, arrow } = reboundScene("start");
+  const rebound = rebindLinear(arrow, shape)!;
+  // The start aims at the last point, (300,0), which exits through the top
+  // edge rather than the right one.
+  assert.deepEqual(absPoints(rebound), [[200, 25], [400, -100], [300, 0]]);
+  assert.equal(rebound.x, 200);
+  assert.equal(rebound.y, 25);
+  assert.deepEqual(rebound.points, [[0, 0], [200, -125], [100, -25]]);
+  assert.equal(rebound.width, 200);
+  assert.equal(rebound.height, 125);
+  assert.deepEqual((rebound.startBinding as Binding).fixedPoint, [1, 0.25]);
+  assert.equal((rebound.startBinding as Binding).mode, "inside", "a mode upstream wrote is not overwritten with orbit");
+});
+
+test("a move on one axis alone, and a resize on one axis alone, still re-lay out the label", () => {
+  const scene = boundScene();
+  const rect = scene.find((e) => e.id === "r1")!;
+  const label = scene.find((e) => e.containerId === "r1")!;
+
+  const shifted = applyUpdate(rect, { x: 40 }, lookupIn(scene));
+  const sideways = shifted.find((e) => e.id === label.id);
+  assert.ok(sideways, "an x-only move is still a move");
+  assert.equal(sideways!.x, 40 + (200 - label.width) / 2);
+
+  const taller = applyUpdate(rect, { height: 400 }, lookupIn(scene));
+  const grown = taller.find((e) => e.id === label.id);
+  assert.ok(grown, "a height-only resize is still a resize");
+  assert.equal(grown!.y, (400 - label.height) / 2);
+  assert.equal(grown!.x, label.x, "the width did not change, so neither does the label's x");
+});
+
+test("a label bound to a polyline is carried by the delta rather than re-centred", () => {
+  for (const type of ["arrow", "line"] as const) {
+    const { created } = buildElements(
+      [{ type, id: "ln", points: [[100, 200], [160, 400], [340, 240]], label: "edge" }],
+      ctx(),
+    );
+    const linear = created.find((e) => e.id === "ln")!;
+    const label = created.find((e) => e.containerId === "ln")!;
+    assert.equal(linear.x, 100, type);
+    assert.notEqual(label.x, linear.x + (linear.width - label.width) / 2, "the label sits on the midpoint, not the box centre");
+
+    const out = applyUpdate(linear, { x: 160, y: 250 }, lookupIn(created));
+    const moved = out.find((e) => e.id === label.id)!;
+    assert.equal(moved.x - label.x, 60, `${type} label x`);
+    assert.equal(moved.y - label.y, 50, `${type} label y`);
+    assert.equal(out.find((e) => e.id === "ln")!.width, linear.width, "a linear box comes from its points");
+    assert.equal(out.find((e) => e.id === "ln")!.height, linear.height);
+  }
+});
+
+test("a container whose boundElements name something that is not there is laid out without it", () => {
+  const label = raw({ id: "t", type: "text", containerId: "r", width: 40, height: 25, text: "hi" });
+  const rect = raw({
+    id: "r",
+    type: "rectangle",
+    width: 200,
+    height: 100,
+    boundElements: [{ id: "ghost", type: "arrow" }, { id: "t", type: "text" }],
+  });
+  const out = applyUpdate(rect, { x: 50 }, lookupIn([rect, label]));
+  assert.deepEqual(out.map((e) => e.id).sort(), ["r", "t"], "a dangling reference is skipped, not followed");
+});
+
+test("a bound arrow that names another shape is left where it is", () => {
+  const other = raw({ id: "o", type: "rectangle", x: 600, y: 0, width: 100, height: 100 });
+  const arrow = raw({
+    id: "a",
+    type: "arrow",
+    x: 300,
+    y: 50,
+    points: [[0, 0], [100, 0]],
+    startBinding: { elementId: "o", fixedPoint: [0, 0.5], mode: "orbit" },
+    endBinding: null,
+  });
+  const rect = raw({ id: "r", type: "rectangle", width: 200, height: 100, boundElements: [{ id: "a", type: "arrow" }] });
+  const out = applyUpdate(rect, { x: 20 }, lookupIn([rect, arrow, other]));
+  assert.deepEqual(out.map((e) => e.id), ["r"], "there is nothing to re-attach, so nothing is returned");
+});
+
+test("translate reads no binding off an arrow that has none, and re-attaches nothing it cannot", () => {
+  const rect = raw({ id: "r", type: "rectangle", width: 100, height: 100 });
+  const free = raw({ id: "free", type: "arrow", x: 500, y: 500, points: [[0, 0], [50, 50]] });
+  const stub = raw({
+    id: "stub",
+    type: "arrow",
+    x: 300,
+    y: 300,
+    points: [[0, 0]],
+    startBinding: { elementId: "r", fixedPoint: [0, 0], mode: "orbit" },
+  });
+  const { moved, rebound } = translate(["r"], 20, 20, [rect, free, stub]);
+  assert.deepEqual(moved.map((e) => e.id), ["r"]);
+  assert.deepEqual(rebound, [], "an unbound arrow and a one-point arrow are both left alone");
+});
+
+test("every member of a group travels, whichever one is asked for", () => {
+  const member = (id: string, x: number) => raw({ id, type: "rectangle", x, width: 50, height: 50, groupIds: ["g1"] });
+  const scene = [member("m1", 0), member("m2", 100), member("m3", 200)];
+  for (const asked of ["m1", "m2", "m3"]) {
+    assert.deepEqual(translate([asked], 7, 0, scene).moved.map((e) => e.id), ["m1", "m2", "m3"], asked);
+  }
+});
+
+test("a bound label whose centre sits exactly on the container's far edge is inside it", () => {
+  const container = raw({ id: "r4", type: "rectangle", x: 0, y: 900, width: 200, height: 100 });
+  const label = raw({ id: "t4", type: "text", containerId: "r4", width: 36, height: 25, text: "far" });
+  // The right and bottom edges are inclusive: a centre exactly on one is not adrift.
+  assert.doesNotMatch(summarise([container, { ...label, x: 182, y: 937 }]), /outside container/, "centre on the right edge");
+  assert.doesNotMatch(summarise([container, { ...label, x: 82, y: 987.5 }]), /outside container/, "centre on the bottom edge");
+});
+
+test("wrapText breaks an unbreakable word at the last character that fits", () => {
+  // At font size 20 a character measures 12 px, so 30 of them measure exactly
+  // the 360 px width and 31 do not.
+  assert.equal(measureText("x".repeat(30), 20).width, 360);
+  assert.deepEqual(wrapText("x".repeat(35), 360, 20).split("\n"), ["x".repeat(30), "x".repeat(5)]);
+  assert.deepEqual(wrapText("x".repeat(61), 360, 20).split("\n"), ["x".repeat(30), "x".repeat(30), "x"]);
+});
+
+test("a line that measures exactly the width keeps its last word", () => {
+  const exact = `${"a".repeat(14)} ${"b".repeat(15)}`;
+  assert.equal(exact.length, 30, "14 + a space + 15 characters measure exactly 360 px");
+  assert.equal(wrapText(exact, 360, 20), exact);
+  assert.deepEqual(wrapText(`${exact}c`, 360, 20).split("\n"), ["a".repeat(14), `${"b".repeat(15)}c`]);
+});
+
+test("keepAuthor carries whichever author field the element had, and invents neither", () => {
+  const bare = raw({ id: "x", type: "rectangle" });
+  const patched = raw({ id: "x", type: "rectangle", customData: { foo: 1 } });
+  const authored = raw({ id: "x", type: "rectangle", customData: { [AUTHOR_KEY]: "alpha" } });
+  const kinded = raw({ id: "x", type: "rectangle", customData: { [AUTHOR_KIND_KEY]: AGENT_AUTHOR_KIND } });
+
+  // A patch that clears customData does not clear the attribution under it.
+  assert.deepEqual(keepAuthor(authored, bare).customData, { [AUTHOR_KEY]: "alpha" });
+  assert.deepEqual(keepAuthor(kinded, bare).customData, { [AUTHOR_KIND_KEY]: AGENT_AUTHOR_KIND });
+
+  // A field the element never had is not written back as an undefined key: a
+  // peer reading the element would see an author of nothing rather than none.
+  const fromKind = keepAuthor(kinded, patched).customData as Record<string, unknown>;
+  assert.deepEqual(fromKind, { foo: 1, [AUTHOR_KIND_KEY]: AGENT_AUTHOR_KIND });
+  assert.equal(Object.hasOwn(fromKind, AUTHOR_KEY), false);
+  const fromAuthor = keepAuthor(authored, patched).customData as Record<string, unknown>;
+  assert.deepEqual(fromAuthor, { foo: 1, [AUTHOR_KEY]: "alpha" });
+  assert.equal(Object.hasOwn(fromAuthor, AUTHOR_KIND_KEY), false);
+
+  // Nothing on either side: the patch is returned untouched.
+  assert.equal(keepAuthor(bare, bare).customData, undefined);
 });
