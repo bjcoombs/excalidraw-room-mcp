@@ -40,13 +40,18 @@ import {
   formatMention,
   nearbyNeighbourhood,
   handledKey,
+  boundLabelOf,
+  buildAnswerPostIt,
+  findAnswerPostIt,
   markAcknowledged,
   markHandled,
   markRemoved,
+  markReplied,
   markSeen,
   acknowledgementText,
   planAcknowledgement,
-  markAnswered,
+  POSTIT_WIDTH,
+  previousAnswerNear,
   MAX_ANSWER_LENGTH,
   MAX_REPLY_LENGTH,
   MAX_AGENT_REPLY_DEPTH,
@@ -185,9 +190,19 @@ function handledMentionsOnCanvas(
  * attributed line for it. Read from the scene rather than remembered, so a
  * line written by an earlier process still shows up.
  */
-function previousLineFor(id: string, elements = room.getElements()): PreviousLine | null {
+function previousLineFor(id: string, elements: readonly ExcalidrawElement[] = room.getElements()): PreviousLine | null {
   const line = findAttributedLine(elements, id);
   return line ? previousLine(line) : null;
+}
+
+/**
+ * What the agent last wrote about this mention: the line still under the note,
+ * or failing that the answer a post-it beside it already gives to the same
+ * question. An answered note is removed from the canvas, so the post-it is the
+ * only history a note asking again can carry.
+ */
+function previousFor(mention: Mention, elements: readonly ExcalidrawElement[], radius: number): PreviousLine | null {
+  return previousLineFor(mention.id, elements) ?? previousAnswerNear(elements, mention, radius);
 }
 
 /**
@@ -931,9 +946,8 @@ server.registerTool(
     });
     if (!mention) return text(`no mention of ${tags[0]} within ${timeoutSeconds}s`);
     const elements = room.getElements();
-    const out = mentionBlock(mention, elements, nearRadius(room.nearbyRadius, radius), {
-      previous: previousLineFor(mention.id, elements),
-    });
+    const reach = nearRadius(room.nearbyRadius, radius);
+    const out = mentionBlock(mention, elements, reach, { previous: previousFor(mention, elements, reach) });
     if (autoSeen) await commitSeen(mention);
     return text(withRequestPreamble(withScopeRule(out, mentionPolicy)));
   },
@@ -970,9 +984,7 @@ server.registerTool(
     if (!pending.length && !handled.length) return text(`no pending mentions of ${tags[0]}`);
     const reach = nearRadius(room.nearbyRadius, radius);
     const blocks = [
-      ...pending.map((m) =>
-        mentionBlock(m, all, reach, { previous: previousLineFor(m.id, all) }),
-      ),
+      ...pending.map((m) => mentionBlock(m, all, reach, { previous: previousFor(m, all, reach) })),
       ...handled.map((m) => mentionBlock(m, all, reach, { handled: true })),
     ];
     const out = blocks.join("\n\n---\n\n");
@@ -988,7 +1000,7 @@ server.registerTool(
   {
     description:
       "Mark a mention as handled so it is not returned again. By default the text element is removed from the canvas (soft-deleted): the seen marker already told the person it landed and the drawing is the evidence it was done. Say what you did in chat, not on the canvas - artefacts of the work belong there, prose about it does not. " +
-      `Pass status ${MENTION_STATUSES.map((v) => `"${v}"`).join(" or ")} to keep the element instead, greyed with one check mark, and draw that status under it on its own grey line reading "claude: <status>" - use it when the person has to read the outcome where they wrote the request. Pass keep true to keep it greyed with a check mark and draw nothing. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: your question is drawn on the same line under it, as "claude: <question>", so the person answers where they asked. A reply to a mention another agent wrote is addressed to that agent by default, as "claude: @<its handle> <question>", so it reaches that agent as a mention of its own; replyTo addresses it to a different handle instead, and the room's agentReplyDepth bounds how far such a chain runs. Pass answer (up to ${MAX_ANSWER_LENGTH} characters) for a knowledge question, while set_mention_policy has answering on: the question stays in its own colour with a check mark as the heading of your answer, which is drawn on the line under it, and source puts a public URL behind it. Whatever you were given, the person's own words are left exactly as they wrote them. status, reply and answer exclude each other. Editing the text makes the mention pending again and what you wrote comes back with it.`,
+      `Pass status ${MENTION_STATUSES.map((v) => `"${v}"`).join(" or ")} to keep the element instead, greyed with one check mark, and draw that status under it on its own grey line reading "claude: <status>" - use it when the person has to read the outcome where they wrote the request. Pass keep true to keep it greyed with a check mark and draw nothing. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: your question is drawn on the same line under it, as "claude: <question>", so the person answers where they asked. A reply to a mention another agent wrote is addressed to that agent by default, as "claude: @<its handle> <question>", so it reaches that agent as a mention of its own; replyTo addresses it to a different handle instead, and the room's agentReplyDepth bounds how far such a chain runs. Pass answer (up to ${MAX_ANSWER_LENGTH} characters) for a knowledge question, while set_mention_policy has answering on: the text element is replaced by a yellow post-it in its place, holding the question, your answer wrapped to ${POSTIT_WIDTH} px and your handle, and source puts a public URL behind it. Whatever you were given, the person's own words are left exactly as they wrote them. status, reply and answer exclude each other. Editing the text makes the mention pending again and what you wrote comes back with it.`,
     inputSchema: z
       .object({
         id: z.string().describe("The mention's element id from wait_for_mention or list_mentions."),
@@ -1012,13 +1024,13 @@ server.registerTool(
         answer: answerSchema
           .optional()
           .describe(
-            `What the question asks, in at most two sentences and ${MAX_ANSWER_LENGTH} characters, drawn on the line underneath while set_mention_policy has answerQuestions on. Built from the words above and public knowledge only, never from the conversation or anything seen outside the room. ${MENTION_POLICY_HOSTING_RULE} Excludes status and reply; put the depth behind source rather than writing more here.`,
+            `What the question asks, in at most two sentences and ${MAX_ANSWER_LENGTH} characters, drawn on a post-it that takes the place of the text element while set_mention_policy has answerQuestions on. Built from the words above and public knowledge only, never from the conversation or anything seen outside the room. ${MENTION_POLICY_HOSTING_RULE} Excludes status and reply; put the depth behind source rather than writing more here.`,
           ),
         source: z
           .string()
           .url()
           .optional()
-          .describe("Public URL the answer cites. It becomes the link on the answer line, which is where depth belongs. Needs answer."),
+          .describe("Public URL the answer cites. It becomes the link on the answer post-it, which is where depth belongs. Needs answer."),
       })
       // Strict on purpose: `note` was this tool's free-text status until 0.7.0,
       // and a caller still passing it must be told the argument is gone rather
@@ -1044,14 +1056,38 @@ server.registerTool(
     if (!current || current.type !== "text") return text(`no text element with id ${id}`);
     // Either way the words the person wrote are recorded, so our own edit
     // never reads back as a new mention, and neither does a later move.
-    // An answered question keeps its own colour:
-    // it is the heading of the line under it, not spent work.
-    let updated = plan.answers ? markAnswered(current) : plan.kept ? markAcknowledged(current) : markRemoved(current);
+    // A reply leaves the note live in the colour it was written in, because
+    // the line under it asks something; keep and status grey it as spent; an
+    // answer removes it, because the post-it drawn below carries the question
+    // itself and nothing should ask it twice.
+    let updated = plan.replies ? markReplied(current) : plan.kept ? markAcknowledged(current) : markRemoved(current);
     // Whatever this acknowledgement does, whatever the last one wrote is spent:
     // the old attributed line goes, replaced when this one writes its own.
     const stale = findAttributedLine(room.getElements(), id);
     const changed: ExcalidrawElement[] = [];
     if (stale) changed.push(markRemoved(stale));
+    // A post-it answering this note from an earlier acknowledgement is spent
+    // too, and it takes its bound text with it: a container tombstoned on its
+    // own leaves the words floating where the box was.
+    const spent = findAnswerPostIt(room.getElements(), id);
+    if (spent) {
+      changed.push(markRemoved(spent));
+      const spentLabel = boundLabelOf(room.getElements(), spent);
+      if (spentLabel) changed.push(markRemoved(spentLabel));
+    }
+    if (plan.answer !== undefined) {
+      // The note is removed and the post-it takes its place: the question is
+      // the heading of the answer inside the box, so keeping the note as well
+      // would draw it twice.
+      const postIt = buildAnswerPostIt(
+        current,
+        plan.answer,
+        { existing: new Map(room.getElements(true).map((e) => [e.id, e])), lastIndex: room.lastIndex() },
+        room.handle,
+        { link: plan.link, chain: nextChain(chainOf(current)) },
+      );
+      changed.push(postIt.container, postIt.label);
+    }
     if (plan.line !== undefined) {
       // The note and its line are one thing on the canvas, so they are put in
       // a fresh group: dragging the question somewhere else takes the words

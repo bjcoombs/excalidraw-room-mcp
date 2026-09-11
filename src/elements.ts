@@ -1019,3 +1019,57 @@ function summaryLine(el: ExcalidrawElement, label: ExcalidrawElement | undefined
   parts.push(`by ${authorLabel(el)}`);
   return parts.join(" ");
 }
+
+/**
+ * Width every run of words this server writes on the canvas is wrapped to, in
+ * canvas px.
+ *
+ * Excalidraw renders a peer's text exactly as delivered - it re-wraps only
+ * text it edits itself - so a sentence written as one line stays one line and
+ * a two-sentence answer runs 1,600 px across the drawing it was written about.
+ * The server therefore does the wrapping, and 360 px is about a column of
+ * prose at the default font size: wide enough for a question to sit on one
+ * line, narrow enough to read beside a diagram.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/107
+ */
+export const WRAP_WIDTH = 360;
+
+/** How many leading characters of `word` fit in `width`, at least one. */
+function longestFitting(word: string, width: number, fontSize: number): number {
+  let take = 1;
+  while (take < word.length && measureText(word.slice(0, take + 1), fontSize).width <= width) take++;
+  return take;
+}
+
+/**
+ * `text` with newlines inserted so no line measures wider than `width`.
+ *
+ * Greedy by word, using the same {@link measureText} approximation the rest of
+ * the module lays out with, so a wrapped line and the box drawn around it
+ * agree. Newlines already in the text are paragraph breaks and are kept, blank
+ * lines included; a single word too long for the width is broken rather than
+ * left to overflow, because one unbreakable token would otherwise widen the
+ * whole block.
+ */
+export function wrapText(text: string, width: number = WRAP_WIDTH, fontSize = 20): string {
+  const out: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    let line = "";
+    for (const word of paragraph.split(" ")) {
+      if (line !== "" && measureText(`${line} ${word}`, fontSize).width <= width) {
+        line = `${line} ${word}`;
+        continue;
+      }
+      if (line !== "") out.push(line);
+      let rest = word;
+      while (measureText(rest, fontSize).width > width) {
+        const take = longestFitting(rest, width, fontSize);
+        out.push(rest.slice(0, take));
+        rest = rest.slice(take);
+      }
+      line = rest;
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}

@@ -20,11 +20,14 @@ import {
   bump,
   elementAuthor,
   FALLBACK_AUTHOR,
+  LABEL_PADDING,
   measureText,
   PERSON_AUTHOR,
   randomId,
   stampAuthor,
   summarise,
+  wrapText,
+  WRAP_WIDTH,
   type BuildContext,
   type ExcalidrawElement,
   type SummaryReasons,
@@ -297,10 +300,12 @@ export function statusUnknownText(status: string): string {
 /**
  * How long a canvas reply may be. A reply is a question the person has to
  * answer where they wrote the request, so it earns more room than a status
- * note - but it is still drawn in the same coordinate space as the diagram,
- * and 200 characters is about two lines at the default font size.
+ * note. The cap was 200 characters while a line was drawn as one line and a
+ * longer question ran off across the drawing; the server now wraps every line
+ * it writes to {@link WRAP_WIDTH}, so the limit is the reader's patience
+ * rather than the canvas, and it is the same as an answer's.
  */
-export const MAX_REPLY_LENGTH = 200;
+export const MAX_REPLY_LENGTH = 400;
 
 /**
  * The second line of every reply element. It is what makes the reply a
@@ -358,6 +363,32 @@ export const REPLY_CUSTOM_DATA_KEY = "excalidrawRoomReplyTo";
  */
 export const REPLY_KIND_CUSTOM_DATA_KEY = "excalidrawRoomReplyKind";
 export const ANSWER_KIND = "answer";
+
+/**
+ * Where a note records the stroke colour it carried before the server marked
+ * it seen. The amber seen stroke overwrites the person's own colour, so
+ * without this the colour to put back when the note is kept is gone: an
+ * acknowledgement would restore whatever the note looked like mid-handling
+ * rather than as it was written. `customData` survives an excalidraw.com round
+ * trip, so the record outlives this process.
+ */
+export const STROKE_CUSTOM_DATA_KEY = "excalidrawRoomStroke";
+
+/** The colour a note is assumed to have been written in when nothing recorded it. */
+export const DEFAULT_INK = "#1e1e1e";
+
+/** The fill of an answer post-it: the Excalidraw palette's light yellow. */
+export const POSTIT_FILL = "#fff3bf";
+
+/** A post-it's border: one thin line in the agent grey, so the fill does the talking. */
+export const POSTIT_STROKE_WIDTH = 1;
+
+/**
+ * How wide an answer post-it is. The same width every server-written line
+ * wraps to, so a post-it and a reply line drawn beside each other read as one
+ * column of prose rather than two.
+ */
+export const POSTIT_WIDTH = WRAP_WIDTH;
 
 /** Why a reply was refused, in words the caller can act on. */
 export const REPLY_BLANK_TEXT = "reply must not be blank; pass the question you want the person to answer, or acknowledge without a reply.";
@@ -436,15 +467,15 @@ export const ANSWER_TOO_LONG_TEXT =
   `answer is longer than ${MAX_ANSWER_LENGTH} characters; the canvas is not a document. ` +
   "Write at most two sentences and put the depth behind source.";
 export const ANSWER_WITH_STATUS_TEXT =
-  "answer and status exclude each other: an answer keeps the question in its own colour as the heading of what you " +
-  "wrote, a status greys it out as handled. Pass one or the other.";
+  "answer and status exclude each other: an answer replaces the note with a post-it holding the question and what " +
+  "you wrote, a status greys the note out as handled. Pass one or the other.";
 export const ANSWER_WITH_REPLY_TEXT =
-  "answer and reply exclude each other: both write one attributed line under the note, an answer with what you know " +
-  "and a reply with the question you need answered. Pass one or the other.";
+  "answer and reply exclude each other: an answer replaces the note with a post-it holding what you know, a reply " +
+  "keeps it and writes the question you need answered under it. Pass one or the other.";
 export const SOURCE_WITHOUT_ANSWER_TEXT =
-  "source belongs to an answer: it becomes the link on the answer line, so pass it with answer or not at all.";
+  "source belongs to an answer: it becomes the link on the answer post-it, so pass it with answer or not at all.";
 export const SOURCE_NOT_URL_TEXT =
-  "source must be an http or https URL: it becomes the link on the answer line, and anything else is not a link a reader can follow.";
+  "source must be an http or https URL: it becomes the link on the answer post-it, and anything else is not a link a reader can follow.";
 
 /**
  * The cap as the tool declares it. Trimmed first, so an answer of spaces is
@@ -464,11 +495,6 @@ export const answerSchema = z
  */
 export function isSourceUrl(source: string): boolean {
   return /^https?:\/\/\S+$/.test(source);
-}
-
-/** The attributed line for an answer: the prefix and the answer, nothing else. */
-export function attributedAnswerText(answer: string, handle?: string | null): string {
-  return `${attributionPrefix(handle)}${answer.trim()}`;
 }
 
 /** The attributed line for a status: the prefix and the fixed words, nothing else. */
@@ -571,7 +597,11 @@ export function buildAttributedLine(
         type: "text",
         x: mention.x,
         y: mention.y + mention.height + ATTRIBUTED_LINE_GAP,
-        text: lineText,
+        // Wrapped here rather than by the caller: every line this function
+        // draws is server-written prose in the drawing's own coordinate
+        // space, and an unwrapped one runs across whatever it was written
+        // about.
+        text: wrapText(lineText, WRAP_WIDTH, fontSize),
         fontSize,
         strokeColor: ACKNOWLEDGED_STROKE,
         link: opts.link,
@@ -596,6 +626,119 @@ export function buildAttributedLine(
     },
     handle,
   );
+}
+
+/** The words on an answer post-it, wrapped to its width. */
+export function postItText(question: string, answer: string, handle?: string | null): string {
+  return wrapText(`${question.trim()}\n\n${answer.trim()}\n\n- ${handle || FALLBACK_AUTHOR}`, POSTIT_WIDTH);
+}
+
+/**
+ * A post-it's three paragraphs, each unwrapped back to the one line it was
+ * written as: the question it answers, the answer, and the signature.
+ *
+ * The wrapping is the server's own and is put back so the answer can be
+ * reported to an agent as one line, and so a later note's question can be
+ * compared with the one the post-it holds.
+ */
+export function postItParagraphs(text: string): { question: string; answer: string; signature: string } {
+  const paragraphs = text.split("\n\n").map((p) => p.split("\n").join(" ").trim());
+  return {
+    question: paragraphs[0],
+    answer: paragraphs.slice(1, -1).join(" ").trim(),
+    signature: paragraphs.length > 1 ? paragraphs[paragraphs.length - 1] : "",
+  };
+}
+
+/** An answer post-it: the container and the text bound inside it. */
+export interface AnswerPostIt {
+  container: ExcalidrawElement;
+  label: ExcalidrawElement;
+}
+
+/**
+ * The post-it that replaces an answered note: a rounded yellow rectangle at
+ * the note's own position, POSTIT_WIDTH wide, holding the question, the answer
+ * and the handle that wrote it as bound text in the canvas ink.
+ *
+ * One container rather than a note and a line beside it, because a container
+ * and its bound text are one thing to Excalidraw: it drags as a piece, the
+ * text stays inside the box, and the link icon on the box opens the source.
+ * The box keeps the width the text was wrapped to and takes its height from
+ * that text, so it grows downwards and nothing else on the canvas moves.
+ */
+export function buildAnswerPostIt(
+  mention: ExcalidrawElement,
+  answer: string,
+  ctx: BuildContext,
+  handle?: string | null,
+  opts: AttributedLineOptions = {},
+): AnswerPostIt {
+  const fontSize = Number(mention.fontSize ?? 20);
+  const text = postItText(strippedQuestion(mention.text ?? ""), answer, handle);
+  const { created } = buildElements(
+    [
+      {
+        type: "rectangle",
+        x: mention.x,
+        y: mention.y,
+        width: POSTIT_WIDTH,
+        height: measureText(text, fontSize).height + 2 * LABEL_PADDING,
+        backgroundColor: POSTIT_FILL,
+        strokeColor: ACKNOWLEDGED_STROKE,
+        strokeWidth: POSTIT_STROKE_WIDTH,
+        fontSize,
+        label: text,
+        link: opts.link,
+      },
+    ],
+    ctx,
+  );
+  const [shape, centred] = created;
+  const container: ExcalidrawElement = {
+    ...shape,
+    width: POSTIT_WIDTH,
+    height: centred.height + 2 * LABEL_PADDING,
+    customData: {
+      [REPLY_CUSTOM_DATA_KEY]: mention.id,
+      [REPLY_KIND_CUSTOM_DATA_KEY]: ANSWER_KIND,
+      ...(opts.chain ? chainCustomData(opts.chain) : {}),
+    },
+  };
+  const label: ExcalidrawElement = {
+    ...centred,
+    // Centred across the box and against its top: the text is a column of
+    // prose read from the first line down, not a caption in the middle of a
+    // shape, which is what a bound label is laid out as by default.
+    x: container.x + (container.width - centred.width) / 2,
+    y: container.y + LABEL_PADDING,
+    strokeColor: DEFAULT_INK,
+    textAlign: "left",
+    verticalAlign: "top",
+    fontFamily: mention.fontFamily ?? centred.fontFamily,
+  };
+  return { container: stampAuthor(container, handle), label: stampAuthor(label, handle) };
+}
+
+/** The non-deleted answer post-it written for a mention id, if the room holds one. */
+export function findAnswerPostIt(elements: readonly ExcalidrawElement[], mentionId: string): ExcalidrawElement | null {
+  for (const el of elements) {
+    if (el.isDeleted || el.type === "text") continue;
+    const data = el.customData as Record<string, unknown> | undefined;
+    if (data?.[REPLY_CUSTOM_DATA_KEY] === mentionId && data[REPLY_KIND_CUSTOM_DATA_KEY] === ANSWER_KIND) return el;
+  }
+  return null;
+}
+
+/** The non-deleted text bound inside a container, if any. */
+export function boundLabelOf(
+  elements: readonly ExcalidrawElement[],
+  container: ExcalidrawElement,
+): ExcalidrawElement | null {
+  for (const el of elements) {
+    if (!el.isDeleted && el.type === "text" && el.containerId === container.id) return el;
+  }
+  return null;
 }
 
 /**
@@ -633,6 +776,21 @@ export function stripStatus(text: string): string {
   return stripSeenMarker(text).replace(new RegExp(`(?:\\s*${ACKNOWLEDGED_MARK})+$`, "u"), "");
 }
 
+/**
+ * The question a note asks: the server's own markers gone and the tags it was
+ * addressed with taken off the front.
+ *
+ * This is the text a post-it carries as its heading and the key a later note
+ * is matched against, so it has to be what the person asked and nothing else.
+ * Repeated tags are stripped - a note may address two agents - and only
+ * leading ones, because an "@alpha" inside a sentence is part of the question.
+ */
+export function strippedQuestion(text: string): string {
+  return stripStatus(text).trim().replace(LEADING_TAGS_PATTERN, "").trim();
+}
+
+const LEADING_TAGS_PATTERN = new RegExp(`^(?:@[a-z0-9-]{1,${MAX_HANDLE_LENGTH}}[:,]?\\s+)+`, "iu");
+
 export function hasSeenMarker(text: string | undefined): boolean {
   return !!text && text.includes(SEEN_MARKER);
 }
@@ -668,7 +826,35 @@ export function markSeen(el: ExcalidrawElement): ExcalidrawElement | null {
   const current = el.text ?? "";
   const next = seenText(current);
   if (next === current && el.strokeColor === SEEN_STROKE) return null;
-  return bump({ ...retext(el, next), strokeColor: SEEN_STROKE });
+  return bump({ ...retext(el, next), strokeColor: SEEN_STROKE, customData: withRecordedStroke(el) });
+}
+
+/**
+ * The element's `customData` with the colour it is wearing now recorded, so a
+ * later acknowledgement can put it back.
+ *
+ * Written once and never overwritten: a note re-marked seen after a human edit
+ * is already amber, and recording that would lose the colour it was written
+ * in. A note that is somehow already amber with nothing recorded has no
+ * pre-seen colour to remember, so the ink the canvas defaults to stands in.
+ */
+function withRecordedStroke(el: ExcalidrawElement): Record<string, unknown> {
+  const data = (el.customData as Record<string, unknown> | undefined) ?? {};
+  if (typeof data[STROKE_CUSTOM_DATA_KEY] === "string") return data;
+  const before = el.strokeColor;
+  return {
+    ...data,
+    [STROKE_CUSTOM_DATA_KEY]: before === undefined || before === SEEN_STROKE ? DEFAULT_INK : before,
+  };
+}
+
+/**
+ * The colour the note was written in, as recorded when the server marked it
+ * seen, or the canvas ink when nothing recorded one.
+ */
+export function preSeenStroke(el: ExcalidrawElement): string {
+  const recorded = (el.customData as Record<string, unknown> | undefined)?.[STROKE_CUSTOM_DATA_KEY];
+  return typeof recorded === "string" ? recorded : DEFAULT_INK;
 }
 
 /**
@@ -679,20 +865,24 @@ export function markSeen(el: ExcalidrawElement): ExcalidrawElement | null {
  */
 export function markAcknowledged(el: ExcalidrawElement): ExcalidrawElement {
   const next = acknowledgedText(el.text ?? "");
-  return bump({ ...retext(el, next), strokeColor: ACKNOWLEDGED_STROKE });
+  // Greyed from the colour it was written in rather than from the amber the
+  // server put on it: the outcome is the same shade either way, but the note
+  // passes back through its own colour, so the seen state never becomes the
+  // thing that is remembered about it.
+  const restored = { ...retext(el, next), strokeColor: preSeenStroke(el) };
+  return bump({ ...restored, strokeColor: ACKNOWLEDGED_STROKE });
 }
 
 /**
- * The note as it should look when it is the heading of an answer: one check
- * mark, and its own stroke colour left alone.
+ * The note as it should look when the server has replied to it: one check
+ * mark, and the colour it was written in put back.
  *
- * An answered question is not spent work to be greyed out of the way. It is the
- * heading of the line under it, and a reader coming to the canvas later has to
- * read the two together, so the question keeps the colour it was written in and
- * only the mark says it was dealt with.
+ * A reply is a question back, so the note is still a live question and not
+ * spent work to be greyed out of the way. Greying it would say the opposite of
+ * what the line under it asks.
  */
-export function markAnswered(el: ExcalidrawElement): ExcalidrawElement {
-  return bump(retext(el, acknowledgedText(el.text ?? "")));
+export function markReplied(el: ExcalidrawElement): ExcalidrawElement {
+  return bump({ ...retext(el, acknowledgedText(el.text ?? "")), strokeColor: preSeenStroke(el) });
 }
 
 /** What `acknowledge_mention` was asked to do with the note. */
@@ -717,12 +907,14 @@ export interface AcknowledgePlan {
   /** Whether the line asks a question the person is expected to answer. */
   replies: boolean;
   /**
-   * Set only for an answer, whose note keeps its own colour as the heading of
-   * the line. Absent otherwise, so the two older outcomes plan exactly as they
-   * did before answering existed.
+   * Set only for an answer, which replaces the note with a post-it rather than
+   * writing a line under it. Absent otherwise, so the two older outcomes plan
+   * exactly as they did before answering existed.
    */
   answers?: boolean;
-  /** URL the answer line links to, when a source was cited. */
+  /** The answer to draw on the post-it, trimmed. Set only for an answer. */
+  answer?: string;
+  /** URL the answer post-it links to, when a source was cited. */
   link?: string;
 }
 
@@ -818,9 +1010,11 @@ export function planAcknowledgement(
     };
   }
   if (req.answer !== undefined) {
+    // No line: an answer is drawn as a post-it in the note's place, and the
+    // note goes with it, so there is nothing left for a line to sit under.
     return {
-      line: attributedAnswerText(req.answer, handle),
-      kept: true,
+      answer: req.answer.trim(),
+      kept: false,
       replies: false,
       answers: true,
       ...(req.source !== undefined ? { link: req.source } : {}),
@@ -831,7 +1025,7 @@ export function planAcknowledgement(
 
 /** What the tool reports it did. */
 export function acknowledgementText(id: string, plan: AcknowledgePlan): string {
-  if (plan.answers) return `acknowledged ${id}, kept the question and answered it on the canvas under it`;
+  if (plan.answers) return `acknowledged ${id}, replaced the note with a post-it answering it on the canvas`;
   if (plan.replies) return `acknowledged ${id}, kept the note and replied on the canvas under it`;
   if (plan.line !== undefined) return `acknowledged ${id}, kept the note and wrote "${plan.line}" on the canvas under it`;
   return plan.kept ? `acknowledged ${id}` : `acknowledged and removed ${id} from the canvas`;
@@ -1141,6 +1335,38 @@ export function nearbyElements(
   radius: number = DEFAULT_NEARBY_RADIUS,
 ): ExcalidrawElement[] {
   return nearbyNeighbourhood(elements, mention, radius).elements;
+}
+
+/**
+ * What an answer post-it near this note already says about the same question,
+ * or null when nothing near it does.
+ *
+ * An answered note is gone from the canvas, so a person asking again writes a
+ * new note beside the post-it rather than editing the old one, and the new
+ * note carries no history of its own. The post-it is the history: within the
+ * room's neighbourhood radius and holding the same question, what it answered
+ * is reported with the new mention, so the agent knows what it already said
+ * before it says it again.
+ */
+export function previousAnswerNear(
+  elements: readonly ExcalidrawElement[],
+  mention: Mention,
+  radius: number = DEFAULT_NEARBY_RADIUS,
+): PreviousLine | null {
+  const question = strippedQuestion(mention.text);
+  if (question === "") return null;
+  for (const el of elements) {
+    if (el.isDeleted || el.id === mention.id) continue;
+    const data = el.customData as Record<string, unknown> | undefined;
+    if (data?.[REPLY_KIND_CUSTOM_DATA_KEY] !== ANSWER_KIND) continue;
+    if (boxDistance(el, mention) > radius) continue;
+    const label = boundLabelOf(elements, el);
+    if (label === null) continue;
+    const written = postItParagraphs(label.text ?? "");
+    if (written.question !== question || written.answer === "") continue;
+    return { kind: "answer", text: written.answer };
+  }
+  return null;
 }
 
 /**
