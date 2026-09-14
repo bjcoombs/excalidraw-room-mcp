@@ -46,8 +46,12 @@ import {
   ANSWER_WITH_REPLY_TEXT,
   ANSWER_WITH_STATUS_TEXT,
   answerSchema,
+  answeredStickyNote,
+  answerGroupId,
+  answerUnderNoteText,
   boundLabelOf,
   buildAnswerPostIt,
+  buildMentionAnswer,
   DEFAULT_INK,
   findAnswerPostIt,
   isSourceUrl,
@@ -64,8 +68,10 @@ import {
   MENTION_POLICY_HOSTING_RULE,
   MENTION_SCOPE_RULE_ANSWERING,
   MentionPolicy,
+  inheritGroups,
   newGroupId,
   noteContainerToRemove,
+  noteStays,
   removedWithMention,
   STICKYNOTE_TYPE,
   policyLine,
@@ -2303,31 +2309,153 @@ test("acknowledging a mention written inside a sticky note removes the note, not
   assert.equal(isHandled(markHandled(new Map(), after[1]), after[1]), true);
 });
 
-test("answering a mention written inside a sticky note removes the question note and draws the answer sticky", () => {
+test("answering a mention inside a sticky note keeps the note with a check mark and draws the answer sticky below it", () => {
+  // What pressing N on excalidraw.com and typing a question into the note
+  // leaves on the canvas: the person's own box, and the words bound inside it.
   const [note, words] = buildElements(
     [{ type: "stickynote", id: "sn", x: 40, y: 80, width: POSTIT_WIDTH, label: "@claude what is a 303" }],
     ctx(),
   ).created;
   const board = [note, words];
+  const plan = planAcknowledgement({ answer: "A redirect to GET.", source: "https://www.rfc-editor.org/rfc/rfc9110" });
+
+  assert.equal(answeredStickyNote(board, words, plan)?.id, note.id, "the box the question was typed into");
+  assert.equal(noteStays(plan, note), true);
+  assert.deepEqual(removedWithMention(board, words, plan), [], "an answer does not tombstone the person's note");
+
+  const answered = buildMentionAnswer(words, markAcknowledged(words), note, plan.answer!, ctx(), "alpha", {
+    link: plan.link,
+  });
+  const [question, container, label] = answered.changed;
+
+  assert.equal(question.id, note.id, "the note the person drew, still standing");
+  assert.equal(question.isDeleted, false);
+  assert.equal(answered.mention.id, words.id);
+  assert.equal(answered.mention.isDeleted, false, "and their words with it");
+  assert.equal(answered.mention.text, markAcknowledged(words).text, "marked exactly as the keep path marks it");
+  assert.ok((answered.mention.text as string).endsWith(ACKNOWLEDGED_MARK), answered.mention.text as string);
+  assert.equal(answered.mention.strokeColor, ACKNOWLEDGED_STROKE);
+  assert.deepEqual(findMentions([question, answered.mention, container, label]).map((m) => m.id), [words.id],
+    "the question is on the canvas once, in the person's own note");
+
+  assert.equal(container.type, STICKYNOTE_TYPE, "the answer is a second sticky note");
+  assert.equal(container.x, note.x, "directly below, in the same column");
+  assert.equal(container.y, Number(note.y) + Number(note.height) + ATTRIBUTED_LINE_GAP);
+  assert.equal(container.width, note.width, "in the width the person gave their note");
+  assert.notEqual(container.id, note.id);
+  assert.equal(container.backgroundColor, POSTIT_FILL);
+  assert.equal(container.link, plan.link, "and the source is its link icon");
+  const data = container.customData as Record<string, unknown>;
+  assert.equal(data[REPLY_CUSTOM_DATA_KEY], words.id, "the back reference is unchanged");
+  assert.equal(data[REPLY_KIND_CUSTOM_DATA_KEY], ANSWER_KIND);
+  assert.equal(elementAuthor(container), "alpha");
+
+  // The answer and the signature only: the question is on the note above, in
+  // the person's own words, and nothing writes it a second time.
+  assert.equal(label.containerId, container.id);
+  assert.equal(label.originalText, answerUnderNoteText("A redirect to GET.", "alpha"));
+  assert.equal(label.originalText, "A redirect to GET.\n\n- alpha");
+  assert.equal(answerUnderNoteText("  A redirect.  ", null), `A redirect.\n\n- ${FALLBACK_AUTHOR}`, "trimmed, and signed");
+  assert.ok(!(label.text as string).includes("what is a 303"), label.text as string);
+  assert.equal(postItText("what is a 303", "A redirect.", "alpha"), `what is a 303\n\n${answerUnderNoteText("A redirect.", "alpha")}`);
+});
+
+test("a sticky-note question and its answer share a group id", () => {
+  const [note, words] = buildElements(
+    [{ type: "stickynote", id: "sn", x: 0, y: 0, width: POSTIT_WIDTH, label: "@claude what is a 303" }],
+    ctx(),
+  ).created;
+  const answered = buildMentionAnswer(words, markAcknowledged(words), note, "A redirect to GET.", ctx(), "alpha");
+  const [question, container, label] = answered.changed;
+  const group = answerGroupId(words.id);
+
+  assert.equal(group, `answer-${words.id}`, "derived from the note, so a replacement lands back in the same group");
+  assert.notEqual(group, answerGroupId("other"));
+  for (const el of [question, answered.mention, container, label]) {
+    assert.ok((el.groupIds ?? []).includes(group), `${el.id} is outside the group`);
+  }
+  assert.deepEqual(answered.mention.groupIds, question.groupIds, "a label carries its container's groups");
+  assert.deepEqual(label.groupIds, container.groupIds);
+  assert.equal(question.version, note.version + 1, "bumped, or peers never see the grouping");
+  assert.notEqual(question.versionNonce, note.versionNonce);
+
+  // A note already in a group of the person's own keeps it, with the shared
+  // group outermost: theirs holds the question, ours holds both notes.
+  const grouped = { ...note, groupIds: ["theirs"] };
+  const nested = buildMentionAnswer(words, markAcknowledged(words), grouped, "A redirect.", ctx(), "alpha");
+  assert.deepEqual(nested.changed[0].groupIds, ["theirs", group]);
+  assert.deepEqual(nested.mention.groupIds, ["theirs", group]);
+  assert.deepEqual(nested.changed[1].groupIds, [group], "the answer joins the shared group only");
+  assert.deepEqual(inheritGroups(words, grouped).groupIds, ["theirs"], "and a label takes its box's list, not a copy of its own");
+});
+
+test("answering a plain text mention still replaces it with an answer sticky", () => {
+  const [question] = buildElements(
+    [{ type: "text", id: "q", x: 40, y: 80, text: "@claude what is a 303" }],
+    ctx(),
+  ).created;
   const plan = planAcknowledgement({ answer: "A redirect to GET." });
-  assert.equal(plan.kept, false, "an answered note is removed, so the note holding it goes too");
+  assert.equal(answeredStickyNote([question], question, plan), null, "no box it was typed into, nothing to answer under");
+  assert.equal(noteStays(plan, null), false);
 
-  const removed = removedWithMention(board, words, plan);
-  assert.deepEqual(removed.map((el) => el.id), [note.id]);
-  const answer = buildAnswerPostIt(words, plan.answer!, ctx(), "alpha");
-  const after = [markRemoved(words), ...removed, answer.container, answer.label];
+  const answered = buildMentionAnswer(question, markRemoved(question), null, plan.answer!, ctx(), "alpha");
+  assert.equal(answered.changed.length, 2, "the sticky note and its words, and nothing else");
+  const [container, label] = answered.changed;
+  assert.equal(answered.mention.isDeleted, true, "the mention goes, as it did before");
+  assert.deepEqual(answered.mention.groupIds, [], "and nothing is grouped");
+  assert.deepEqual(container.groupIds, []);
+  assert.equal(container.type, STICKYNOTE_TYPE);
+  assert.equal(container.x, question.x, "where the note was");
+  assert.equal(container.y, question.y);
+  assert.equal(container.width, POSTIT_WIDTH, "in the server's own column width");
+  assert.equal(label.originalText, postItText("what is a 303", "A redirect to GET.", "alpha"), "question, answer, signature");
+  assert.equal(findMentions([answered.mention, container, label]).length, 0, "and nothing asks the question twice");
 
-  assert.deepEqual(
-    after.filter((el) => !el.isDeleted).map((el) => el.id),
-    [answer.container.id, answer.label.id],
-    "the answer sticky is the only note left standing",
+  // A mention labelling a shape the person drew is a request about the shape,
+  // not a question typed into a box, so answering replaces the label as before.
+  const [box, boxLabel] = buildElements(
+    [{ type: "rectangle", id: "r", x: 0, y: 0, width: 160, height: 80, label: "@claude what is a 303" }],
+    ctx(),
+  ).created;
+  assert.equal(answeredStickyNote([box, boxLabel], boxLabel, plan), null);
+  assert.deepEqual(buildMentionAnswer(boxLabel, markRemoved(boxLabel), null, "A redirect.", ctx()).changed.length, 2);
+
+  // A sticky note already tombstoned is not one to answer under either.
+  const [gone, goneWords] = buildElements(
+    [{ type: "stickynote", id: "sn", x: 0, y: 0, label: "@claude what is a 303" }],
+    ctx(),
+  ).created;
+  assert.equal(answeredStickyNote([markRemoved(gone), goneWords], goneWords, plan), null);
+});
+
+test("a second answer to a sticky-note question replaces the earlier answer sticky and keeps the group", () => {
+  const [note, words] = buildElements(
+    [{ type: "stickynote", id: "sn", x: 40, y: 80, width: POSTIT_WIDTH, label: "@claude what is a 303" }],
+    ctx(),
+  ).created;
+  const first = buildMentionAnswer(words, markAcknowledged(words), note, "A redirect.", ctx(), "alpha");
+  const [question, container, label] = first.changed;
+  const board = [question, first.mention, container, label];
+
+  // Found by the back reference, with the question note standing beside it.
+  assert.equal(findAnswerPostIt(board, words.id)?.id, container.id);
+  assert.equal(boundLabelOf(board, container)?.id, label.id, "and its words go with it");
+
+  const second = buildMentionAnswer(words, markAcknowledged(first.mention), question, "A redirect to GET.", ctx(), "alpha");
+  const after = [second.changed[0], second.mention, markRemoved(container), markRemoved(label), second.changed[1], second.changed[2]];
+
+  assert.equal(findAnswerPostIt(after, words.id)?.id, second.changed[1].id, "the replacement, not the tombstone");
+  assert.equal(second.changed[1].y, container.y, "in the same place under the note");
+  assert.deepEqual(second.changed[1].groupIds, container.groupIds, "and in the group the question is still in");
+  assert.deepEqual(second.changed[0].groupIds, question.groupIds, "which the note is not moved out of");
+  assert.equal(second.changed[0].version, question.version + 1);
+  assert.ok((second.changed[2].text as string).includes("A redirect to GET."));
+  assert.equal(second.mention.text, first.mention.text, "one check mark, not two");
+  assert.equal(
+    after.filter((el) => !el.isDeleted && el.type === STICKYNOTE_TYPE).length,
+    2,
+    "one question and one answer on the canvas, never a third note",
   );
-  assert.equal(answer.container.type, STICKYNOTE_TYPE);
-  assert.equal(findMentions(after).length, 0, "and nothing on the canvas asks the question twice");
-  // The spent-answer lookup still works with the question note gone, so a
-  // second answer replaces this sticky rather than drawing another beside it.
-  assert.equal(findAnswerPostIt(after, words.id)?.id, answer.container.id);
-  assert.equal(boundLabelOf(after, answer.container)?.id, answer.label.id);
 });
 
 test("acknowledging a mention that labels a rectangle removes the label and keeps the rectangle", () => {

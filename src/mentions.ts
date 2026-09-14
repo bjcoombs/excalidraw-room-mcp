@@ -635,7 +635,20 @@ export function buildAttributedLine(
  * them itself, at whatever font size its fit settles on.
  */
 export function postItText(question: string, answer: string, handle?: string | null): string {
-  return `${question.trim()}\n\n${answer.trim()}\n\n- ${handle || FALLBACK_AUTHOR}`;
+  return `${question.trim()}\n\n${answerUnderNoteText(answer, handle)}`;
+}
+
+/**
+ * The words on an answer sticky note drawn under a note that stays: the answer
+ * and the signature, and no question.
+ *
+ * The question is still on the canvas directly above, in the person's own
+ * note. Repeating it inside the answer would put the same sentence on the
+ * board twice, once in each author's note, which is what replacing the note
+ * avoided and keeping it does not need.
+ */
+export function answerUnderNoteText(answer: string, handle?: string | null): string {
+  return `${answer.trim()}\n\n- ${handle || FALLBACK_AUTHOR}`;
 }
 
 /**
@@ -680,33 +693,41 @@ export function buildAnswerPostIt(
   ctx: BuildContext,
   handle?: string | null,
   opts: AttributedLineOptions = {},
+  note: ExcalidrawElement | null = null,
 ): AnswerPostIt {
+  // Under the person's own sticky note when that note stays, in its width so
+  // the two read as one column, and the same gap an attributed line keeps
+  // under a note. Otherwise where the mention stood, which the answer replaces.
+  const box = note
+    ? { x: note.x, y: note.y + note.height + ATTRIBUTED_LINE_GAP, width: note.width }
+    : { x: mention.x, y: mention.y, width: POSTIT_WIDTH };
+  const words = note
+    ? answerUnderNoteText(answer, handle)
+    : postItText(strippedQuestion(mention.text ?? ""), answer, handle);
   const { created } = buildElements(
     [
       {
+        ...box,
         type: STICKYNOTE_TYPE,
-        x: mention.x,
-        y: mention.y,
-        width: POSTIT_WIDTH,
         backgroundColor: POSTIT_FILL,
         strokeColor: DEFAULT_INK,
         fontSize: Number(mention.fontSize ?? 20),
-        label: postItText(strippedQuestion(mention.text ?? ""), answer, handle),
+        label: words,
         link: opts.link,
       },
     ],
     ctx,
   );
-  const [note, words] = created;
+  const [sticky, text] = created;
   const container: ExcalidrawElement = {
-    ...note,
+    ...sticky,
     customData: {
       [REPLY_CUSTOM_DATA_KEY]: mention.id,
       [REPLY_KIND_CUSTOM_DATA_KEY]: ANSWER_KIND,
       ...(opts.chain ? chainCustomData(opts.chain) : {}),
     },
   };
-  const label: ExcalidrawElement = { ...words, fontFamily: mention.fontFamily ?? words.fontFamily };
+  const label: ExcalidrawElement = { ...text, fontFamily: mention.fontFamily ?? text.fontFamily };
   return { container: stampAuthor(container, handle), label: stampAuthor(label, handle) };
 }
 
@@ -758,6 +779,11 @@ export function noteContainerToRemove(
  * note, because the attributed line under it is read together with the
  * question it answers.
  *
+ * An answer keeps it too. A sticky note is a box the person drew and typed
+ * into, so answering by removing it and drawing our own in its place rewrites
+ * their element; the answer goes in a second note under theirs instead.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/128
+ *
  * A list rather than an element or null so the caller appends it unconditionally,
  * which is what keeps the branch here, where it can be tested, rather than in
  * the tool handler, which no unit test reaches.
@@ -767,7 +793,7 @@ export function removedWithMention(
   mention: ExcalidrawElement,
   plan: AcknowledgePlan,
 ): ExcalidrawElement[] {
-  const container = plan.kept ? null : noteContainerToRemove(elements, mention);
+  const container = plan.kept || plan.answer !== undefined ? null : noteContainerToRemove(elements, mention);
   return container ? [markRemoved(container)] : [];
 }
 
@@ -797,6 +823,98 @@ export function newGroupId(): string {
 export function withGroup(el: ExcalidrawElement, group: string): ExcalidrawElement {
   const groupIds = el.groupIds ?? [];
   return groupIds.includes(group) ? el : { ...el, groupIds: [...groupIds, group] };
+}
+
+/**
+ * A bound label in exactly the groups of the box it sits in.
+ *
+ * Excalidraw drags a container and its label as one piece only while both
+ * carry the container's groups; a label left out of them is dropped where the
+ * box was when the group moves. So the label takes the container's list rather
+ * than a group of its own.
+ */
+export function inheritGroups(label: ExcalidrawElement, container: ExcalidrawElement): ExcalidrawElement {
+  return { ...label, groupIds: [...(container.groupIds ?? [])] };
+}
+
+/**
+ * The group a person's sticky-note question and the answer drawn under it
+ * share, derived from the mention id rather than drawn fresh.
+ *
+ * A second answer to the same note replaces the sticky note under it, and a
+ * fresh id each time would put the replacement in a group of its own while the
+ * question stayed in the old one - two notes that no longer move together and
+ * a group with one member left in it. Derived, the replacement lands back in
+ * the group the question is already in.
+ */
+export function answerGroupId(mentionId: string): string {
+  return `answer-${mentionId}`;
+}
+
+/**
+ * The person's sticky note this answer is drawn under, or null when the answer
+ * replaces the mention where it stands.
+ *
+ * Only a `stickynote` the mention is bound inside qualifies: a mention
+ * labelling a rectangle or an ellipse is a request about that drawing, not a
+ * question typed into a box, so answering it keeps replacing the label as it
+ * did before. A plain text mention has no container at all.
+ */
+export function answeredStickyNote(
+  elements: readonly ExcalidrawElement[],
+  mention: ExcalidrawElement,
+  plan: AcknowledgePlan,
+): ExcalidrawElement | null {
+  return plan.answer === undefined ? null : noteContainerToRemove(elements, mention);
+}
+
+/**
+ * Whether the mention itself stays on the canvas: kept by `keep`, a status or
+ * a reply, and kept by an answer written under the person's own sticky note,
+ * because the note above the answer is the question it answers.
+ */
+export function noteStays(plan: AcknowledgePlan, note: ExcalidrawElement | null): boolean {
+  return plan.kept || note !== null;
+}
+
+/** What an answer writes on the canvas, and the mention as it is committed with it. */
+export interface MentionAnswer {
+  /** The mention itself, grouped with its note when that note stays. */
+  mention: ExcalidrawElement;
+  /** The person's note, the answer sticky and its words, in commit order. */
+  changed: ExcalidrawElement[];
+}
+
+/**
+ * The elements an answer puts on the canvas.
+ *
+ * With no note to answer under, the sticky note stands where the mention was
+ * and carries the question as its heading, which is what a loose text mention
+ * has always been answered with. With one, the person's note stays exactly as
+ * they wrote it apart from the check mark already on `acknowledged`, and the
+ * answer is a second note under it; both notes and both labels carry one group
+ * id, so dragging either takes the other along on excalidraw.com and through
+ * `scene_translate`.
+ */
+export function buildMentionAnswer(
+  mention: ExcalidrawElement,
+  acknowledged: ExcalidrawElement,
+  note: ExcalidrawElement | null,
+  answer: string,
+  ctx: BuildContext,
+  handle?: string | null,
+  opts: AttributedLineOptions = {},
+): MentionAnswer {
+  const postIt = buildAnswerPostIt(mention, answer, ctx, handle, opts, note);
+  if (note === null) return { mention: acknowledged, changed: [postIt.container, postIt.label] };
+  const group = answerGroupId(mention.id);
+  // Bumped, or peers keep the note in whatever groups they already had it in.
+  const question = bump(withGroup(note, group));
+  const container = withGroup(postIt.container, group);
+  return {
+    mention: inheritGroups(acknowledged, question),
+    changed: [question, container, inheritGroups(postIt.label, container)],
+  };
 }
 
 /** Remove every seen marker, wherever a later edit left it. */
