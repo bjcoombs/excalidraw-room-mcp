@@ -1084,7 +1084,7 @@ server.registerTool(
     const result = await room.commit(changed);
     markHandled(handledMentions, updated);
     markHandled(acknowledgedMentions, updated);
-    return text(`${acknowledgementText(id, plan)}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
+    return text(`${acknowledgementText(id, plan, answeredNote !== null)}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
   },
 );
 

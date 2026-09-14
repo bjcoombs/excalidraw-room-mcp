@@ -2358,6 +2358,10 @@ test("answering a mention inside a sticky note keeps the note with a check mark 
   assert.equal(answerUnderNoteText("  A redirect.  ", null), `A redirect.\n\n- ${FALLBACK_AUTHOR}`, "trimmed, and signed");
   assert.ok(!(label.text as string).includes("what is a 303"), label.text as string);
   assert.equal(postItText("what is a 303", "A redirect.", "alpha"), `what is a 303\n\n${answerUnderNoteText("A redirect.", "alpha")}`);
+
+  // And what the tool reports back is what happened to their note.
+  assert.match(acknowledgementText("sn", plan, true), /kept the note and answered it on a sticky note grouped under it/);
+  assert.match(acknowledgementText("sn", plan, false), /replaced the note with a sticky note/);
 });
 
 test("a sticky-note question and its answer share a group id", () => {

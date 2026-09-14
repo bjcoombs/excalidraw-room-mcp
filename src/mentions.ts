@@ -1182,9 +1182,20 @@ export function planAcknowledgement(
   return { kept: req.keep === true, replies: false };
 }
 
-/** What the tool reports it did. */
-export function acknowledgementText(id: string, plan: AcknowledgePlan): string {
-  if (plan.answers) return `acknowledged ${id}, replaced the note with a sticky note answering it on the canvas`;
+/**
+ * What the tool reports it did.
+ *
+ * `noteKept` is what the answer branch did with the person's note, which the
+ * plan alone cannot say: whether there was a sticky note to answer under is a
+ * fact about the canvas. The agent reports this sentence back in chat, so an
+ * answer under a note the person still has must not be described as a
+ * replacement of it.
+ */
+export function acknowledgementText(id: string, plan: AcknowledgePlan, noteKept = false): string {
+  if (plan.answers)
+    return noteKept
+      ? `acknowledged ${id}, kept the note and answered it on a sticky note grouped under it`
+      : `acknowledged ${id}, replaced the note with a sticky note answering it on the canvas`;
   if (plan.replies) return `acknowledged ${id}, kept the note and replied on the canvas under it`;
   if (plan.line !== undefined) return `acknowledged ${id}, kept the note and wrote "${plan.line}" on the canvas under it`;
   return plan.kept ? `acknowledged ${id}` : `acknowledged and removed ${id} from the canvas`;
