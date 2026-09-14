@@ -54,6 +54,7 @@ import {
   nextChain,
   policyLine,
   previousLine,
+  removedWithMention,
   scopeRuleFor,
   replySchema,
   resolveTags,
@@ -1006,6 +1007,12 @@ server.registerTool(
     const stale = findAttributedLine(room.getElements(), id);
     const changed: ExcalidrawElement[] = [];
     if (stale) changed.push(markRemoved(stale));
+    // A note typed into a sticky note goes with the sticky note: the words were
+    // the whole of what the box was drawn to carry, and a box left standing
+    // empty is litter the person has to clear. A mention labelling a rectangle
+    // or an ellipse is a request about that drawing, so that container stays.
+    // https://github.com/bjcoombs/excalidraw-room-mcp/issues/126
+    changed.push(...removedWithMention(room.getElements(), current, plan));
     // A sticky note answering this note from an earlier acknowledgement is spent
     // too, and it takes its bound text with it: a container tombstoned on its
     // own leaves the words floating where the box was.
