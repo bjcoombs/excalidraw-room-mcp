@@ -1473,6 +1473,8 @@ test("a new note near a post-it with the same question reports previous answer",
   assert.equal(paragraphs.answer, answer, "unwrapped back to the line it was given as");
   assert.equal(paragraphs.signature, "- alpha");
   assert.equal(postItText("q", "a", "alpha"), "q\n\na\n\n- alpha");
+  assert.equal(postItText("  q  ", "  a  ", "alpha"), "q\n\na\n\n- alpha", "each paragraph trimmed");
+  assert.equal(postItParagraphs("q\n\n\n\n\n\n- alpha").answer, "", "blank paragraphs are no answer");
   assert.equal(postItText("q", "a", null), `q\n\na\n\n- ${FALLBACK_AUTHOR}`);
   assert.equal(strippedQuestion(`@alpha @claude what is a 303 ${ACKNOWLEDGED_MARK}`), "what is a 303");
   assert.equal(strippedQuestion("what an @alpha does"), "what an @alpha does", "only leading tags");

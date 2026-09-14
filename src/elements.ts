@@ -672,9 +672,11 @@ export function fitStickyNote(originalText: string, width: number, baseHeight: n
 /**
  * normalizeStickyNoteFontSize, packages/element/src/stickyNote.ts @ afa3a65:
  * a ceiling far above any real size would take the fit billions of steps to
- * walk down, so it is clamped first.
+ * walk down, so it is clamped first, and a NaN or infinite one - which no step
+ * ever brings to the floor - falls back to the default.
  */
 function stickyNoteFontSize(fontSize: number): number {
+  if (!Number.isFinite(fontSize)) return STICKY_NOTE_FONT_SIZE;
   return Math.min(STICKY_NOTE_MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, fontSize));
 }
 

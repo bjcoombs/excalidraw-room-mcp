@@ -1675,6 +1675,8 @@ test("add_elements stickynote creates a container with baseHeight and a bound la
   // A single glyph wider than the body is too wide at any size above the one
   // it fits at, even with height to spare: width alone drives the shrink.
   assert.equal(stickyNote({ width: 75, height: 300, fontSize: 80, label: "x" }).label!.fontSize, 70);
+  // A block exactly as wide as the body fits: four glyphs at 20 px are 48 px.
+  assert.equal(stickyNote({ width: 80, fontSize: 20, label: "xxxx" }).label!.fontSize, 20);
 });
 
 test("add_elements stickynote defaults to 250x250, fill #ffdf6b and font 28", () => {
@@ -1711,6 +1713,10 @@ test("add_elements stickynote defaults to 250x250, fill #ffdf6b and font 28", ()
   assert.equal(huge.note.height, 75, "18 px fits, so the note does not grow");
   assert.equal(stickyNote({ fontSize: 0, label: "x" }).label!.baseFontSize, 1);
   assert.equal(stickyNote({ fontSize: -4, label: "x" }).label!.fontSize, 1);
+  // A caller past the schema can hand over NaN, which would never step down to
+  // the floor; it takes the default ceiling instead.
+  assert.equal(stickyNote({ fontSize: Number.NaN, label: "x" }).label!.baseFontSize, 28);
+  assert.equal(stickyNote({ fontSize: Number.POSITIVE_INFINITY, label: "x" }).label!.fontSize, 28);
 });
 
 test("add_elements stickynote grows height past baseHeight when the label does not fit at 16 px", () => {
