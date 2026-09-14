@@ -2323,6 +2323,14 @@ test("answering a mention inside a sticky note keeps the note with a check mark 
   assert.equal(noteStays(plan, note), true);
   assert.deepEqual(removedWithMention(board, words, plan), [], "an answer does not tombstone the person's note");
 
+  // Only an answer draws under the note. Every other acknowledgement of the
+  // same words reaches the removal path #127 built, and a plain one takes the
+  // sticky note with them.
+  for (const req of [{}, { keep: true }, { status: "see chat" as const }, { reply: "which service?" }]) {
+    assert.equal(answeredStickyNote(board, words, planAcknowledgement(req)), null, JSON.stringify(req));
+  }
+  assert.deepEqual(removedWithMention(board, words, planAcknowledgement({})).map((el) => el.id), [note.id]);
+
   const answered = buildMentionAnswer(words, markAcknowledged(words), note, plan.answer!, ctx(), "alpha", {
     link: plan.link,
   });
@@ -2391,6 +2399,7 @@ test("a sticky-note question and its answer share a group id", () => {
   assert.deepEqual(nested.mention.groupIds, ["theirs", group]);
   assert.deepEqual(nested.changed[1].groupIds, [group], "the answer joins the shared group only");
   assert.deepEqual(inheritGroups(words, grouped).groupIds, ["theirs"], "and a label takes its box's list, not a copy of its own");
+  assert.deepEqual(inheritGroups(words, { ...note, groupIds: undefined }).groupIds, [], "a box in no group puts its label in none");
 });
 
 test("answering a plain text mention still replaces it with an answer sticky", () => {
