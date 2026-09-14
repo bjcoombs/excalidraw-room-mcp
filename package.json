@@ -15,6 +15,7 @@
     "dist",
     "agents",
     "assets",
+    "!assets/readme",
     "README.md",
     "LICENSE"
   ],
