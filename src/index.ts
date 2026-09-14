@@ -85,6 +85,7 @@ import { buildPollPayload, pollText } from "./poll.js";
 import { commitLine, persistedLine, RoomClient } from "./room.js";
 import { selectElements, unknownIdsText } from "./scene.js";
 import { MAX_SCALE, snapshotScene } from "./snapshot.js";
+import { stagedToolsEnabled, ToolStage, type ToolHandle } from "./staged.js";
 import {
   buildShowRoomPayload,
   CANVAS_RESOURCE_URI,
@@ -479,8 +480,24 @@ function statusText(): string {
 
 const server = new McpServer(
   { name: "excalidraw-room-mcp", version: PACKAGE_VERSION },
-  { instructions: SERVER_INSTRUCTIONS },
+  // listChanged is declared rather than left to the SDK's own registration of
+  // it, because it is what lets a staged list tell the host the list moved.
+  { instructions: SERVER_INSTRUCTIONS, capabilities: { tools: { listChanged: true } } },
 );
+
+/** Handles of the tools staging withholds until a room is joined: everything not in PRE_JOIN_TOOLS. */
+const gatedTools: ToolHandle[] = [];
+
+/**
+ * Keep a tool's handle so a staged list can withhold it. Wrapping the
+ * registration rather than naming the tool again means the pre-join set is
+ * exactly what is left unwrapped; `PRE_JOIN_TOOLS` in src/staged.ts names those
+ * four and `staged-stdio.test.ts` asserts the list matches.
+ */
+function gated<T extends ToolHandle>(tool: T): T {
+  gatedTools.push(tool);
+  return tool;
+}
 
 // Plain registerTool, not registerAppTool: the canvas metadata is what
 // registerAppTool is for, and this result is text. See CANVAS_META above.
@@ -497,6 +514,7 @@ server.registerTool(
     const link = await RoomClient.createLink();
     await room.join(link, { initTimeoutMs: 1500, handle, nearbyRadius, agentReplyDepth });
     dropViewerForCurrentRoom();
+    toolStage.reveal();
     return text(`${link}\n\n${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
@@ -520,11 +538,12 @@ server.registerTool(
     if (refusal) return errorText(refusal);
     await room.join(link, { serverUrl, origin, handle, nearbyRadius, agentReplyDepth });
     dropViewerForCurrentRoom();
+    toolStage.reveal();
     return text(`${statusText()}\n\n${LISTEN_TIP}`);
   },
 );
 
-registerAppTool(
+gated(registerAppTool(
   server,
   "scene_show",
   {
@@ -555,11 +574,11 @@ registerAppTool(
     // calls this tool itself with include: "json" and reads the text.
     return canvasResult(include === "json" ? JSON.stringify(payload) : summariseShowRoom(payload));
   },
-);
+));
 
 registerCanvasResource(server, canvasHtmlUrl());
 
-server.registerTool(
+gated(server.registerTool(
   "room_open",
   {
     description:
@@ -572,7 +591,7 @@ server.registerTool(
     const result = await openRoom(room, link);
     return result.isError ? errorText(result.text) : text(result.text);
   },
-);
+));
 
 server.registerTool(
   "room_status",
@@ -605,7 +624,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+gated(server.registerTool(
   "scene_read",
   {
     description:
@@ -640,9 +659,9 @@ server.registerTool(
     if (!unknownIds.length) return text(body);
     return { content: [...text(body).content, ...text(unknownIdsText(unknownIds)).content] };
   },
-);
+));
 
-server.registerTool(
+gated(server.registerTool(
   "scene_snapshot",
   {
     description:
@@ -677,9 +696,9 @@ server.registerTool(
       ],
     };
   },
-);
+));
 
-server.registerTool(
+gated(server.registerTool(
   "scene_add",
   {
     description:
@@ -745,9 +764,9 @@ server.registerTool(
     ];
     return text(lines.join("\n"));
   },
-);
+));
 
-server.registerTool(
+gated(server.registerTool(
   "scene_add_raw",
   {
     description:
@@ -786,9 +805,9 @@ server.registerTool(
       `${commitLine(`added ${prepared.length} element(s)`, result)}\n${prepared.map((e) => `${e.id} ${e.type}`).join("\n")}`,
     );
   },
-);
+));
 
-server.registerTool(
+gated(server.registerTool(
   "scene_update",
   {
     description:
@@ -829,9 +848,9 @@ server.registerTool(
     const note = missing.length ? `\nunknown ids: ${missing.join(", ")}` : "";
     return text(`${commitLine(`updated ${matched} element(s)`, result)}${note}${guard}`);
   },
-);
+));
 
-server.registerTool(
+gated(server.registerTool(
   "scene_translate",
   {
     description:
@@ -861,9 +880,9 @@ server.registerTool(
     ];
     return text(`${lines.join("\n")}${guard}`);
   },
-);
+));
 
-server.registerTool(
+gated(server.registerTool(
   "scene_delete",
   {
     description:
@@ -889,9 +908,9 @@ server.registerTool(
     const note = missing.length ? `\nunknown ids: ${missing.join(", ")}` : "";
     return text(`${commitLine(`deleted ${changed.length} element(s)`, result)}${note}${guard}`);
   },
-);
+));
 
-server.registerTool(
+gated(server.registerTool(
   "mention_wait",
   {
     description:
@@ -918,9 +937,9 @@ server.registerTool(
     if (autoSeen) await commitSeen(mention);
     return text(withRequestPreamble(withScopeRule(out, mentionPolicy)));
   },
-);
+));
 
-server.registerTool(
+gated(server.registerTool(
   "mention_list",
   {
     description:
@@ -956,9 +975,9 @@ server.registerTool(
     }
     return text(withRequestPreamble(withScopeRule(out, mentionPolicy)));
   },
-);
+));
 
-server.registerTool(
+gated(server.registerTool(
   "mention_acknowledge",
   {
     description:
@@ -1070,9 +1089,9 @@ server.registerTool(
     markHandled(acknowledgedMentions, updated);
     return text(`${acknowledgementText(id, plan)}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
   },
-);
+));
 
-server.registerTool(
+gated(server.registerTool(
   "mention_policy",
   {
     description:
@@ -1085,9 +1104,9 @@ server.registerTool(
     mentionPolicy.set(answerQuestions);
     return text(`${policyLine(mentionPolicy)}\n\n${scopeRuleFor(mentionPolicy)}`);
   },
-);
+));
 
-server.registerTool(
+gated(server.registerTool(
   "mention_poll",
   {
     description:
@@ -1110,10 +1129,10 @@ server.registerTool(
       ),
     );
   },
-);
+));
 
 
-server.registerTool(
+gated(server.registerTool(
   "room_leave",
   {
     description: "Use when done with the room. Disconnects and returns left room.",
@@ -1121,9 +1140,18 @@ server.registerTool(
   },
   async () => {
     room.leave();
+    // room_leave is itself withheld here: it needs a room like the rest, and
+    // the handler has already run by the time its own entry leaves the list.
+    toolStage.withhold();
     return text("left room");
   },
-);
+));
+
+// Withheld before the transport is connected, so the starting list is the
+// staged one and no client is told anything changed to reach it. Without the
+// flag this is a no-op and all nineteen tools are listed from the start.
+const toolStage = new ToolStage(gatedTools, stagedToolsEnabled());
+toolStage.withhold();
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

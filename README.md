@@ -196,6 +196,8 @@ Tool names carry their group: `room_` for the connection, `scene_` for the drawi
 | `mention_acknowledge` | Mark a mention handled: remove the note (default), or keep it with `keep`, a `status` (`out of scope`, `see chat`), or a `reply` question. An `answer` with `source` replaces the note with a sticky note holding the question and the answer. `replyTo` addresses a reply to another agent. |
 | `mention_policy` | Turn `answerQuestions` on or off for this session. |
 
+Set `EXCALIDRAW_ROOM_STAGED_TOOLS=1` in the server's environment to stage that list. Only `room_create`, `room_join`, `room_status` and `room_help` are listed before a room is joined - the rest can do nothing without one, and every listed tool costs context on every turn. A successful `room_create` or `room_join` adds the other fifteen and sends `notifications/tools/list_changed`; `room_leave` withholds them again. It is off by default because whether Claude Desktop and Claude Code re-fetch the list when they are told it changed is unverified: a host that ignores the notification would be left with the four for the rest of the session. The observations for both hosts will be recorded on [issue #109](https://github.com/bjcoombs/excalidraw-room-mcp/issues/109), which is where the decision to make staging the default sits.
+
 ### Element specs
 
 `scene_add` takes `elements`, a list of compact specs. Every key is checked, and a key not listed here is refused by name.
