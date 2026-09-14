@@ -32,6 +32,12 @@ export type ExcalidrawElement = ElementLike & {
   frameId?: string | null;
   /** A frame's title, which is the only text a frame carries. */
   name?: string | null;
+  /** A sticky note's own height, which its label may grow it past. */
+  baseHeight?: number;
+  /** A sticky note label's font ceiling, which the fit shrinks from. */
+  baseFontSize?: number | null;
+  /** Creation time in epoch ms; a sticky note paints it as its footer date. */
+  created?: number | null;
 };
 
 /** BindMode, packages/element/src/types.ts: how the arrow meets the shape. */
@@ -62,7 +68,7 @@ export type ShapeType = "rectangle" | "ellipse" | "diamond";
 export type LinearType = "arrow" | "line";
 
 export interface ElementSpec {
-  type: ShapeType | LinearType | "text" | "freedraw";
+  type: ShapeType | LinearType | "text" | "freedraw" | "stickynote";
   id?: string;
   x?: number;
   y?: number;
@@ -354,6 +360,10 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
         }
         break;
       }
+      case "stickynote": {
+        created.push(...buildStickyNote(spec));
+        break;
+      }
       case "text": {
         created.push(
           textElement(spec.text ?? spec.label ?? "", {
@@ -594,6 +604,124 @@ export function keepAuthor(current: ExcalidrawElement, next: ExcalidrawElement):
   if (author !== undefined) data[AUTHOR_KEY] = author;
   if (kind !== undefined) data[AUTHOR_KIND_KEY] = kind;
   return { ...next, customData: data };
+}
+
+/**
+ * Sticky note geometry, ported from excalidraw/excalidraw at
+ * afa3a653fc5d2b742adcbd5a6063187b056d2419 (the build the viewer pins):
+ * packages/common/src/constants.ts for the numbers, DEFAULT_STICKY_NOTE_BG in
+ * packages/common/src/colors.ts for the fill.
+ */
+export const STICKY_NOTE_FILL = "#ffdf6b";
+/** DEFAULT_STICKY_NOTE_SIZE: a click-created note's width and base height. */
+export const STICKY_NOTE_SIZE = 250;
+/** STICKY_NOTE_MIN_SIZE: the data floor for a note's width and base height. */
+export const STICKY_NOTE_MIN_SIZE = 75;
+/** STICKY_NOTE_FALLBACK_FONT_SIZE: the label's font ceiling when none is given. */
+export const STICKY_NOTE_FONT_SIZE = 28;
+/** STICKY_NOTE_MIN_FONT_SIZE: the fit shrinks no further; the note grows instead. */
+export const STICKY_NOTE_MIN_FONT_SIZE = 16;
+/** STICKY_NOTE_MAX_FONT_SIZE and MIN_FONT_SIZE: the range a ceiling is clamped to. */
+export const STICKY_NOTE_MAX_FONT_SIZE = 512;
+const MIN_FONT_SIZE = 1;
+/** STICKY_NOTE_FONT_STEP: how far each fitting attempt shrinks the font. */
+export const STICKY_NOTE_FONT_STEP = 2;
+/** STICKY_NOTE_PADDING: the gap on every side of the label body. */
+export const STICKY_NOTE_PADDING = 16;
+/**
+ * STICKY_NOTE_BODY_INSET_Y: top and bottom padding plus the 20 px footer row
+ * the creation date is painted in. The band is reserved whether or not the
+ * note has a date, so the geometry never depends on one.
+ */
+export const STICKY_NOTE_BODY_INSET_Y = STICKY_NOTE_PADDING * 2 + 20;
+
+/** A sticky note label laid out: its wrapped words, fitted font and box, and the note height. */
+export interface StickyNoteFit {
+  text: string;
+  fontSize: number;
+  width: number;
+  height: number;
+  /** The note's height: its base height, or taller when the words need it. */
+  noteHeight: number;
+}
+
+/**
+ * getStickyNoteLayout and fitStickyNoteFont, packages/element/src/stickyNote.ts
+ * @ afa3a65: wrap the words to the note's width inside its padding, try the
+ * font ceiling and then every STICKY_NOTE_FONT_STEP below it, and take the
+ * first size whose wrapped block fits the body. Nothing fitting at
+ * STICKY_NOTE_MIN_FONT_SIZE (or at the ceiling, when that is smaller) is the
+ * one case the note grows past its base height. Upstream binary-searches the
+ * same grid from a warm start; the fit is monotone in the font size, so the
+ * first fit scanning down is the same answer, and a note is fitted here once.
+ */
+export function fitStickyNote(originalText: string, width: number, baseHeight: number, baseFontSize: number): StickyNoteFit {
+  const maxWidth = Math.max(width - STICKY_NOTE_PADDING * 2, 1);
+  const maxHeight = baseHeight - STICKY_NOTE_BODY_INSET_Y;
+  const floor = Math.min(STICKY_NOTE_MIN_FONT_SIZE, baseFontSize);
+  for (let size = baseFontSize; ; size -= STICKY_NOTE_FONT_STEP) {
+    const fontSize = Math.max(size, floor);
+    const text = wrapText(originalText, maxWidth, fontSize);
+    const box = measureText(text, fontSize);
+    if (fontSize === floor || (box.width <= maxWidth && box.height <= maxHeight)) {
+      return { text, fontSize, ...box, noteHeight: Math.max(baseHeight, box.height + STICKY_NOTE_BODY_INSET_Y) };
+    }
+  }
+}
+
+/**
+ * normalizeStickyNoteFontSize, packages/element/src/stickyNote.ts @ afa3a65:
+ * a ceiling far above any real size would take the fit billions of steps to
+ * walk down, so it is clamped first.
+ */
+function stickyNoteFontSize(fontSize: number): number {
+  return Math.min(STICKY_NOTE_MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, fontSize));
+}
+
+/**
+ * A native sticky note: a `stickynote` container and, given words, one text
+ * label bound inside it, as excalidraw.com's N tool draws them.
+ *
+ * The container's `strokeColor` is the note's ink - upstream paints no border
+ * and keeps the label's colour equal to it - so it is copied onto the label.
+ * `baseHeight` is the height asked for and never changes; `height` is the
+ * base height or, when the words do not fit at the smallest font, taller.
+ * The label is laid out from the top-left inside the padding, the way a
+ * top-aligned bound label is positioned upstream. `created` is the footer date.
+ */
+function buildStickyNote(spec: ElementSpec): ExcalidrawElement[] {
+  const width = Math.max(spec.width ?? STICKY_NOTE_SIZE, STICKY_NOTE_MIN_SIZE);
+  const baseHeight = Math.max(spec.height ?? STICKY_NOTE_SIZE, STICKY_NOTE_MIN_SIZE);
+  const baseFontSize = stickyNoteFontSize(spec.fontSize ?? STICKY_NOTE_FONT_SIZE);
+  const note: ExcalidrawElement = {
+    ...base("stickynote", {
+      id: spec.id,
+      x: spec.x ?? 0,
+      y: spec.y ?? 0,
+      width,
+      height: baseHeight,
+      strokeColor: spec.strokeColor,
+      backgroundColor: spec.backgroundColor ?? STICKY_NOTE_FILL,
+      opacity: spec.opacity,
+      link: spec.link,
+    }),
+    baseHeight,
+    created: Date.now(),
+  };
+  if (!spec.label) return [note];
+  const fit = fitStickyNote(spec.label, width, baseHeight, baseFontSize);
+  const label: ExcalidrawElement = {
+    ...textElement(fit.text, {
+      x: note.x + STICKY_NOTE_PADDING,
+      y: note.y + STICKY_NOTE_PADDING,
+      fontSize: fit.fontSize,
+      containerId: note.id,
+      strokeColor: note.strokeColor,
+    }),
+    originalText: spec.label,
+    baseFontSize,
+  };
+  return [{ ...note, height: fit.noteHeight, boundElements: [{ id: label.id, type: "text" }] }, label];
 }
 
 /** Smallest gap kept between a bound label's box and its container's edge, in px. */
@@ -1049,7 +1177,7 @@ function longestFitting(word: string, width: number, fontSize: number): number {
  * agree. Newlines already in the text are paragraph breaks and are kept, blank
  * lines included; a single word too long for the width is broken rather than
  * left to overflow, because one unbreakable token would otherwise widen the
- * whole block.
+ * whole block. A glyph wider than the width on its own is the one overflow.
  */
 export function wrapText(text: string, width: number = WRAP_WIDTH, fontSize = 20): string {
   const out: string[] = [];
@@ -1062,7 +1190,9 @@ export function wrapText(text: string, width: number = WRAP_WIDTH, fontSize = 20
       }
       if (line !== "") out.push(line);
       let rest = word;
-      while (measureText(rest, fontSize).width > width) {
+      // A single glyph wider than the width stays on its own line: splitting it
+      // leaves an empty rest, which measureText reads as one glyph wide again.
+      while (rest.length > 1 && measureText(rest, fontSize).width > width) {
         const take = longestFitting(rest, width, fontSize);
         out.push(rest.slice(0, take));
         rest = rest.slice(take);

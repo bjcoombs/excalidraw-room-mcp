@@ -18,10 +18,14 @@ import {
   randomInteger,
   rebindLinear,
   stampAuthor,
+  STICKY_NOTE_BODY_INSET_Y,
+  STICKY_NOTE_FILL,
+  STICKY_NOTE_PADDING,
   summarise,
   translate,
   wrapText,
   type Binding,
+  type ElementSpec,
   type ExcalidrawElement,
 } from "./elements.js";
 import { protectedBy } from "./guard.js";
@@ -1550,6 +1554,8 @@ test("wrapText breaks an unbreakable word at the last character that fits", () =
   assert.equal(measureText("x".repeat(30), 20).width, 360);
   assert.deepEqual(wrapText("x".repeat(35), 360, 20).split("\n"), ["x".repeat(30), "x".repeat(5)]);
   assert.deepEqual(wrapText("x".repeat(61), 360, 20).split("\n"), ["x".repeat(30), "x".repeat(30), "x"]);
+  // A glyph wider than the whole width is one line each, and the wrap ends.
+  assert.equal(wrapText("xy z", 10, 20), "x\ny\nz");
 });
 
 test("a line that measures exactly the width keeps its last word", () => {
@@ -1580,4 +1586,163 @@ test("keepAuthor carries whichever author field the element had, and invents nei
 
   // Nothing on either side: the patch is returned untouched.
   assert.equal(keepAuthor(bare, bare).customData, undefined);
+});
+
+/** The note and its label from one stickynote spec. */
+function stickyNote(spec: Omit<ElementSpec, "type">): { note: ExcalidrawElement; label: ExcalidrawElement | undefined } {
+  const { created } = buildElements([{ type: "stickynote", ...spec }], ctx());
+  return { note: created[0], label: created[1] };
+}
+
+/** Whether `text` wrapped at `fontSize` fits a note body of this width and base height. */
+function fitsBody(text: string, width: number, baseHeight: number, fontSize: number): boolean {
+  const maxWidth = width - 2 * STICKY_NOTE_PADDING;
+  const box = measureText(wrapText(text, maxWidth, fontSize), fontSize);
+  return box.width <= maxWidth && box.height <= baseHeight - STICKY_NOTE_BODY_INSET_Y;
+}
+
+test("add_elements stickynote creates a container with baseHeight and a bound label with baseFontSize", () => {
+  const before = Date.now();
+  const { created } = buildElements(
+    [
+      {
+        type: "stickynote",
+        id: "n",
+        x: 10,
+        y: 20,
+        width: 300,
+        height: 200,
+        label: "Ship it",
+        fontSize: 24,
+        backgroundColor: "#a5d8ff",
+        opacity: 50,
+        link: "https://example.com/plan",
+      },
+    ],
+    ctx(),
+  );
+  const after = Date.now();
+  assert.equal(created.length, 2, "one container and one label");
+  const [note, label] = created;
+  for (const key of REQUIRED) assert.ok(key in note, `note missing ${key}`);
+  assert.equal(note.type, "stickynote");
+  assert.equal(note.id, "n");
+  assert.equal(note.x, 10);
+  assert.equal(note.y, 20);
+  assert.equal(note.width, 300);
+  assert.equal(note.height, 200);
+  assert.equal(note.baseHeight, 200);
+  assert.equal(note.backgroundColor, "#a5d8ff");
+  assert.equal(note.opacity, 50);
+  assert.equal(note.link, "https://example.com/plan");
+  assert.ok(typeof note.created === "number" && note.created >= before && note.created <= after, String(note.created));
+  assert.deepEqual(note.boundElements, [{ id: label.id, type: "text" }]);
+  assert.ok(note.index && label.index && note.index < label.index, "container below its label");
+
+  assert.equal(label.type, "text");
+  assert.equal(label.containerId, "n");
+  assert.equal(label.baseFontSize, 24);
+  assert.equal(label.fontSize, 24, "short words fit at the ceiling");
+  assert.equal(label.text, "Ship it");
+  assert.equal(label.originalText, "Ship it");
+  assert.equal(label.x, 10 + STICKY_NOTE_PADDING, "from the left, inside the padding");
+  assert.equal(label.y, 20 + STICKY_NOTE_PADDING, "from the top, inside the padding");
+  assert.equal(label.width, measureText("Ship it", 24).width);
+  assert.equal(label.height, measureText("Ship it", 24).height);
+  assert.equal(label.textAlign, "left");
+  assert.equal(label.verticalAlign, "top");
+  assert.equal(label.created, undefined, "the date belongs to the note");
+  assert.equal(label.baseHeight, undefined);
+
+  // Words that do not fit at the ceiling shrink it in steps of 2, and the
+  // first size that fits is taken: the note keeps its height.
+  const words = "The release is blocked on the migration review and the load test results from Tuesday";
+  assert.equal(fitsBody(words, 250, 250, 28), false, "the case needs words too long for the ceiling");
+  const shrunk = stickyNote({ width: 250, height: 250, label: words });
+  const size = Number(shrunk.label!.fontSize);
+  assert.ok(size < 28 && size > 16, `${size}`);
+  assert.equal((28 - size) % 2, 0, "on the grid below the ceiling");
+  assert.equal(fitsBody(words, 250, 250, size), true);
+  assert.equal(fitsBody(words, 250, 250, size + 2), false, "and the largest size that fits");
+  assert.equal(shrunk.label!.baseFontSize, 28, "the ceiling is kept");
+  assert.equal(shrunk.note.height, 250);
+  assert.equal(shrunk.label!.text, wrapText(words, 250 - 2 * STICKY_NOTE_PADDING, size));
+  assert.equal(shrunk.label!.originalText, words, "the unwrapped words are what the note refits from");
+  for (const line of String(shrunk.label!.text).split("\n")) {
+    assert.ok(measureText(line, size).width <= 250 - 2 * STICKY_NOTE_PADDING, line);
+  }
+
+  // A single glyph wider than the body is too wide at any size above the one
+  // it fits at, even with height to spare: width alone drives the shrink.
+  assert.equal(stickyNote({ width: 75, height: 300, fontSize: 80, label: "x" }).label!.fontSize, 70);
+});
+
+test("add_elements stickynote defaults to 250x250, fill #ffdf6b and font 28", () => {
+  const { note, label } = stickyNote({ label: "hi" });
+  assert.equal(STICKY_NOTE_FILL, "#ffdf6b");
+  assert.equal(note.x, 0);
+  assert.equal(note.y, 0);
+  assert.equal(note.width, 250);
+  assert.equal(note.height, 250);
+  assert.equal(note.baseHeight, 250);
+  assert.equal(note.backgroundColor, "#ffdf6b");
+  assert.equal(note.strokeColor, "#1e1e1e");
+  assert.equal(note.opacity, 100);
+  assert.equal(note.link, null);
+  assert.equal(label!.baseFontSize, 28);
+  assert.equal(label!.fontSize, 28);
+  assert.equal(label!.strokeColor, "#1e1e1e");
+
+  // No words, no label: the note alone, at its base height.
+  const { created } = buildElements([{ type: "stickynote", x: 5, y: 6 }], ctx());
+  assert.equal(created.length, 1);
+  assert.equal(created[0].boundElements, null);
+  assert.equal(created[0].height, 250);
+
+  // Upstream's data floor and font range, which a receiving client would
+  // otherwise re-apply as an edit of its own.
+  const tiny = stickyNote({ width: 10, height: 10, label: "x" });
+  assert.equal(tiny.note.width, 75);
+  assert.equal(tiny.note.baseHeight, 75);
+  assert.equal(tiny.note.height, 75);
+  const huge = stickyNote({ width: 75, height: 75, fontSize: 1000, label: "x" });
+  assert.equal(huge.label!.baseFontSize, 512);
+  assert.equal(huge.label!.fontSize, 18, "the largest size a 23 px body holds");
+  assert.equal(huge.note.height, 75, "18 px fits, so the note does not grow");
+  assert.equal(stickyNote({ fontSize: 0, label: "x" }).label!.baseFontSize, 1);
+  assert.equal(stickyNote({ fontSize: -4, label: "x" }).label!.fontSize, 1);
+});
+
+test("add_elements stickynote grows height past baseHeight when the label does not fit at 16 px", () => {
+  const words = "Every word of this paragraph is needed. ".repeat(12).trim();
+  assert.equal(fitsBody(words, 250, 250, 16), false, "the case needs words too long for the smallest font");
+  const { note, label } = stickyNote({ width: 250, height: 250, label: words });
+  assert.equal(label!.fontSize, 16);
+  assert.equal(label!.baseFontSize, 28);
+  assert.equal(label!.height, measureText(wrapText(words, 218, 16), 16).height);
+  assert.equal(note.height, Number(label!.height) + STICKY_NOTE_BODY_INSET_Y);
+  assert.ok(note.height > 250, `${note.height}`);
+  assert.equal(note.baseHeight, 250, "the height asked for never changes");
+  assert.deepEqual(note.boundElements, [{ id: label!.id, type: "text" }]);
+
+  // A ceiling off the grid still stops at 16 rather than stepping past it.
+  assert.equal(stickyNote({ fontSize: 27, label: words }).label!.fontSize, 16);
+  // A ceiling below 16 is its own floor: the note grows at that size.
+  const small = stickyNote({ fontSize: 12, height: 100, label: words });
+  assert.equal(small.label!.fontSize, 12);
+  assert.equal(small.note.height, Number(small.label!.height) + STICKY_NOTE_BODY_INSET_Y);
+});
+
+test("add_elements stickynote copies strokeColor onto its label", () => {
+  const { note, label } = stickyNote({ label: "red ink", strokeColor: "#e03131" });
+  assert.equal(note.strokeColor, "#e03131");
+  assert.equal(label!.strokeColor, "#e03131");
+});
+
+test("summary names a stickynote and folds its label into the line", () => {
+  const { created } = buildElements(
+    [{ type: "stickynote", id: "n", x: 10, y: 20, label: "hello", strokeColor: "#e03131" }],
+    ctx(),
+  );
+  assert.equal(summarise(created), 'n stickynote @(10,20) 250x250 "hello" stroke=#e03131 fill=#ffdf6b by person');
 });

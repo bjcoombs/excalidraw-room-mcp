@@ -64,7 +64,7 @@ Before the agent draws anything it says, in one line per note, what the note ask
 
 Some notes are questions rather than drawing requests, such as "what does a 303 do?" or "thoughts?". By default they are acknowledged `out of scope`. To let the agent answer them where they were written, say so in chat. The agent calls `set_mention_policy` with `answerQuestions: true`, and `room_status` shows `answerQuestions: true` from then on. The setting lives in the server process only. It is off when the server starts, off again when it joins a room, and never saved.
 
-An answer replaces your question with a post-it in its place: a rounded light-yellow box (`#fff3bf`) with a thin grey border (`#868e96`), 360 px wide, holding your question, the answer of at most 400 characters, and the agent's handle after a dash, all in the canvas ink (`#1e1e1e`) and wrapped to the box. A `source` URL becomes the link icon on the box. The box and its words are one element on the canvas, so it drags as a piece. Ask again next to it and the agent is told what the post-it already answers, as a `previous answer:` line, whenever the new note asks the same question within the room's neighbourhood radius.
+An answer replaces your question with a sticky note in its place: the same `stickynote` element excalidraw.com's sticky note tool (`N`) draws, in its default yellow (`#ffdf6b`), 360 px wide, holding your question, the answer of at most 400 characters, and the agent's handle after a dash, in the canvas ink (`#1e1e1e`). The text shrinks to fit the note before the note grows taller, and the footer shows the date it was written. A `source` URL becomes the link icon on the note. The note and its words are one element on the canvas, so it drags as a piece. Ask again next to it and the agent is told what the sticky note already answers, as a `previous answer:` line, whenever the new note asks the same question within the room's neighbourhood radius. An answer drawn by an earlier release, as a yellow rectangle, is still recognised.
 
 Every other line the server writes - a `status` under a note, a `reply` question - is wrapped to the same 360 px, so nothing it draws runs off across your diagram.
 
@@ -72,7 +72,7 @@ With answering on, the rule becomes: Mentions are drawing requests or, while ans
 
 ### Snapshots
 
-The agent normally reads the drawing as element data, which makes handwriting and sketches unreadable to it. `snapshot_scene` renders a region to a PNG on the server and returns it as an image, so the agent can read hand-drawn words or check a layout for overlap. Select the region with `ids`, `near` (an element and its neighbourhood) or `bbox`. `scale` up to 3 makes small handwriting legible. The render covers rectangle, ellipse, diamond, line, arrow, freedraw, text and container labels. Images, frames and embeds are drawn as labelled placeholder boxes. Text uses one bundled font, DejaVu Sans (licence in `assets/fonts/LICENSE-DejaVu.txt`, relative to the repository root).
+The agent normally reads the drawing as element data, which makes handwriting and sketches unreadable to it. `snapshot_scene` renders a region to a PNG on the server and returns it as an image, so the agent can read hand-drawn words or check a layout for overlap. Select the region with `ids`, `near` (an element and its neighbourhood) or `bbox`. `scale` up to 3 makes small handwriting legible. The render covers rectangle, ellipse, diamond, sticky note (with its footer date), line, arrow, freedraw, text and container labels. Images, frames and embeds are drawn as labelled placeholder boxes. Text uses one bundled font, DejaVu Sans (licence in `assets/fonts/LICENSE-DejaVu.txt`, relative to the repository root).
 
 ### Placement
 
@@ -123,14 +123,14 @@ Blocking ten minutes on `wait_for_mention` ties up your main session. Split the 
 | `leave_room` | Disconnect. |
 | `read_scene` | The drawing as one line per element or as JSON. `ids`, `near: {id, radius}` and `by` narrow it. |
 | `snapshot_scene` | PNG of a region (`ids`, `near`, `bbox`, `scale`, `maxWidth`, `maxHeight`) plus a text block of what was drawn. |
-| `add_elements` | Add shapes, text, arrows, lines and strokes from compact specs, with `label`, `link` and `place:`. |
+| `add_elements` | Add shapes (`rectangle`, `ellipse`, `diamond`, `stickynote`), text, arrows, lines and strokes from compact specs, with `label`, `link` and `place:`. A sticky note's text shrinks to fit before the note grows, and its `strokeColor` is its text colour. |
 | `add_raw_elements` | Add complete Excalidraw elements verbatim, for example from an `.excalidraw` file. |
 | `update_elements` | Patch elements by id (`updates: [{id, set}]`). `force` edits another present agent's work. |
 | `translate_elements` | Move elements by `dx`/`dy`, carrying bound labels, group members, frame children and arrows bound at both ends. `force` as above. |
 | `delete_elements` | Soft-delete by id. `force` as above. |
 | `wait_for_mention` | Block until a mention addressed to this agent appears and settles, then return it with its neighbourhood. `tag`, `answerAgentMentions`, `autoSeen`, `timeoutSeconds`. |
 | `list_mentions` | All pending mentions now, with the same options. `includeHandled: true` also lists notes kept on the canvas. |
-| `acknowledge_mention` | Mark a mention handled: remove the note (default), or keep it with `keep`, a `status` (`out of scope`, `see chat`), or a `reply` question. An `answer` with `source` replaces the note with a post-it holding the question and the answer. `replyTo` addresses a reply to another agent. |
+| `acknowledge_mention` | Mark a mention handled: remove the note (default), or keep it with `keep`, a `status` (`out of scope`, `see chat`), or a `reply` question. An `answer` with `source` replaces the note with a sticky note holding the question and the answer. `replyTo` addresses a reply to another agent. |
 | `set_mention_policy` | Turn `answerQuestions` on or off for this session. |
 
 ### Example

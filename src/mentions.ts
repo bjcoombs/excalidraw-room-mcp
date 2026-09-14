@@ -20,7 +20,6 @@ import {
   bump,
   elementAuthor,
   FALLBACK_AUTHOR,
-  LABEL_PADDING,
   measureText,
   PERSON_AUTHOR,
   randomId,
@@ -377,16 +376,13 @@ export const STROKE_CUSTOM_DATA_KEY = "excalidrawRoomStroke";
 /** The colour a note is assumed to have been written in when nothing recorded it. */
 export const DEFAULT_INK = "#1e1e1e";
 
-/** The fill of an answer post-it: the Excalidraw palette's light yellow. */
-export const POSTIT_FILL = "#fff3bf";
-
-/** A post-it's border: one thin line in the agent grey, so the fill does the talking. */
-export const POSTIT_STROKE_WIDTH = 1;
+/** The fill of an answer sticky note: excalidraw.com's default sticky note yellow. */
+export const POSTIT_FILL = "#ffdf6b";
 
 /**
- * How wide an answer post-it is. The same width every server-written line
- * wraps to, so a post-it and a reply line drawn beside each other read as one
- * column of prose rather than two.
+ * How wide an answer sticky note is. The same width every server-written line
+ * wraps to, so a sticky note and a reply line drawn beside each other read as
+ * one column of prose rather than two.
  */
 export const POSTIT_WIDTH = WRAP_WIDTH;
 
@@ -467,15 +463,15 @@ export const ANSWER_TOO_LONG_TEXT =
   `answer is longer than ${MAX_ANSWER_LENGTH} characters; the canvas is not a document. ` +
   "Write at most two sentences and put the depth behind source.";
 export const ANSWER_WITH_STATUS_TEXT =
-  "answer and status exclude each other: an answer replaces the note with a post-it holding the question and what " +
+  "answer and status exclude each other: an answer replaces the note with a sticky note holding the question and what " +
   "you wrote, a status greys the note out as handled. Pass one or the other.";
 export const ANSWER_WITH_REPLY_TEXT =
-  "answer and reply exclude each other: an answer replaces the note with a post-it holding what you know, a reply " +
+  "answer and reply exclude each other: an answer replaces the note with a sticky note holding what you know, a reply " +
   "keeps it and writes the question you need answered under it. Pass one or the other.";
 export const SOURCE_WITHOUT_ANSWER_TEXT =
-  "source belongs to an answer: it becomes the link on the answer post-it, so pass it with answer or not at all.";
+  "source belongs to an answer: it becomes the link on the answer sticky note, so pass it with answer or not at all.";
 export const SOURCE_NOT_URL_TEXT =
-  "source must be an http or https URL: it becomes the link on the answer post-it, and anything else is not a link a reader can follow.";
+  "source must be an http or https URL: it becomes the link on the answer sticky note, and anything else is not a link a reader can follow.";
 
 /**
  * The cap as the tool declares it. Trimmed first, so an answer of spaces is
@@ -628,18 +624,21 @@ export function buildAttributedLine(
   );
 }
 
-/** The words on an answer post-it, wrapped to its width. */
+/**
+ * The words on an answer sticky note, one line per paragraph. The note wraps
+ * them itself, at whatever font size its fit settles on.
+ */
 export function postItText(question: string, answer: string, handle?: string | null): string {
-  return wrapText(`${question.trim()}\n\n${answer.trim()}\n\n- ${handle || FALLBACK_AUTHOR}`, POSTIT_WIDTH);
+  return `${question.trim()}\n\n${answer.trim()}\n\n- ${handle || FALLBACK_AUTHOR}`;
 }
 
 /**
- * A post-it's three paragraphs, each unwrapped back to the one line it was
+ * A sticky note's three paragraphs, each unwrapped back to the one line it was
  * written as: the question it answers, the answer, and the signature.
  *
  * The wrapping is the server's own and is put back so the answer can be
  * reported to an agent as one line, and so a later note's question can be
- * compared with the one the post-it holds.
+ * compared with the one the sticky note holds.
  */
 export function postItParagraphs(text: string): { question: string; answer: string; signature: string } {
   const paragraphs = text.split("\n\n").map((p) => p.split("\n").join(" ").trim());
@@ -650,22 +649,24 @@ export function postItParagraphs(text: string): { question: string; answer: stri
   };
 }
 
-/** An answer post-it: the container and the text bound inside it. */
+/** An answer sticky note: the container and the text bound inside it. */
 export interface AnswerPostIt {
   container: ExcalidrawElement;
   label: ExcalidrawElement;
 }
 
 /**
- * The post-it that replaces an answered note: a rounded yellow rectangle at
- * the note's own position, POSTIT_WIDTH wide, holding the question, the answer
- * and the handle that wrote it as bound text in the canvas ink.
+ * The sticky note that replaces an answered note: excalidraw.com's native
+ * `stickynote` at the note's own position, POSTIT_WIDTH wide, holding the
+ * question, the answer and the handle that wrote it as bound text in the
+ * canvas ink - the same element a person gets from the N tool, so the two
+ * look alike and take the same colour picker.
  *
  * One container rather than a note and a line beside it, because a container
  * and its bound text are one thing to Excalidraw: it drags as a piece, the
- * text stays inside the box, and the link icon on the box opens the source.
- * The box keeps the width the text was wrapped to and takes its height from
- * that text, so it grows downwards and nothing else on the canvas moves.
+ * text stays inside the note, and the link icon on the note opens the source.
+ * The note's text shrinks from the question's own font size to fit before the
+ * note grows, and it grows downwards, so nothing else on the canvas moves.
  */
 export function buildAnswerPostIt(
   mention: ExcalidrawElement,
@@ -674,53 +675,42 @@ export function buildAnswerPostIt(
   handle?: string | null,
   opts: AttributedLineOptions = {},
 ): AnswerPostIt {
-  const fontSize = Number(mention.fontSize ?? 20);
-  const text = postItText(strippedQuestion(mention.text ?? ""), answer, handle);
   const { created } = buildElements(
     [
       {
-        type: "rectangle",
+        type: "stickynote",
         x: mention.x,
         y: mention.y,
         width: POSTIT_WIDTH,
-        height: measureText(text, fontSize).height + 2 * LABEL_PADDING,
         backgroundColor: POSTIT_FILL,
-        strokeColor: ACKNOWLEDGED_STROKE,
-        strokeWidth: POSTIT_STROKE_WIDTH,
-        fontSize,
-        label: text,
+        strokeColor: DEFAULT_INK,
+        fontSize: Number(mention.fontSize ?? 20),
+        label: postItText(strippedQuestion(mention.text ?? ""), answer, handle),
         link: opts.link,
       },
     ],
     ctx,
   );
-  const [shape, centred] = created;
+  const [note, words] = created;
   const container: ExcalidrawElement = {
-    ...shape,
-    width: POSTIT_WIDTH,
-    height: centred.height + 2 * LABEL_PADDING,
+    ...note,
     customData: {
       [REPLY_CUSTOM_DATA_KEY]: mention.id,
       [REPLY_KIND_CUSTOM_DATA_KEY]: ANSWER_KIND,
       ...(opts.chain ? chainCustomData(opts.chain) : {}),
     },
   };
-  const label: ExcalidrawElement = {
-    ...centred,
-    // Centred across the box and against its top: the text is a column of
-    // prose read from the first line down, not a caption in the middle of a
-    // shape, which is what a bound label is laid out as by default.
-    x: container.x + (container.width - centred.width) / 2,
-    y: container.y + LABEL_PADDING,
-    strokeColor: DEFAULT_INK,
-    textAlign: "left",
-    verticalAlign: "top",
-    fontFamily: mention.fontFamily ?? centred.fontFamily,
-  };
+  const label: ExcalidrawElement = { ...words, fontFamily: mention.fontFamily ?? words.fontFamily };
   return { container: stampAuthor(container, handle), label: stampAuthor(label, handle) };
 }
 
-/** The non-deleted answer post-it written for a mention id, if the room holds one. */
+/**
+ * The non-deleted answer written for a mention id, if the room holds one.
+ *
+ * Found by its back reference rather than its type: this release draws a
+ * `stickynote`, earlier ones drew a `rectangle`, and a canvas holding either
+ * must still have its answer replaced rather than duplicated.
+ */
 export function findAnswerPostIt(elements: readonly ExcalidrawElement[], mentionId: string): ExcalidrawElement | null {
   for (const el of elements) {
     if (el.isDeleted || el.type === "text") continue;
@@ -780,7 +770,7 @@ export function stripStatus(text: string): string {
  * The question a note asks: the server's own markers gone and the tags it was
  * addressed with taken off the front.
  *
- * This is the text a post-it carries as its heading and the key a later note
+ * This is the text a sticky note carries as its heading and the key a later note
  * is matched against, so it has to be what the person asked and nothing else.
  * Repeated tags are stripped - a note may address two agents - and only
  * leading ones, because an "@alpha" inside a sentence is part of the question.
@@ -907,14 +897,14 @@ export interface AcknowledgePlan {
   /** Whether the line asks a question the person is expected to answer. */
   replies: boolean;
   /**
-   * Set only for an answer, which replaces the note with a post-it rather than
+   * Set only for an answer, which replaces the note with a sticky note rather than
    * writing a line under it. Absent otherwise, so the two older outcomes plan
    * exactly as they did before answering existed.
    */
   answers?: boolean;
-  /** The answer to draw on the post-it, trimmed. Set only for an answer. */
+  /** The answer to draw on the sticky note, trimmed. Set only for an answer. */
   answer?: string;
-  /** URL the answer post-it links to, when a source was cited. */
+  /** URL the answer sticky note links to, when a source was cited. */
   link?: string;
 }
 
@@ -1010,7 +1000,7 @@ export function planAcknowledgement(
     };
   }
   if (req.answer !== undefined) {
-    // No line: an answer is drawn as a post-it in the note's place, and the
+    // No line: an answer is drawn as a sticky note in the note's place, and the
     // note goes with it, so there is nothing left for a line to sit under.
     return {
       answer: req.answer.trim(),
@@ -1025,7 +1015,7 @@ export function planAcknowledgement(
 
 /** What the tool reports it did. */
 export function acknowledgementText(id: string, plan: AcknowledgePlan): string {
-  if (plan.answers) return `acknowledged ${id}, replaced the note with a post-it answering it on the canvas`;
+  if (plan.answers) return `acknowledged ${id}, replaced the note with a sticky note answering it on the canvas`;
   if (plan.replies) return `acknowledged ${id}, kept the note and replied on the canvas under it`;
   if (plan.line !== undefined) return `acknowledged ${id}, kept the note and wrote "${plan.line}" on the canvas under it`;
   return plan.kept ? `acknowledged ${id}` : `acknowledged and removed ${id} from the canvas`;
@@ -1338,12 +1328,12 @@ export function nearbyElements(
 }
 
 /**
- * What an answer post-it near this note already says about the same question,
+ * What an answer sticky note near this note already says about the same question,
  * or null when nothing near it does.
  *
  * An answered note is gone from the canvas, so a person asking again writes a
- * new note beside the post-it rather than editing the old one, and the new
- * note carries no history of its own. The post-it is the history: within the
+ * new note beside the sticky note rather than editing the old one, and the new
+ * note carries no history of its own. The sticky note is the history: within the
  * room's neighbourhood radius and holding the same question, what it answered
  * is reported with the new mention, so the agent knows what it already said
  * before it says it again.
