@@ -1,7 +1,7 @@
 /**
  * Scene selection: which elements a read should return.
  *
- * `read_scene` on a large scene costs context proportional to the whole
+ * `scene_read` on a large scene costs context proportional to the whole
  * drawing. These pure filters let a caller ask for a handful of elements by id,
  * or for a neighbourhood around one of them, reusing the same proximity rule
  * mentions use.

@@ -1,5 +1,5 @@
 /**
- * The `open_room` tool: hand the room to a person by opening its link in the
+ * The `room_open` tool: hand the room to a person by opening its link in the
  * default browser. The in-chat view depends on the host - which may cache the
  * view HTML across versions, and may route the view's tool calls to a second
  * server process - whereas excalidraw.com is the room's real surface, so this
@@ -77,7 +77,7 @@ export function launchBrowser(
     // An exec failure surfaces asynchronously as an 'error' event, which is
     // unhandled-throws on a ChildProcess. Swallow it onto the debug channel.
     child.on?.("error", (err: Error) => {
-      if (process.env.EXCALIDRAW_ROOM_DEBUG) console.error("[open_room] browser launch failed:", err.message);
+      if (process.env.EXCALIDRAW_ROOM_DEBUG) console.error("[room_open] browser launch failed:", err.message);
     });
     child.unref?.();
     return { launched: true, command, error: null };
@@ -86,7 +86,7 @@ export function launchBrowser(
   }
 }
 
-/** The result text and error flag `open_room` returns. */
+/** The result text and error flag `room_open` returns. */
 export interface OpenRoomResult {
   text: string;
   isError: boolean;
@@ -103,7 +103,7 @@ export interface OpenRoomDeps {
  * Open the current room - or the one a link names, joining it first - in the
  * default browser, and report the link with the room's state.
  *
- * With no link and no room this is the same refusal `show_room` gives, so a
+ * With no link and no room this is the same refusal `scene_show` gives, so a
  * host that shows the text verbatim tells the reader what to call next.
  */
 export async function openRoom(

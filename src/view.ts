@@ -1,7 +1,7 @@
 /**
  * The MCP Apps view: an in-chat canvas that renders the room this server has
  * joined. Two things live here, both kept free of socket state so they can be
- * unit-tested: the payload `show_room` returns, and the registration of the
+ * unit-tested: the payload `scene_show` returns, and the registration of the
  * HTML resource a host fetches to render it.
  *
  * The HTML is the Vite bundle at `dist/view/canvas.html`, read from disk when
@@ -13,7 +13,7 @@
  * to inline that channel into the model-visible transcript - Claude Desktop
  * does - which charges the reader the element array on every call, the cost the
  * split was meant to avoid. So `content` carries {@link summariseShowRoom}'s
- * few lines, and the view fetches the payload itself by calling `show_room`
+ * few lines, and the view fetches the payload itself by calling `scene_show`
  * with include: "json" and parsing the text.
  * https://github.com/bjcoombs/excalidraw-room-mcp/issues/29
  */
@@ -46,13 +46,13 @@ export const CANVAS_RESOURCE_URI = `${CANVAS_RESOURCE_URI_PREFIX}${PACKAGE_VERSI
 export const CANVAS_RESOURCE_NAME = "Excalidraw room canvas";
 
 /**
- * What `show_room` says before a room is joined. Worded so a host that shows
+ * What `scene_show` says before a room is joined. Worded so a host that shows
  * the text verbatim tells the user what to do next.
  */
-export const NOT_IN_ROOM_TEXT = "Not in a room. Call create_room or join_room first.";
+export const NOT_IN_ROOM_TEXT = "Not in a room. Call room_create or room_join first.";
 
 /**
- * The part of {@link RoomClient} the `show_room` join path uses. Narrowed to
+ * The part of {@link RoomClient} the `scene_show` join path uses. Narrowed to
  * these three members so the path can be tested without a socket.
  */
 export interface ShowRoomClient {
@@ -70,12 +70,12 @@ export interface EnsureJoinedResult {
 }
 
 /**
- * Join the room an `open_room` call names, if this process is not already in
- * it. `open_room` hands a link to a person's browser, and the point of its
+ * Join the room an `room_open` call names, if this process is not already in
+ * it. `room_open` hands a link to a person's browser, and the point of its
  * `link` argument is that the process ends up in the room the person is
  * watching, so this one really does move it.
  *
- * `show_room` used to come through here too, for the same reason its `link`
+ * `scene_show` used to come through here too, for the same reason its `link`
  * argument exists: a host may route the canvas widget's `callServerTool` to a
  * second server process, which has joined nothing and answers every poll with
  * {@link NOT_IN_ROOM_TEXT}. Joining made that process serve the canvas at the
@@ -118,7 +118,7 @@ export interface ShowRoomMention {
   nearby: string[];
 }
 
-/** The JSON body of a `show_room` result: everything the view draws from. */
+/** The JSON body of a `scene_show` result: everything the view draws from. */
 export interface ShowRoomPayload {
   link: string | null;
   connected: boolean;
@@ -164,7 +164,7 @@ export function buildShowRoomPayload(
  */
 export const SUMMARY_NEARBY_LIMIT = 10;
 
-/** How many mentions the text summary spells out before it defers to list_mentions. */
+/** How many mentions the text summary spells out before it defers to mention_list. */
 export const SUMMARY_MENTION_LIMIT = 5;
 
 /**
@@ -201,7 +201,7 @@ export function summariseShowRoom(payload: ShowRoomPayload): string {
   const shown = payload.mentions.slice(0, SUMMARY_MENTION_LIMIT);
   for (const mention of shown) lines.push("", formatShowRoomMention(mention));
   const hidden = payload.mentions.length - shown.length;
-  if (hidden) lines.push("", `+${hidden} more pending; call list_mentions for them.`);
+  if (hidden) lines.push("", `+${hidden} more pending; call mention_list for them.`);
   lines.push("", 'The elements are not in this text. The canvas view fetches them itself; pass include: "json" if you need them here.');
   return lines.join("\n");
 }

@@ -80,33 +80,50 @@ test("tools/list emits no array-valued items in any input schema", () => {
   }
 });
 
-test("add_elements accepts a stickynote and says what its strokeColor is", () => {
-  const addElements = tools.find((t) => t.name === "add_elements");
-  assert.ok(addElements, "add_elements is not in tools/list");
-  const type = JSON.stringify(addElements.inputSchema).match(/"type":\{"type":"string","enum":\[([^\]]*)\][^}]*\}/);
-  assert.ok(type, JSON.stringify(addElements.inputSchema));
-  assert.ok(type[1].split(",").includes('"stickynote"'), type[1]);
-  assert.match(type[0], /strokeColor its text colour/);
-});
-
-test("add_elements describes a point as a two-number array with object-form items", () => {
-  const addElements = tools.find((t) => t.name === "add_elements");
-  assert.ok(addElements, "add_elements is not in tools/list");
+test("scene_add pins the element type, stickynote included, and lists the other spec keys", () => {
+  const addElements = tools.find((t) => t.name === "scene_add");
+  assert.ok(addElements, "scene_add is not in tools/list");
   const schema = addElements.inputSchema as {
-    properties: { elements: { items: { properties: { points: Record<string, unknown> } } } };
+    properties: { elements: { description?: string; items: { properties: { type: { enum: string[] } } } } };
   };
-  const points = schema.properties.elements.items.properties.points;
-  assert.equal(points.type, "array");
-  const pointSchema = points.items as Record<string, unknown>;
-  assert.equal(pointSchema.type, "array");
-  assert.deepEqual(pointSchema.items, { type: "number" });
-  assert.equal(pointSchema.minItems, 2);
-  assert.equal(pointSchema.maxItems, 2);
+  assert.ok(schema.properties.elements.items.properties.type.enum.includes("stickynote"));
+  for (const key of ["x", "label", "points", "start", "place"]) {
+    assert.match(schema.properties.elements.description ?? "", new RegExp(`\\b${key}\\b`), key);
+  }
 });
 
-test("snapshot_scene takes only the six selector and size arguments, none of them required", () => {
-  const snapshot = tools.find((t) => t.name === "snapshot_scene");
-  assert.ok(snapshot, "snapshot_scene is not in tools/list");
+/**
+ * The full element spec is checked in the handler, not emitted (issue #108:
+ * declared field by field it is over a tools/list entry's budget). A point is
+ * still exactly two numbers and a misspelt key is still refused by name, as
+ * results the model can read, before the room is consulted.
+ */
+test("scene_add refuses a three-number point and an unknown key by name", async () => {
+  const seen = await use(async (client) => ({
+    point: (await client.callTool({
+      name: "scene_add",
+      arguments: { elements: [{ type: "line", points: [[0, 0, 0], [1, 1]] }] },
+    })) as ToolResult,
+    key: (await client.callTool({
+      name: "scene_add",
+      arguments: { elements: [{ type: "rectangle", colour: "red" }] },
+    })) as ToolResult,
+    type: (await client.callTool({
+      name: "scene_add",
+      arguments: { elements: [{ type: "hexagon" }] },
+    })) as ToolResult,
+  }));
+  assert.equal(seen.point.isError, true, resultText(seen.point));
+  assert.match(resultText(seen.point), /points/);
+  assert.equal(seen.key.isError, true, resultText(seen.key));
+  assert.match(resultText(seen.key), /colour/);
+  assert.equal(seen.type.isError, true, resultText(seen.type));
+  assert.match(resultText(seen.type), /hexagon|type/);
+});
+
+test("scene_snapshot takes only the six selector and size arguments, none of them required", () => {
+  const snapshot = tools.find((t) => t.name === "scene_snapshot");
+  assert.ok(snapshot, "scene_snapshot is not in tools/list");
   const schema = snapshot.inputSchema as { properties: Record<string, unknown>; required?: string[] };
   assert.deepEqual(Object.keys(schema.properties).sort(), [
     "bbox",
@@ -118,14 +135,16 @@ test("snapshot_scene takes only the six selector and size arguments, none of the
   ]);
   assert.deepEqual(schema.required ?? [], []);
   // The description is what makes the model reach for the tool at the right
-  // moment, so the two cases it exists for are pinned here.
-  assert.match(snapshot.description ?? "", /hand-drawn/);
-  assert.match(snapshot.description ?? "", /overlap/);
+  // moment, so the two cases it exists for are pinned here. Tool search matches
+  // the first sentence, so they are in it.
+  const firstSentence = (snapshot.description ?? "").split(". ")[0];
+  assert.match(firstSentence, /hand-drawn/);
+  assert.match(firstSentence, /overlap/);
 });
 
-test("acknowledge_mention takes id, keep, reply, replyTo, status, answer and source, and refuses anything else by name", async () => {
-  const ack = tools.find((t) => t.name === "acknowledge_mention");
-  assert.ok(ack, "acknowledge_mention is not in tools/list");
+test("mention_acknowledge takes id, keep, reply, replyTo, status, answer and source, and refuses anything else by name", async () => {
+  const ack = tools.find((t) => t.name === "mention_acknowledge");
+  assert.ok(ack, "mention_acknowledge is not in tools/list");
   const schema = ack.inputSchema as {
     properties: Record<string, { enum?: string[] }>;
     required?: string[];
@@ -140,11 +159,10 @@ test("acknowledge_mention takes id, keep, reply, replyTo, status, answer and sou
   assert.equal(schema.additionalProperties, false);
 
   // The description is what the model reads before it picks the argument, so
-  // it names the status and no longer names the argument that is gone.
+  // it names the outcomes and no longer names the argument that is gone.
   assert.match(ack.description ?? "", /status/);
   assert.match(ack.description ?? "", /answer/);
-  assert.match(ack.description ?? "", /source/);
-  assert.match(ack.description ?? "", /replyTo/);
+  assert.match(ack.description ?? "", /reply/);
   // "sticky note" is the element an answer is drawn as, not the argument.
   assert.ok(!/note/.test((ack.description ?? "").replaceAll("sticky note", "")), ack.description);
   assert.match(ack.description ?? "", /sticky note/);
@@ -153,9 +171,9 @@ test("acknowledge_mention takes id, keep, reply, replyTo, status, answer and sou
   // Over stdio, both refusals come back as tool results the model can read,
   // not as protocol errors, and each names what it refused.
   const refusals = await use(async (client) => ({
-    note: (await client.callTool({ name: "acknowledge_mention", arguments: { id: "m", note: "x" } })) as ToolResult,
+    note: (await client.callTool({ name: "mention_acknowledge", arguments: { id: "m", note: "x" } })) as ToolResult,
     status: (await client.callTool({
-      name: "acknowledge_mention",
+      name: "mention_acknowledge",
       arguments: { id: "m", status: "declined" },
     })) as ToolResult,
   }));
@@ -170,16 +188,16 @@ test("acknowledge_mention takes id, keep, reply, replyTo, status, answer and sou
  * that is where a host meets them. Nothing here needs the network: the policy
  * is process state and every refusal is decided before the room is touched.
  */
-test("set_mention_policy reports the flag, room_status prints it, and the answer refusals name both arguments", async () => {
-  const policy = tools.find((t) => t.name === "set_mention_policy");
-  assert.ok(policy, "set_mention_policy is not in tools/list");
+test("mention_policy reports the flag, room_status prints it, and the answer refusals name both arguments", async () => {
+  const policy = tools.find((t) => t.name === "mention_policy");
+  assert.ok(policy, "mention_policy is not in tools/list");
   const schema = policy.inputSchema as { properties: Record<string, unknown>; required?: string[] };
   assert.deepEqual(Object.keys(schema.properties), ["answerQuestions"]);
   assert.deepEqual(schema.required ?? [], ["answerQuestions"]);
-  // The description is the whole record that answering was asked for, so it
-  // carries the hosting statement and says the flag is never written down.
-  assert.match(policy.description ?? "", /never write client-identifiable/);
-  assert.match(policy.description ?? "", /memory/);
+  // Only a person in chat turns answering on, never a note on the canvas, so
+  // the description says so in the sentence tool search reads. The hosting
+  // statement travels in the result below and in room_help answers.
+  assert.match((policy.description ?? "").split(". ")[0], /person asks in chat/);
 
   const seen = await use(async (client) => {
     const call = async (name: string, args: Record<string, unknown>) =>
@@ -188,13 +206,13 @@ test("set_mention_policy reports the flag, room_status prints it, and the answer
       (await client.callTool({ name, arguments: args })) as ToolResult;
     return {
       before: await call("room_status", {}),
-      set: await call("set_mention_policy", { answerQuestions: true }),
+      set: await call("mention_policy", { answerQuestions: true }),
       after: await call("room_status", {}),
-      off: await call("set_mention_policy", { answerQuestions: false }),
+      off: await call("mention_policy", { answerQuestions: false }),
       offAfter: await call("room_status", {}),
-      withStatus: await errored("acknowledge_mention", { id: "q", answer: "x", status: "see chat" }),
-      withReply: await errored("acknowledge_mention", { id: "q", answer: "x", reply: "y" }),
-      tooLong: await errored("acknowledge_mention", { id: "q", answer: "x".repeat(401) }),
+      withStatus: await errored("mention_acknowledge", { id: "q", answer: "x", status: "see chat" }),
+      withReply: await errored("mention_acknowledge", { id: "q", answer: "x", reply: "y" }),
+      tooLong: await errored("mention_acknowledge", { id: "q", answer: "x".repeat(401) }),
     };
   });
 
@@ -225,8 +243,8 @@ test("set_mention_policy reports the flag, room_status prints it, and the answer
  * is read and refused before the relay is contacted, and room_status reports
  * the default for a process that has joined nothing.
  */
-test("create_room and join_room take agentReplyDepth from 0 to 5, and room_status reports it", async () => {
-  for (const name of ["create_room", "join_room"]) {
+test("room_create and room_join take agentReplyDepth from 0 to 5, and room_status reports it", async () => {
+  for (const name of ["room_create", "room_join"]) {
     const tool = tools.find((t) => t.name === name);
     assert.ok(tool, `${name} is not in tools/list`);
     const schema = tool.inputSchema as {
@@ -237,13 +255,12 @@ test("create_room and join_room take agentReplyDepth from 0 to 5, and room_statu
     assert.equal(depth.type, "integer");
     assert.equal(depth.minimum, 0);
     assert.equal(depth.maximum, 5);
-    assert.match(depth.description ?? "", /agentReplyDepth: <n>/);
   }
 
   const seen = await use(async (client) => ({
     status: resultText((await client.callTool({ name: "room_status", arguments: {} })) as ToolResult),
     tooDeep: (await client.callTool({
-      name: "join_room",
+      name: "room_join",
       arguments: { link: "https://excalidraw.com/#room=44370699de248c2fed0a,CGRLjH7340vVPvMRyjFIrg", agentReplyDepth: 6 },
     })) as ToolResult,
   }));
@@ -257,19 +274,11 @@ test("create_room and join_room take agentReplyDepth from 0 to 5, and room_statu
 });
 
 /**
- * Issue #113: the four write tools say where a change has got to, and
- * room_status always carries the persistence line. Over stdio, because the
- * description is what the model reads before it trusts a result line.
+ * Issue #113: room_status always carries the persistence line. What a NOT
+ * PERSISTED result line means moved from the four write tools' descriptions to
+ * README "Saving the scene" in issue #108, and help.test.ts pins it there.
  */
-test("the four write tools name NOT PERSISTED and the stored copy, and room_status reports persistence", async () => {
-  for (const name of ["add_elements", "add_raw_elements", "update_elements", "delete_elements"]) {
-    const tool = tools.find((t) => t.name === name);
-    assert.ok(tool, `${name} is not in tools/list`);
-    assert.match(tool.description ?? "", /NOT PERSISTED/, name);
-    assert.match(tool.description ?? "", /stored copy/, name);
-    assert.match(tool.description ?? "", /connected peers immediately/, name);
-  }
-
+test("room_status reports persistence", async () => {
   const status = await use(async (client) =>
     resultText((await client.callTool({ name: "room_status", arguments: {} })) as ToolResult),
   );

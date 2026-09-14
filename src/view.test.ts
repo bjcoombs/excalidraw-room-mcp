@@ -106,7 +106,7 @@ test("buildShowRoomPayload reports a disconnected room with a null link", () => 
   assert.deepEqual(payload.mentions, []);
 });
 
-test("the show_room result body is JSON with exactly the five documented keys", () => {
+test("the scene_show result body is JSON with exactly the five documented keys", () => {
   const parsed = JSON.parse(JSON.stringify(buildShowRoomPayload(status(), [element()], [])));
   assert.deepEqual(Object.keys(parsed).sort(), ["connected", "elements", "link", "mentions", "peers"]);
 });
@@ -135,9 +135,9 @@ test("a wide shape above the note is nearby: the boxes are within the radius eve
   assert.deepEqual(payload.mentions[0].nearby, ["diagram"]);
 });
 
-test("show_room and list_mentions report the same nearby ids for the same scene", () => {
-  // show_room goes through buildShowRoomPayload; list_mentions and
-  // wait_for_mention call nearbyElements directly. The two must not drift.
+test("scene_show and mention_list report the same nearby ids for the same scene", () => {
+  // scene_show goes through buildShowRoomPayload; mention_list and
+  // mention_wait call nearbyElements directly. The two must not drift.
   const els = [
     WIDE_DIAGRAM,
     element({ id: "note", type: "text", text: NOTE_BELOW.text, x: NOTE_BELOW.x, y: NOTE_BELOW.y, width: NOTE_BELOW.width, height: NOTE_BELOW.height }),
@@ -158,9 +158,9 @@ test("show_room and list_mentions report the same nearby ids for the same scene"
   assert.ok(fromShowRoom.includes("diagram"));
   assert.ok(fromShowRoom.includes("label"));
   assert.ok(!fromShowRoom.includes("elsewhere"));
-  // list_mentions renders those same ids as text.
+  // mention_list renders those same ids as text.
   const rendered = formatMention(NOTE_BELOW, nearbyElements(els, NOTE_BELOW));
-  for (const id of fromShowRoom) assert.ok(rendered.includes(id), `${id} named in the list_mentions text`);
+  for (const id of fromShowRoom) assert.ok(rendered.includes(id), `${id} named in the mention_list text`);
 });
 
 test("the text summary of a 35-element room stays under 1500 characters and names the link and the count", () => {
@@ -190,7 +190,7 @@ test("the summary names every pending mention with the ids around it, and stays 
   assert.match(bounded, new RegExp(`pending mentions: ${many.length}`));
   assert.ok(bounded.includes("m-0"), "the first mentions are spelled out");
   assert.ok(!bounded.includes(`mention m-${SUMMARY_MENTION_LIMIT} `), "past the limit they are not");
-  assert.match(bounded, /\+3 more pending; call list_mentions/);
+  assert.match(bounded, /\+3 more pending; call mention_list/);
 });
 
 test("a mention next to a crowd lists the first ids and counts the rest", () => {
@@ -224,16 +224,16 @@ test("a disconnected room summarises without a link", () => {
   assert.match(summary, /pending mentions: 0/);
 });
 
-test("show_room's pre-join message names the room and the tools that open one", () => {
+test("scene_show's pre-join message names the room and the tools that open one", () => {
   assert.match(NOT_IN_ROOM_TEXT, /room/);
   for (const forbidden of ["not found", "unknown tool", "-32602"]) {
     assert.ok(!NOT_IN_ROOM_TEXT.toLowerCase().includes(forbidden), `must not contain ${forbidden}`);
   }
-  assert.match(NOT_IN_ROOM_TEXT, /create_room/);
-  assert.match(NOT_IN_ROOM_TEXT, /join_room/);
+  assert.match(NOT_IN_ROOM_TEXT, /room_create/);
+  assert.match(NOT_IN_ROOM_TEXT, /room_join/);
 });
 
-test("registerCanvasResource serves canvas.html at the URI show_room's _meta points to", async () => {
+test("registerCanvasResource serves canvas.html at the URI scene_show's _meta points to", async () => {
   const calls: { name: string; uri: string; config: { mimeType?: string } }[] = [];
   let read!: (uri: URL) => Promise<{ contents: { uri: string; mimeType?: string; text?: string }[] }>;
   registerCanvasResource(
@@ -307,7 +307,7 @@ function fakeRoom(over: { connected?: boolean; roomId?: string | null; fail?: st
 test("ensureJoined leaves the room alone when no link is passed", async () => {
   const room = fakeRoom();
   assert.deepEqual(await ensureJoined(room, undefined), { joined: false, error: null });
-  assert.deepEqual(room.joins, [], "the model's own show_room calls must not join anything");
+  assert.deepEqual(room.joins, [], "the model's own scene_show calls must not join anything");
 });
 
 test("ensureJoined joins the link when the process is in no room", async () => {
@@ -338,7 +338,7 @@ test("ensureJoined reports a link it cannot parse without throwing", async () =>
   assert.deepEqual(room.joins, []);
 });
 
-test("ensureJoined reports a relay failure so show_room can say why", async () => {
+test("ensureJoined reports a relay failure so scene_show can say why", async () => {
   const room = fakeRoom({ fail: "relay connection failed: boom" });
   const result = await ensureJoined(room, LINK);
   assert.equal(result.joined, false);
@@ -350,7 +350,7 @@ test("NOT_IN_ROOM_TEXT is the string view/src/payload.ts mirrors", () => {
   // The view detects this reply to tell "no room link yet" from an envelope it
   // cannot parse. The two builds share no module, so the literal is pinned in
   // both places and here.
-  assert.equal(NOT_IN_ROOM_TEXT, "Not in a room. Call create_room or join_room first.");
+  assert.equal(NOT_IN_ROOM_TEXT, "Not in a room. Call room_create or room_join first.");
 });
 
 test("the summary's first line is the room link the view learns from", () => {

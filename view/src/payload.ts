@@ -35,11 +35,11 @@ export function roomLink(link: string | null): string | null {
 }
 
 /**
- * What `show_room` answers when the process it reached has joined nothing.
+ * What `scene_show` answers when the process it reached has joined nothing.
  * Mirrors NOT_IN_ROOM_TEXT in src/view.ts, which src/view.test.ts pins; the two
  * builds share no module.
  */
-export const NOT_IN_ROOM_TEXT = "Not in a room. Call create_room or join_room first.";
+export const NOT_IN_ROOM_TEXT = "Not in a room. Call room_create or room_join first.";
 
 /** Whether a result's text is the server's not-in-a-room refusal. */
 export function isNotInRoom(text: string | null): boolean {
@@ -47,7 +47,7 @@ export function isNotInRoom(text: string | null): boolean {
 }
 
 /**
- * The room link out of a `show_room` summary, whose first line is
+ * The room link out of a `scene_show` summary, whose first line is
  * `room: <link>` (summariseShowRoom in src/view.ts). This is how the view
  * learns the link at all in a host that routes its calls to a second server
  * process: the seed is the model's summary, taken over the connection that is
@@ -147,7 +147,7 @@ function coerce(value: unknown): ShowRoomPayload | null {
   };
 }
 
-/** The JSON payload a caller asked for as text (show_room's include: "json"). */
+/** The JSON payload a caller asked for as text (scene_show's include: "json"). */
 function fromText(result: Record<string, unknown>): ShowRoomPayload | null {
   const content = result.content;
   if (!Array.isArray(content)) return null;
@@ -160,7 +160,7 @@ function fromText(result: Record<string, unknown>): ShowRoomPayload | null {
 }
 
 /**
- * The payload and the channel it came from. A show_room result carries the
+ * The payload and the channel it came from. A scene_show result carries the
  * payload in `structuredContent`; its text is a short summary the model reads
  * unless the caller passed include: "json". Hosts differ in what they forward
  * to an iframe - some deliver the `CallToolResult`, some a wrapper around it,

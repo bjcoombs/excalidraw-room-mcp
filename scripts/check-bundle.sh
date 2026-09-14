@@ -10,12 +10,14 @@ set -euo pipefail
 
 # Present in the bundle or the installed server is broken. dist/view/canvas.html
 # is read at resources/read time; manifest.json is how the client installs it.
-# The last two are what snapshot_scene rasterises with: the resvg WebAssembly
-# module, and the one font it loads so text renders the same on every host.
-# Keep each of those on a line of its own - the acceptance check reads the
-# whole line as the path.
+# README.md is what room_help reads its topics from, at ../README.md from
+# dist/. The last two are what scene_snapshot rasterises with: the resvg
+# WebAssembly module, and the one font it loads so text renders the same on
+# every host. Keep each of those on a line of its own - the acceptance check
+# reads the whole line as the path.
 required=(
   manifest.json
+  README.md
   dist/index.js
   dist/view/canvas.html
   node_modules/@resvg/resvg-wasm/index_bg.wasm

@@ -8,7 +8,7 @@
  * With a link it joins that room instead of creating one.
  *
  * With --show-room it joins, waits for the scene to settle, prints the
- * show_room payload the in-chat view renders, and exits:
+ * scene_show payload the in-chat view renders, and exits:
  *
  *   npm run e2e:show-room -- "<collab link>" [seconds]
  */
@@ -47,34 +47,34 @@ const call = async (name: string, args: Record<string, unknown> = {}) => {
 if (showRoomOnly) {
   // The scene arrives from a peer or from Firestore shortly after the join;
   // give it a moment so the payload is not an empty canvas.
-  if (link) await call("join_room", { link });
-  else await call("create_room");
+  if (link) await call("room_join", { link });
+  else await call("room_create");
   await new Promise((r) => setTimeout(r, Math.min(seconds, 10) * 1000));
-  // include: "json" is what the in-chat view asks for too: show_room's text is
+  // include: "json" is what the in-chat view asks for too: scene_show's text is
   // the summary unless a caller wants the payload.
-  console.log(await call("show_room", { include: "json" }));
+  console.log(await call("scene_show", { include: "json" }));
   await client.close();
   process.exit(0);
 }
 
 console.log("tools:", (await client.listTools()).tools.map((t) => t.name).join(", "));
 if (link) {
-  console.log("--- join_room");
-  console.log(await call("join_room", { link }));
-  console.log("--- read_scene (before)");
-  console.log(await call("read_scene"));
+  console.log("--- room_join");
+  console.log(await call("room_join", { link }));
+  console.log("--- scene_read (before)");
+  console.log(await call("scene_read"));
 } else {
-  console.log("--- create_room");
-  console.log(await call("create_room"));
+  console.log("--- room_create");
+  console.log(await call("room_create"));
 }
 
 // Unique ids per run so the driver can be pointed at a room more than once.
 const run = Date.now().toString(36);
 const api = `api-${run}`;
 const db = `db-${run}`;
-console.log("--- add_elements");
+console.log("--- scene_add");
 console.log(
-  await call("add_elements", {
+  await call("scene_add", {
     elements: [
       { type: "rectangle", id: api, x: 100, y: 100, width: 180, height: 90, label: "API", backgroundColor: "#a5d8ff" },
       { type: "ellipse", id: db, x: 500, y: 100, width: 180, height: 90, label: "Postgres", backgroundColor: "#b2f2bb" },
@@ -88,7 +88,7 @@ const deadline = Date.now() + seconds * 1000;
 while (Date.now() < deadline) {
   await new Promise((r) => setTimeout(r, 4000));
   const status = await call("room_status");
-  const summary = await call("read_scene");
+  const summary = await call("scene_read");
   if (summary !== lastSummary) {
     console.log(`--- ${new Date().toISOString()} scene changed`);
     console.log(status);
@@ -96,6 +96,6 @@ while (Date.now() < deadline) {
     lastSummary = summary;
   }
 }
-console.log("--- final json element count:", JSON.parse(await call("read_scene", { format: "json" })).length);
+console.log("--- final json element count:", JSON.parse(await call("scene_read", { format: "json" })).length);
 await client.close();
 process.exit(0);

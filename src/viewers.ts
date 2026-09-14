@@ -8,7 +8,7 @@
  * and with Cowork the model's process runs in the VM while the widget runs on
  * the host - so a process is regularly asked to render a room it is not in.
  *
- * The old answer was for `show_room {link}` to join that room, which moved the
+ * The old answer was for `scene_show {link}` to join that room, which moved the
  * process. With two widgets polling one process that flipped the room every
  * two seconds, and drawings meant for one room landed in the other
  * (issue #92). A viewer answers the render instead: a second client, joined to
@@ -31,7 +31,7 @@ export const VIEWER_IDLE_MS = 5 * 60_000;
 
 /**
  * The part of {@link RoomClient} a viewer is used through. Narrowed to these
- * members so the pool and the `show_room` resolution can be driven without a
+ * members so the pool and the `scene_show` resolution can be driven without a
  * socket.
  */
 export interface ViewerClient {
@@ -164,7 +164,7 @@ export function viewersLine(pool: Pick<ViewerPool, "roomIds">): string {
   return `viewers: ${ids.length ? ids.join(", ") : "-"}`;
 }
 
-/** Which client answers a `show_room` call, and why it is not the one asked for. */
+/** Which client answers a `scene_show` call, and why it is not the one asked for. */
 export interface ShowRoomTarget {
   /** The client whose scene and status the result is built from. */
   client: ViewerClient;
@@ -174,13 +174,13 @@ export interface ShowRoomTarget {
   error: string | null;
 }
 
-/** A link this pool cannot serve, worded for the `show_room` result. */
+/** A link this pool cannot serve, worded for the `scene_show` result. */
 function notViewed(err: unknown): string {
   return `link not viewed: ${err instanceof Error ? err.message : String(err)}`;
 }
 
 /**
- * Pick the client that answers `show_room`.
+ * Pick the client that answers `scene_show`.
  *
  * No link, or the link of the room this process is already in, is the current
  * room: that is the model's own path, and it is unchanged. Any other link is

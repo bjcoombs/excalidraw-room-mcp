@@ -1,11 +1,11 @@
 /**
- * poll_room's payload: the cheap state probe an agent can call inside a turn.
+ * mention_poll's payload: the cheap state probe an agent can call inside a turn.
  *
- * show_room costs a full scene dump and wait_for_mention blocks the turn, so
+ * scene_show costs a full scene dump and mention_wait blocks the turn, so
  * neither suits "has anything changed since I last looked?". This reads the
  * room state already in memory and reports only the counters, so the result
  * fits in one short text block: the caller decides from `changedSince`
- * whether to spend a read_scene or list_mentions call.
+ * whether to spend a scene_read or mention_list call.
  *
  * The size bound is part of the contract, not a nicety - a probe an agent is
  * expected to call repeatedly must cost a fixed, small number of tokens. The
@@ -30,7 +30,7 @@ export interface PollState {
   pending: readonly Mention[];
   /**
    * Whether the session policy has knowledge answers on. Reported here as well
-   * as by room_status because poll_room is the call an agent makes inside a
+   * as by room_status because mention_poll is the call an agent makes inside a
    * turn, and the rule that follows the counters depends on it.
    */
   answerQuestions: boolean;
@@ -38,7 +38,7 @@ export interface PollState {
 
 export interface PollPayload {
   connected: boolean;
-  /** The session policy's answering flag, as set_mention_policy left it. */
+  /** The session policy's answering flag, as mention_policy left it. */
   answerQuestions: boolean;
   sceneVersion: number;
   peerCount: number;
@@ -123,7 +123,7 @@ export function pollBody(payload: PollPayload): string {
 }
 
 /**
- * What poll_room returns: the bounded body, then the scope rule. The rule is
+ * What mention_poll returns: the bounded body, then the scope rule. The rule is
  * fixed-length and is the one thing in the result that must not be shortened,
  * so it sits outside the bound rather than competing with the counters for it.
  */

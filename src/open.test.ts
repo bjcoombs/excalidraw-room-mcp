@@ -119,7 +119,7 @@ test(`${NO_OPEN_ENV} suppresses the launch when set, and not when off or unset`,
   assert.equal(browserLaunchSuppressed({ [NO_OPEN_ENV]: "true" }), true);
 });
 
-test("open_room returns the link with the room's state and opens the browser once", async () => {
+test("room_open returns the link with the room's state and opens the browser once", async () => {
   const fake = fakeSpawn();
   const room = fakeRoom({ connected: true, roomId: "0123456789abcdef0123" });
   const result = await openRoom(room, undefined, { platform: "darwin", env: {}, spawn: fake.spawn });
@@ -166,7 +166,7 @@ test("a link for a room the process is not in moves it there before opening", as
   assert.deepEqual(fake.calls[0].args, [OTHER_LINK]);
 });
 
-test("in no room and with no link, open_room gives show_room's refusal and launches nothing", async () => {
+test("in no room and with no link, room_open gives scene_show's refusal and launches nothing", async () => {
   const fake = fakeSpawn();
   const room = fakeRoom();
   const result = await openRoom(room, undefined, { platform: "darwin", env: {}, spawn: fake.spawn });

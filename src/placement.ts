@@ -67,7 +67,7 @@ export interface PlaceRequest {
   newCluster?: boolean;
 }
 
-/** An `add_elements` spec that may ask to be placed rather than positioned. */
+/** An `scene_add` spec that may ask to be placed rather than positioned. */
 export interface PlacedSpec extends ElementSpec {
   place?: PlaceRequest;
 }
@@ -598,7 +598,7 @@ export function reservedElement(id: string, type: string, x: number, y: number, 
 
 /**
  * The radius a neighbourhood query uses: the caller's if it named one, else
- * the room's. Layout and neighbourhood share one number, so `read_scene near`
+ * the room's. Layout and neighbourhood share one number, so `scene_read near`
  * with no radius reaches exactly as far as the mention that prompted it.
  */
 export function nearRadius(roomRadius: number = DEFAULT_NEARBY_RADIUS, requested?: number): number {
