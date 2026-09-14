@@ -2,6 +2,14 @@
 
 An MCP server that joins a live [Excalidraw](https://excalidraw.com) collaboration room as a participant. You draw on excalidraw.com. The agent reads what you drew, draws on the same canvas, and answers notes you write to it there. It works in Claude Desktop, Claude Code and any other stdio MCP client.
 
+You write a question on the board next to the thing you mean.
+
+![A service diagram on an Excalidraw canvas - mobile app, API gateway, order service, Postgres, Kafka and a billing worker - with a handwritten red note reading "@claude what happens if the Kafka publish fails after the insert committed?"](assets/readme/whiteboard-question.png)
+
+The agent answers on the board, as a sticky note under the question.
+
+![The same diagram with the agent's reply drawn as a yellow sticky note: the insert commits but the event is lost, so billing never runs, and an outbox row written in the same transaction fixes it, signed "- kt-claude"](assets/readme/whiteboard-answer.png)
+
 ## Install
 
 Requires Node 22 or newer. Nothing to clone or build.

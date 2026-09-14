@@ -20,6 +20,11 @@
 /.claude/
 /.stryker-tmp/
 /scripts/
+# The README screenshots. The bundle ships README.md, whose images render on
+# GitHub and npm; nothing reads the PNGs at runtime, so 460 KB of them stays
+# out. Anchored because assets/ itself is required - assets/fonts is what
+# scene_snapshot rasterises text with.
+/assets/readme/
 tsconfig.json
 eslint.config.js
 stryker.config.json

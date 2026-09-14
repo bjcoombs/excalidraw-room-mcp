@@ -29,6 +29,7 @@ required=(
 # than shipping. Anchored to the start of the entry name: a bundled dependency
 # is free to carry its own src/ or view/ directory.
 forbidden_prefixes=(
+  assets/readme/
   src/
   view/
   tests/
