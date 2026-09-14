@@ -92,7 +92,7 @@ The agent creates or joins a room, draws what was asked, then calls `mention_wai
 - `reply` (up to 400 characters) draws a question under a request that is unclear, and the note stays live. It must not contain a tag the agent answers to, or the question would read as a mention. `replyTo` is under Reply chains.
 - `answer` and `source` are under Questions on the canvas.
 
-A note written inside a sticky note is removed with the sticky note, so no empty note is left behind; a mention labelling a shape you drew leaves the shape and removes only the label.
+A note written inside a sticky note is removed with the sticky note, so no empty note is left behind; a mention labelling a shape you drew leaves the shape and removes only the label. An `answer` is the exception: it keeps your sticky note, as Questions on the canvas describes.
 
 `status`, `reply` and `answer` exclude each other, and `note`, the free-text status before 0.7.0, is refused by name. Say what was done in chat, not on the canvas: artefacts of the work belong on the canvas, prose about it does not.
 
@@ -109,6 +109,8 @@ Some notes are questions rather than drawing requests, such as "what does a 303 
 An answer is `mention_acknowledge` with `answer`: what the question asks, in at most two sentences and 400 characters, built from the note's words and public knowledge only. `source` is a public URL for the depth, and becomes the link on the sticky note. `answer` excludes `status` and `reply`, and is for use only while answering is on.
 
 An answer replaces your question with a sticky note in its place: the same `stickynote` element excalidraw.com's sticky note tool (`N`) draws, in its default yellow (`#ffdf6b`), 360 px wide, holding your question, the answer of at most 400 characters, and the agent's handle after a dash, in the canvas ink (`#1e1e1e`). The text shrinks to fit the note before the note grows taller, and the footer shows the date it was written. A `source` URL becomes the link icon on the note. The note and its words are one element on the canvas, so it drags as a piece. Ask again next to it and the agent is told what the sticky note already answers, as a `previous answer:` line, whenever the new note asks the same question within the room's neighbourhood radius. An answer drawn by an earlier release, as a yellow rectangle, is still recognised.
+
+A question typed into a sticky note of your own is answered differently: your note stays exactly as you wrote it, greyed with one check mark the way `keep` marks it, and the answer is drawn as a second sticky note directly under it - same `x`, 8 px below your note, the width you gave yours - holding the answer and the agent's handle after a dash and no copy of your question, because your question is still on the board above it. The two notes share a group, so dragging either takes the other along, on excalidraw.com and through `scene_translate`. Answering the same note again replaces the sticky note under it and leaves the group as it is.
 
 Every other line the server writes - a `status` under a note, a `reply` question - is wrapped to the same 360 px, so nothing it draws runs off across your diagram.
 

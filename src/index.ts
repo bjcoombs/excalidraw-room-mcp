@@ -39,7 +39,8 @@ import {
   nearbyNeighbourhood,
   handledKey,
   boundLabelOf,
-  buildAnswerPostIt,
+  answeredStickyNote,
+  buildMentionAnswer,
   findAnswerPostIt,
   markAcknowledged,
   markHandled,
@@ -54,6 +55,7 @@ import {
   nextChain,
   policyLine,
   previousLine,
+  noteStays,
   removedWithMention,
   scopeRuleFor,
   replySchema,
@@ -1014,13 +1016,22 @@ gated(server.registerTool(
     if (plan.refusal) return errorText(plan.refusal);
     if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     if (!current || current.type !== "text") return text(`no text element with id ${id}`);
+    // The person's own sticky note, when the question was typed into one and
+    // this acknowledgement answers it: the note stays and the answer goes
+    // under it. https://github.com/bjcoombs/excalidraw-room-mcp/issues/128
+    const answeredNote = answeredStickyNote(room.getElements(), current, plan);
     // Either way the words the person wrote are recorded, so our own edit
     // never reads back as a new mention, and neither does a later move.
     // A reply leaves the note live in the colour it was written in, because
     // the line under it asks something; keep and status grey it as spent; an
-    // answer removes it, because the sticky note drawn below carries the question
-    // itself and nothing should ask it twice.
-    let updated = plan.replies ? markReplied(current) : plan.kept ? markAcknowledged(current) : markRemoved(current);
+    // answer removes a loose note, because the sticky note drawn in its place
+    // carries the question itself and nothing should ask it twice, and marks a
+    // note of the person's own as it stands, because the answer sits below it.
+    let updated = plan.replies
+      ? markReplied(current)
+      : noteStays(plan, answeredNote)
+        ? markAcknowledged(current)
+        : markRemoved(current);
     // Whatever this acknowledgement does, whatever the last one wrote is spent:
     // the old attributed line goes, replaced when this one writes its own.
     const stale = findAttributedLine(room.getElements(), id);
@@ -1042,17 +1053,22 @@ gated(server.registerTool(
       if (spentLabel) changed.push(markRemoved(spentLabel));
     }
     if (plan.answer !== undefined) {
-      // The note is removed and the sticky note takes its place: the question is
-      // the heading of the answer inside the box, so keeping the note as well
-      // would draw it twice.
-      const postIt = buildAnswerPostIt(
+      // A loose note is removed and the sticky note takes its place: the
+      // question is the heading of the answer inside the box, so keeping the
+      // note as well would draw it twice. A question typed into the person's
+      // own sticky note keeps that note, and the answer is a second note
+      // grouped under it, holding the answer alone.
+      const answered = buildMentionAnswer(
         current,
+        updated,
+        answeredNote,
         plan.answer,
         { existing: new Map(room.getElements(true).map((e) => [e.id, e])), lastIndex: room.lastIndex() },
         room.handle,
         { link: plan.link, chain: nextChain(chainOf(current)) },
       );
-      changed.push(postIt.container, postIt.label);
+      updated = answered.mention;
+      changed.push(...answered.changed);
     }
     if (plan.line !== undefined) {
       // The note and its line are one thing on the canvas, so they are put in
@@ -1087,7 +1103,7 @@ gated(server.registerTool(
     const result = await room.commit(changed);
     markHandled(handledMentions, updated);
     markHandled(acknowledgedMentions, updated);
-    return text(`${acknowledgementText(id, plan)}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
+    return text(`${acknowledgementText(id, plan, answeredNote !== null)}${result.persisted ? "" : ` (not persisted: ${result.error})`}`);
   },
 ));
 
