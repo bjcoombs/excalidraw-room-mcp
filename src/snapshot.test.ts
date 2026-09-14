@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { inflateSync } from "node:zlib";
 import { test } from "node:test";
 import { buildElements, type ElementSpec, type ExcalidrawElement } from "./elements.js";
-import { buildSvg, MAX_PNG_BYTES, snapshotScene } from "./snapshot.js";
+import { buildSvg, MAX_PNG_BYTES, snapshotScene, stickyNoteDate } from "./snapshot.js";
 
 /** The four pinned lines of the text block, as a lookup. */
 function lines(text: string): string[] {
@@ -255,4 +255,54 @@ test("snapshot rotates a bound label with its container", () => {
   assert.match(svg, /<g transform="rotate\(90 100 50\)"><text /, svg);
   const unrotated = buildSvg([scene.find((e) => e.id === "r")!, label], { x: 0, y: 0, width: 400, height: 400 }, 400, 400);
   assert.doesNotMatch(unrotated, /rotate/, "a container at angle 0 rotates nothing");
+});
+
+// ---------------------------------------------------------------------------
+// Sticky notes: https://github.com/bjcoombs/excalidraw-room-mcp/issues/121
+
+/** Mid-month and mid-day, so the local date is the same in every time zone. */
+const JUNE_15_2020 = new Date(2020, 5, 15, 12).getTime();
+
+test("snapshot draws a stickynote with its label and footer date", async () => {
+  const scene = build([
+    { type: "stickynote", id: "n", x: 0, y: 0, label: "Ship it", strokeColor: "#e03131", backgroundColor: "#ffdf6b" },
+  ]);
+  const [note, label] = scene;
+  const box = { x: -20, y: -20, width: 300, height: 300 };
+
+  const now = build([{ type: "stickynote", id: "m", x: 0, y: 0 }]);
+  const today = new Date(now[0].created as number);
+  const thisYear = buildSvg(now, box, 300, 300);
+  assert.ok(thisYear.includes(`>${today.getDate()} ${today.toLocaleString("en-GB", { month: "short" }).slice(0, 3)}</text>`), thisYear);
+
+  const dated = [{ ...note, created: JUNE_15_2020 }, label];
+  const svg = buildSvg(dated, box, 300, 300);
+  // The shadow, 3 px down and right at 16 percent, then the fill with no border.
+  assert.match(svg, /<rect x="3" y="3" width="250" height="250" fill="#000000" fill-opacity="0.16"\/>/);
+  assert.match(svg, /<rect x="0" y="0" width="250" height="250" fill="#ffdf6b" stroke="none"\/>/);
+  // The label from the top-left inside the padding, in the note's ink.
+  assert.match(svg, /<text x="16" y="[\d.]+" font-family="DejaVu Sans" font-size="28" fill="#e03131" text-anchor="start">Ship it<\/text>/);
+  // The date bottom right at 12 px, with the year because it is not this one.
+  assert.match(svg, /<text x="234" y="236" font-family="DejaVu Sans" font-size="12" fill="#e03131" text-anchor="end">15 Jun 2020<\/text>/);
+
+  assert.equal(stickyNoteDate(JUNE_15_2020, false, new Date(2020, 0, 1).getTime()), "15 Jun");
+  assert.equal(stickyNoteDate(JUNE_15_2020, true), "15 Jun", "a narrow note leaves the year off");
+  assert.equal(stickyNoteDate(Number.NaN), null);
+  assert.equal(stickyNoteDate(8.64e15 + 1), null, "past the last date a Date can hold");
+  assert.match(buildSvg([{ ...note, created: JUNE_15_2020, width: 100 }], box, 300, 300), />15 Jun<\/text>/);
+  assert.doesNotMatch(buildSvg([{ ...note, created: JUNE_15_2020, width: 60 }], box, 300, 300), /Jun/, "under the data floor");
+
+  const snapshot = await snapshotScene(dated);
+  assert.ok(snapshot.png);
+  assert.deepEqual(snapshot.placeholders, [], "a sticky note is drawn, not a placeholder");
+  assert.deepEqual(snapshot.ids, ["n", label.id]);
+  assert.ok(hasInk(snapshot.png));
+});
+
+test("snapshot omits the footer date when created is null", () => {
+  const [note, label] = build([{ type: "stickynote", id: "n", x: 0, y: 0, label: "Ship it" }]);
+  const svg = buildSvg([{ ...note, created: null }, label], { x: 0, y: 0, width: 300, height: 300 }, 300, 300);
+  assert.equal(textAnchors(svg).length, 1, "the label and nothing else");
+  assert.doesNotMatch(svg, /font-size="12"/);
+  assert.match(svg, /fill="#ffdf6b" stroke="none"/, "the note itself is still drawn");
 });

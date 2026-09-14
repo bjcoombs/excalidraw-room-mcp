@@ -80,6 +80,15 @@ test("tools/list emits no array-valued items in any input schema", () => {
   }
 });
 
+test("add_elements accepts a stickynote and says what its strokeColor is", () => {
+  const addElements = tools.find((t) => t.name === "add_elements");
+  assert.ok(addElements, "add_elements is not in tools/list");
+  const type = JSON.stringify(addElements.inputSchema).match(/"type":\{"type":"string","enum":\[([^\]]*)\][^}]*\}/);
+  assert.ok(type, JSON.stringify(addElements.inputSchema));
+  assert.ok(type[1].split(",").includes('"stickynote"'), type[1]);
+  assert.match(type[0], /strokeColor its text colour/);
+});
+
 test("add_elements describes a point as a two-number array with object-form items", () => {
   const addElements = tools.find((t) => t.name === "add_elements");
   assert.ok(addElements, "add_elements is not in tools/list");
@@ -136,7 +145,10 @@ test("acknowledge_mention takes id, keep, reply, replyTo, status, answer and sou
   assert.match(ack.description ?? "", /answer/);
   assert.match(ack.description ?? "", /source/);
   assert.match(ack.description ?? "", /replyTo/);
-  assert.ok(!/note/.test(ack.description ?? ""), ack.description);
+  // "sticky note" is the element an answer is drawn as, not the argument.
+  assert.ok(!/note/.test((ack.description ?? "").replaceAll("sticky note", "")), ack.description);
+  assert.match(ack.description ?? "", /sticky note/);
+  assert.ok(!/post-it/i.test(ack.description ?? ""), ack.description);
 
   // Over stdio, both refusals come back as tool results the model can read,
   // not as protocol errors, and each names what it refused.

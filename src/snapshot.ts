@@ -16,7 +16,7 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { type ExcalidrawElement } from "./elements.js";
+import { STICKY_NOTE_MIN_SIZE, STICKY_NOTE_PADDING, type ExcalidrawElement } from "./elements.js";
 import { DEFAULT_NEARBY_RADIUS } from "./mentions.js";
 import { selectElements } from "./scene.js";
 
@@ -46,6 +46,18 @@ const DEFAULT_LINE_HEIGHT = 1.25;
 const ASCENT = 0.8;
 const ARROWHEAD_LENGTH = 16;
 const ARROWHEAD_ANGLE = Math.PI / 7;
+/**
+ * Sticky note paint, from packages/common/src/constants.ts at excalidraw
+ * afa3a653fc5d2b742adcbd5a6063187b056d2419: the drop shadow's offset and
+ * opacity, the footer date's size, how far its baseline sits above the note's
+ * bottom edge, and the body width under which the year is left off.
+ */
+const STICKY_NOTE_SHADOW_OFFSET = 3;
+const STICKY_NOTE_SHADOW_OPACITY = 0.16;
+const STICKY_NOTE_FOOTER_FONT_SIZE = 12;
+const STICKY_NOTE_FOOTER_BASELINE = 14;
+const STICKY_NOTE_FOOTER_YEAR_WIDTH = 80;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export interface Bbox {
   x: number;
@@ -239,6 +251,47 @@ function shapeSvg(el: ExcalidrawElement): string {
   return `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${num(height)}" ${paint}${rx}${rotateAttr(el)}/>`;
 }
 
+/**
+ * A sticky note's footer date: `d MMM`, with the year after it when that is
+ * not the current year, in local time. Null without a usable `created`.
+ * getStickyNoteDateLabel, packages/element/src/stickyNote.ts @ afa3a65.
+ */
+export function stickyNoteDate(created: unknown, short = false, now = Date.now()): string | null {
+  if (typeof created !== "number" || !Number.isFinite(created)) return null;
+  const date = new Date(created);
+  if (Number.isNaN(date.getTime())) return null;
+  const label = `${date.getDate()} ${MONTHS[date.getMonth()]}`;
+  const year = date.getFullYear();
+  return short || year === new Date(now).getFullYear() ? label : `${label} ${year}`;
+}
+
+/**
+ * A sticky note as upstream paints it, flattened: a shadow offset down and to
+ * the right, the fill with no border, and the creation date bottom right in
+ * the note's ink. Corners are straight; the jittered outline is not drawn.
+ * The footer follows getStickyNoteFooter @ afa3a65, which leaves it off a
+ * note under the data floor.
+ */
+function stickyNoteSvg(el: ExcalidrawElement): string {
+  const { x, y, width, height } = elementBox(el);
+  const fill = fillOf(el);
+  const ink = el.strokeColor && el.strokeColor !== "transparent" ? el.strokeColor : DEFAULT_STROKE;
+  const parts = [
+    `<rect x="${num(x + STICKY_NOTE_SHADOW_OFFSET)}" y="${num(y + STICKY_NOTE_SHADOW_OFFSET)}" width="${num(width)}" height="${num(height)}" fill="#000000" fill-opacity="${STICKY_NOTE_SHADOW_OPACITY}"/>`,
+    `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${num(height)}" fill="${fill}" stroke="none"/>`,
+  ];
+  const date =
+    width < STICKY_NOTE_MIN_SIZE || height < STICKY_NOTE_MIN_SIZE
+      ? null
+      : stickyNoteDate(el.created, width - STICKY_NOTE_PADDING * 2 < STICKY_NOTE_FOOTER_YEAR_WIDTH);
+  if (date) {
+    parts.push(
+      `<text x="${num(x + width - STICKY_NOTE_PADDING)}" y="${num(y + height - STICKY_NOTE_FOOTER_BASELINE)}" font-family="${FONT_FAMILY}" font-size="${STICKY_NOTE_FOOTER_FONT_SIZE}" fill="${xml(ink)}" text-anchor="end">${xml(date)}</text>`,
+    );
+  }
+  return `<g${opacityAttr(el)}${rotateAttr(el)}>${parts.join("")}</g>`;
+}
+
 function arrowheadSvg(
   tip: [number, number],
   from: [number, number],
@@ -307,9 +360,12 @@ function textSvg(el: ExcalidrawElement, container: ExcalidrawElement | undefined
   const lineHeight = (el as { lineHeight?: number }).lineHeight ?? DEFAULT_LINE_HEIGHT;
   const step = fontSize * lineHeight;
   const box = elementBox(el);
-  const { anchor, offset } = container ? { anchor: "middle", offset: 0.5 } : anchorFor((el as { textAlign?: string }).textAlign);
+  // A sticky note's label keeps its own alignment: the note lays it out from
+  // the top-left as a column of prose, not as a caption centred in a shape.
+  const centred = container !== undefined && container.type !== "stickynote";
+  const { anchor, offset } = centred ? { anchor: "middle", offset: 0.5 } : anchorFor((el as { textAlign?: string }).textAlign);
   const x = box.x + box.width * offset;
-  const top = container ? box.y + (box.height - lines.length * step) / 2 : box.y;
+  const top = centred ? box.y + (box.height - lines.length * step) / 2 : box.y;
   const fill = el.strokeColor && el.strokeColor !== "transparent" ? el.strokeColor : DEFAULT_STROKE;
   const spans = lines.map(
     (line, i) =>
@@ -333,6 +389,7 @@ function placeholderSvg(el: ExcalidrawElement): string {
 function elementSvg(el: ExcalidrawElement, byId: Map<string, ExcalidrawElement>): string {
   if (PLACEHOLDER_TYPES.includes(el.type)) return placeholderSvg(el);
   if (el.type === "rectangle" || el.type === "ellipse" || el.type === "diamond") return shapeSvg(el);
+  if (el.type === "stickynote") return stickyNoteSvg(el);
   if (el.type === "arrow" || el.type === "line") return linearSvg(el);
   if (el.type === "freedraw") return freedrawSvg(el);
   if (el.type === "text") {
@@ -361,7 +418,7 @@ export function buildSvg(
 
 /** Which element types in a selection have no SVG writer, in scene order. */
 export function placeholderIds(elements: readonly ExcalidrawElement[]): string[] {
-  const drawn = new Set(["rectangle", "ellipse", "diamond", "arrow", "line", "freedraw", "text"]);
+  const drawn = new Set(["rectangle", "ellipse", "diamond", "stickynote", "arrow", "line", "freedraw", "text"]);
   return elements.filter((e) => !drawn.has(e.type)).map((e) => e.id);
 }
 

@@ -197,8 +197,8 @@ function previousLineFor(id: string, elements: readonly ExcalidrawElement[] = ro
 
 /**
  * What the agent last wrote about this mention: the line still under the note,
- * or failing that the answer a post-it beside it already gives to the same
- * question. An answered note is removed from the canvas, so the post-it is the
+ * or failing that the answer a sticky note beside it already gives to the same
+ * question. An answered note is removed from the canvas, so the sticky note is the
  * only history a note asking again can carry.
  */
 function previousFor(mention: Mention, elements: readonly ExcalidrawElement[], radius: number): PreviousLine | null {
@@ -365,14 +365,18 @@ const placeSchema = z
 
 const elementSpec = z
   .object({
-    type: z.enum(["rectangle", "ellipse", "diamond", "text", "arrow", "line", "freedraw"]),
+    type: z
+      .enum(["rectangle", "ellipse", "diamond", "text", "arrow", "line", "freedraw", "stickynote"])
+      .describe(
+        "stickynote is excalidraw.com's sticky note: 250x250 and #ffdf6b unless width, height and backgroundColor say otherwise, its label shrinking from fontSize (28) to fit before the note grows taller, and strokeColor its text colour.",
+      ),
     id: z.string().optional().describe("Optional id. Random if omitted. Use to reference the element from a later spec."),
     x: z.number().optional(),
     y: z.number().optional(),
     width: z.number().optional(),
     height: z.number().optional(),
     text: z.string().optional().describe("Content of a text element."),
-    label: z.string().optional().describe("Text bound inside a shape or on an arrow."),
+    label: z.string().optional().describe("Text bound inside a shape or sticky note, or on an arrow."),
     link: z.string().optional().describe("URL the element links to. Excalidraw shows a link icon on it; defaults to no link."),
     fontSize: z.number().optional(),
     points: z.array(point).optional().describe("Absolute [x,y] points for arrow, line or freedraw."),
@@ -1000,7 +1004,7 @@ server.registerTool(
   {
     description:
       "Mark a mention as handled so it is not returned again. By default the text element is removed from the canvas (soft-deleted): the seen marker already told the person it landed and the drawing is the evidence it was done. Say what you did in chat, not on the canvas - artefacts of the work belong there, prose about it does not. " +
-      `Pass status ${MENTION_STATUSES.map((v) => `"${v}"`).join(" or ")} to keep the element instead, greyed with one check mark, and draw that status under it on its own grey line reading "claude: <status>" - use it when the person has to read the outcome where they wrote the request. Pass keep true to keep it greyed with a check mark and draw nothing. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: your question is drawn on the same line under it, as "claude: <question>", so the person answers where they asked. A reply to a mention another agent wrote is addressed to that agent by default, as "claude: @<its handle> <question>", so it reaches that agent as a mention of its own; replyTo addresses it to a different handle instead, and the room's agentReplyDepth bounds how far such a chain runs. Pass answer (up to ${MAX_ANSWER_LENGTH} characters) for a knowledge question, while set_mention_policy has answering on: the text element is replaced by a yellow post-it in its place, holding the question, your answer wrapped to ${POSTIT_WIDTH} px and your handle, and source puts a public URL behind it. Whatever you were given, the person's own words are left exactly as they wrote them. status, reply and answer exclude each other. Editing the text makes the mention pending again and what you wrote comes back with it.`,
+      `Pass status ${MENTION_STATUSES.map((v) => `"${v}"`).join(" or ")} to keep the element instead, greyed with one check mark, and draw that status under it on its own grey line reading "claude: <status>" - use it when the person has to read the outcome where they wrote the request. Pass keep true to keep it greyed with a check mark and draw nothing. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: your question is drawn on the same line under it, as "claude: <question>", so the person answers where they asked. A reply to a mention another agent wrote is addressed to that agent by default, as "claude: @<its handle> <question>", so it reaches that agent as a mention of its own; replyTo addresses it to a different handle instead, and the room's agentReplyDepth bounds how far such a chain runs. Pass answer (up to ${MAX_ANSWER_LENGTH} characters) for a knowledge question, while set_mention_policy has answering on: the text element is replaced by a yellow sticky note in its place, ${POSTIT_WIDTH} px wide, holding the question, your answer and your handle, and source puts a public URL behind it. Whatever you were given, the person's own words are left exactly as they wrote them. status, reply and answer exclude each other. Editing the text makes the mention pending again and what you wrote comes back with it.`,
     inputSchema: z
       .object({
         id: z.string().describe("The mention's element id from wait_for_mention or list_mentions."),
@@ -1024,13 +1028,13 @@ server.registerTool(
         answer: answerSchema
           .optional()
           .describe(
-            `What the question asks, in at most two sentences and ${MAX_ANSWER_LENGTH} characters, drawn on a post-it that takes the place of the text element while set_mention_policy has answerQuestions on. Built from the words above and public knowledge only, never from the conversation or anything seen outside the room. ${MENTION_POLICY_HOSTING_RULE} Excludes status and reply; put the depth behind source rather than writing more here.`,
+            `What the question asks, in at most two sentences and ${MAX_ANSWER_LENGTH} characters, drawn on a sticky note that takes the place of the text element while set_mention_policy has answerQuestions on. Built from the words above and public knowledge only, never from the conversation or anything seen outside the room. ${MENTION_POLICY_HOSTING_RULE} Excludes status and reply; put the depth behind source rather than writing more here.`,
           ),
         source: z
           .string()
           .url()
           .optional()
-          .describe("Public URL the answer cites. It becomes the link on the answer post-it, which is where depth belongs. Needs answer."),
+          .describe("Public URL the answer cites. It becomes the link on the answer sticky note, which is where depth belongs. Needs answer."),
       })
       // Strict on purpose: `note` was this tool's free-text status until 0.7.0,
       // and a caller still passing it must be told the argument is gone rather
@@ -1058,7 +1062,7 @@ server.registerTool(
     // never reads back as a new mention, and neither does a later move.
     // A reply leaves the note live in the colour it was written in, because
     // the line under it asks something; keep and status grey it as spent; an
-    // answer removes it, because the post-it drawn below carries the question
+    // answer removes it, because the sticky note drawn below carries the question
     // itself and nothing should ask it twice.
     let updated = plan.replies ? markReplied(current) : plan.kept ? markAcknowledged(current) : markRemoved(current);
     // Whatever this acknowledgement does, whatever the last one wrote is spent:
@@ -1066,7 +1070,7 @@ server.registerTool(
     const stale = findAttributedLine(room.getElements(), id);
     const changed: ExcalidrawElement[] = [];
     if (stale) changed.push(markRemoved(stale));
-    // A post-it answering this note from an earlier acknowledgement is spent
+    // A sticky note answering this note from an earlier acknowledgement is spent
     // too, and it takes its bound text with it: a container tombstoned on its
     // own leaves the words floating where the box was.
     const spent = findAnswerPostIt(room.getElements(), id);
@@ -1076,7 +1080,7 @@ server.registerTool(
       if (spentLabel) changed.push(markRemoved(spentLabel));
     }
     if (plan.answer !== undefined) {
-      // The note is removed and the post-it takes its place: the question is
+      // The note is removed and the sticky note takes its place: the question is
       // the heading of the answer inside the box, so keeping the note as well
       // would draw it twice.
       const postIt = buildAnswerPostIt(

@@ -11,7 +11,7 @@
  * could not step through (issue #30).
  *
  * First, the scene is pushed into the canvas from an effect and never from a
- * render. `excalidrawAPI` hands over the imperative API during Excalidraw's own
+ * render. `onExcalidrawAPI` hands over the imperative API during Excalidraw's own
  * render, before its component has mounted, and `updateScene` on an unmounted
  * Excalidraw is a silent no-op - it logs React's "can't call setState on a
  * component that is not yet mounted" and draws nothing. A seed result that
@@ -123,14 +123,16 @@ export function RoomView({ app }: { app: App }) {
     const bounds = sceneBounds(elements);
     if (bounds && boundsChanged(lastBounds.current, bounds)) {
       lastBounds.current = bounds;
-      // Guarded by boundsChanged above: fitToContent runs on first paint and
+      // Guarded by boundsChanged above: the fit runs on first paint and
       // whenever an edge moved, and never for an edit inside the existing box,
-      // which would yank a viewport the reader is looking at. canvasOffsets is
-      // the only padding fitToContent takes.
-      instance.scrollToContent(elements as never, {
-        fitToContent: true,
-        animate: false,
-        canvasOffsets: { top: FIT_PADDING, right: FIT_PADDING, bottom: FIT_PADDING, left: FIT_PADDING },
+      // which would yank a viewport the reader is looking at. `contain` zooms
+      // the drawing to fill the canvas, and offsets are the only padding
+      // setViewport takes.
+      instance.setViewport({
+        target: elements as never,
+        fit: "contain",
+        animation: false,
+        offsets: { top: FIT_PADDING, right: FIT_PADDING, bottom: FIT_PADDING, left: FIT_PADDING },
       });
     } else if (!bounds) {
       lastBounds.current = null;
@@ -343,7 +345,7 @@ export function RoomView({ app }: { app: App }) {
         <Excalidraw
           // Called during Excalidraw's render, so this records the API and
           // nothing else; the effect above does the drawing once it is mounted.
-          excalidrawAPI={(instance) => {
+          onExcalidrawAPI={(instance) => {
             api.current = instance;
           }}
           viewModeEnabled

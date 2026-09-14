@@ -1246,7 +1246,7 @@ test("the mention policy starts off, is set in memory and reset on join", () => 
   assert.match(MENTION_POLICY_HOSTING_RULE, /never write client-identifiable/);
 });
 
-test("an answer becomes a 360 px post-it that replaces the note", () => {
+test("an answer is drawn as a stickynote at the note's position with the source as its link", () => {
   const blue = "#1971c2";
   const [question] = buildElements(
     [{ type: "text", id: "q", x: 40, y: 80, text: `@claude what is a 303${SEEN_MARKER}`, strokeColor: blue }],
@@ -1260,7 +1260,7 @@ test("an answer becomes a 360 px post-it that replaces the note", () => {
   assert.equal(plan.refusal, undefined);
   assert.equal(plan.answers, true);
   assert.equal(plan.answer, answer);
-  assert.equal(plan.kept, false, "the note goes and the post-it takes its place");
+  assert.equal(plan.kept, false, "the note goes and the sticky note takes its place");
   assert.equal(plan.replies, false);
   assert.equal(plan.line, undefined, "nothing is written under a note that is gone");
   assert.equal(plan.link, source);
@@ -1268,20 +1268,21 @@ test("an answer becomes a 360 px post-it that replaces the note", () => {
   assert.equal(unsourced.link, undefined, "no source, no link");
   assert.ok(!("link" in unsourced), "and no link key at all");
   assert.equal(planAcknowledgement({ answer: `  ${answer}  ` }).answer, answer, "trimmed");
-  assert.match(acknowledgementText("q", plan), /replaced the note with a post-it/);
+  assert.match(acknowledgementText("q", plan), /replaced the note with a sticky note/);
 
+  const before = Date.now();
   const { container, label } = buildAnswerPostIt(question, plan.answer!, ctx(), "alpha", { link: plan.link });
-  assert.equal(container.type, "rectangle");
-  assert.deepEqual(container.roundness, { type: 3 }, "rounded, as a post-it is");
+  assert.equal(container.type, "stickynote");
   assert.equal(container.width, 360);
   assert.equal(container.width, POSTIT_WIDTH);
   assert.equal(container.x, question.x, "where the note was");
   assert.equal(container.y, question.y);
   assert.equal(container.backgroundColor, POSTIT_FILL);
-  assert.equal(container.backgroundColor, "#fff3bf");
-  assert.equal(container.strokeColor, ACKNOWLEDGED_STROKE);
-  assert.equal(container.strokeColor, "#868e96");
-  assert.equal(container.strokeWidth, 1);
+  assert.equal(container.backgroundColor, "#ffdf6b");
+  assert.equal(container.strokeColor, DEFAULT_INK, "a sticky note's stroke is its ink, not a border");
+  assert.equal(container.strokeColor, "#1e1e1e");
+  assert.equal(container.baseHeight, 250);
+  assert.ok(Number(container.created) >= before, "dated, for the footer");
   assert.equal(container.link, source);
   assert.equal(container.isDeleted, false);
   const data = container.customData as Record<string, unknown>;
@@ -1291,28 +1292,27 @@ test("an answer becomes a 360 px post-it that replaces the note", () => {
   assert.equal(data.authorKind, AGENT_AUTHOR_KIND);
   assert.equal(elementAuthor(container), "alpha");
 
-  // The words are bound inside the box, so the two drag as one piece.
+  // The words are bound inside the note, so the two drag as one piece.
   assert.equal(label.containerId, container.id);
   assert.deepEqual(container.boundElements, [{ id: label.id, type: "text" }]);
   assert.equal(label.strokeColor, DEFAULT_INK);
-  assert.equal(label.strokeColor, "#1e1e1e");
   assert.equal(elementAuthor(label), "alpha");
+  assert.equal(label.baseFontSize, 20, "the question's own font size is the ceiling");
+  assert.equal(label.originalText, postItText("what is a 303", answer, "alpha"));
   const text = label.text as string;
   assert.ok(text.startsWith("what is a 303"), text);
   assert.ok(text.endsWith("- alpha"), text);
   assert.ok(text.includes("A 303 tells the client"), text);
   assert.equal(text.split("\n\n").length, 3, "question, answer, signature");
+  assert.deepEqual(postItParagraphs(text), { question: "what is a 303", answer, signature: "- alpha" });
   const lines = text.split("\n");
   assert.ok(lines.length >= 4, `${lines.length} lines`);
   for (const line of lines) {
-    assert.ok(measureText(line, Number(label.fontSize)).width <= POSTIT_WIDTH, `too wide: ${line}`);
+    assert.ok(measureText(line, Number(label.fontSize)).width <= POSTIT_WIDTH - 32, `too wide: ${line}`);
   }
-  assert.equal(label.height, measureText(text, Number(label.fontSize)).height);
-  assert.equal(container.height, label.height + 2 * LABEL_PADDING);
-  assert.ok(container.height > label.height, "the words fit with padding to spare");
-  assert.equal(label.y, container.y + LABEL_PADDING, "against the top, read from the first line down");
-  assert.ok(label.x >= container.x, "and inside the box");
-  assert.ok(label.x + label.width <= container.x + container.width);
+  assert.ok(container.height >= 250 && container.height >= Number(label.height) + 52, "the words fit the note");
+  assert.equal(label.y, container.y + 16, "against the top, read from the first line down");
+  assert.equal(label.x, container.x + 16, "and from the left");
   assert.equal(label.textAlign, "left");
   assert.equal(label.verticalAlign, "top");
   assert.equal(label.fontFamily, question.fontFamily, "the note's own font");
@@ -1320,21 +1320,50 @@ test("an answer becomes a 360 px post-it that replaces the note", () => {
   const plain = buildAnswerPostIt(question, answer, ctx());
   assert.equal(plain.container.link, null, "no source, no link icon");
   assert.ok((plain.label.text as string).endsWith(`- ${FALLBACK_AUTHOR}`), "and the fallback signature");
+  const chained = buildAnswerPostIt(question, "Paris", ctx(), "alpha", { chain: { rootAuthorKind: "person", depth: 1 } });
+  assert.deepEqual(chained.container.customData, {
+    [REPLY_CUSTOM_DATA_KEY]: "q",
+    [REPLY_KIND_CUSTOM_DATA_KEY]: ANSWER_KIND,
+    ...chainCustomData({ rootAuthorKind: "person", depth: 1 }),
+    author: "alpha",
+    authorKind: AGENT_AUTHOR_KIND,
+  });
 
   // The note itself is gone: nothing on the canvas asks the question twice.
   const removed = markRemoved(question);
   assert.equal(removed.isDeleted, true);
   assert.equal(findMentions([removed, container, label]).length, 0);
+});
 
-  // A later acknowledgement finds the post-it it wrote, and its words with it.
-  const scene = [removed, container, label];
+test("an answer stickynote is found as the spent answer on a second acknowledgement", () => {
+  const [question] = buildElements([{ type: "text", id: "q", x: 40, y: 80, text: "@claude what is a 303" }], ctx()).created;
+  const { container, label } = buildAnswerPostIt(question, "A redirect to GET.", ctx(), "alpha");
+  assert.equal(container.type, "stickynote");
+  const scene = [markRemoved(question), container, label];
   assert.equal(findAnswerPostIt(scene, "q")?.id, container.id);
   assert.equal(findAnswerPostIt(scene, "other"), null);
   assert.equal(findAnswerPostIt([markRemoved(container), label], "q"), null);
-  assert.equal(findAnswerPostIt([label], "q"), null, "the bound text is not the post-it");
-  assert.equal(boundLabelOf(scene, container)?.id, label.id);
+  assert.equal(findAnswerPostIt([label], "q"), null, "the bound text is not the sticky note");
+  assert.equal(boundLabelOf(scene, container)?.id, label.id, "and its words go with it");
   assert.equal(boundLabelOf([container, markRemoved(label)], container), null);
   assert.equal(boundLabelOf([container], container), null);
+
+  // Asked again beside it, the sticky note is the history.
+  const again = rawElement({ id: "q2", type: "text", x: 40, y: 400, width: 200, height: 25, text: "@claude what is a 303" });
+  assert.deepEqual(previousAnswerNear([...scene, again], mentionOf(again)), { kind: "answer", text: "A redirect to GET." });
+});
+
+test("a rectangle post-it from an earlier release is still found as the spent answer", () => {
+  // As 0.8.1 drew it: a rounded rectangle with the words bound inside it.
+  const [box, words] = buildElements(
+    [{ type: "rectangle", id: "p", x: 40, y: 80, width: 360, height: 145, label: postItText("what is a 303", "A redirect to GET.", "alpha") }],
+    ctx(),
+  ).created;
+  const legacy = { ...box, customData: { [REPLY_CUSTOM_DATA_KEY]: "q", [REPLY_KIND_CUSTOM_DATA_KEY]: ANSWER_KIND } };
+  assert.equal(findAnswerPostIt([legacy, words], "q")?.id, "p");
+  assert.equal(boundLabelOf([legacy, words], legacy)?.id, words.id);
+  const again = rawElement({ id: "q2", type: "text", x: 40, y: 260, width: 200, height: 25, text: "@claude what is a 303" });
+  assert.deepEqual(previousAnswerNear([legacy, words, again], mentionOf(again)), { kind: "answer", text: "A redirect to GET." });
 });
 
 test("reply and status lines wrap at 360 px", () => {
@@ -1444,6 +1473,8 @@ test("a new note near a post-it with the same question reports previous answer",
   assert.equal(paragraphs.answer, answer, "unwrapped back to the line it was given as");
   assert.equal(paragraphs.signature, "- alpha");
   assert.equal(postItText("q", "a", "alpha"), "q\n\na\n\n- alpha");
+  assert.equal(postItText("  q  ", "  a  ", "alpha"), "q\n\na\n\n- alpha", "each paragraph trimmed");
+  assert.equal(postItParagraphs("q\n\n\n\n\n\n- alpha").answer, "", "blank paragraphs are no answer");
   assert.equal(postItText("q", "a", null), `q\n\na\n\n- ${FALLBACK_AUTHOR}`);
   assert.equal(strippedQuestion(`@alpha @claude what is a 303 ${ACKNOWLEDGED_MARK}`), "what is a 303");
   assert.equal(strippedQuestion("what an @alpha does"), "what an @alpha does", "only leading tags");
@@ -1591,12 +1622,12 @@ test("the refusal messages, the marker colours and the custom-data keys are what
   );
   assert.equal(
     ANSWER_WITH_STATUS_TEXT,
-    "answer and status exclude each other: an answer replaces the note with a post-it holding the question and what " +
+    "answer and status exclude each other: an answer replaces the note with a sticky note holding the question and what " +
       "you wrote, a status greys the note out as handled. Pass one or the other.",
   );
   assert.equal(
     ANSWER_WITH_REPLY_TEXT,
-    "answer and reply exclude each other: an answer replaces the note with a post-it holding what you know, a reply " +
+    "answer and reply exclude each other: an answer replaces the note with a sticky note holding what you know, a reply " +
       "keeps it and writes the question you need answered under it. Pass one or the other.",
   );
 
@@ -2127,7 +2158,7 @@ test("the post-it and the attributed line fall back to the canvas defaults when 
   assert.equal(label.fontSize, 20);
   assert.equal(label.fontFamily, 5);
   assert.equal(label.text, postItText("", "Paris", "alpha"), "no words on the note means no question on the post-it");
-  assert.equal(container.height, (label.height as number) + 2 * LABEL_PADDING);
+  assert.equal(container.height, 250, "a short answer leaves the note at its base height");
 });
 
 test("the seen and acknowledged marks hold on a note with no text, font size or autoResize", () => {

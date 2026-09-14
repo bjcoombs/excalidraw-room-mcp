@@ -45,7 +45,7 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
-    "@excalidraw/excalidraw": "^0.18.1",
+    "@excalidraw/excalidraw": "0.18.0-afa3a65",
     "@stryker-mutator/core": "^10.0.0",
     "@types/node": "22.15.3",
     "@types/react": "^18.3.31",
