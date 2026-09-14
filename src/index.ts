@@ -22,7 +22,8 @@ import {
   type ExcalidrawElement,
 } from "./elements.js";
 import { forcedLine, protectedBy, refusalLines, type Refusal } from "./guard.js";
-import { defaultHandle, isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
+import { isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
+import { HELP_TOPIC_NAMES, helpText, README_URL, readReadme } from "./help.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
   agentReplyDepthLine,
@@ -30,10 +31,7 @@ import {
   agentReplyDepthSchema,
   answerSchema,
   buildAttributedLine,
-  BROADCAST_TAG,
   chainOf,
-  DEFAULT_AGENT_REPLY_DEPTH,
-  DEFAULT_NEARBY_RADIUS,
   findAttributedLine,
   findHandledMentions,
   findMentions,
@@ -50,15 +48,8 @@ import {
   markSeen,
   acknowledgementText,
   planAcknowledgement,
-  POSTIT_WIDTH,
   previousAnswerNear,
-  MAX_ANSWER_LENGTH,
-  MAX_REPLY_LENGTH,
-  MAX_AGENT_REPLY_DEPTH,
-  MENTION_POLICY_HOSTING_RULE,
-  MENTION_STATUSES,
   MentionPolicy,
-  MIN_AGENT_REPLY_DEPTH,
   newGroupId,
   nextChain,
   policyLine,
@@ -79,7 +70,6 @@ import {
 import { openRoom } from "./open.js";
 import {
   CLUSTER_CUSTOM_DATA_KEY,
-  DEFAULT_GAP,
   SIDES,
   integralSize,
   nearRadius,
@@ -93,7 +83,7 @@ import {
 import { buildPollPayload, pollText } from "./poll.js";
 import { commitLine, persistedLine, RoomClient } from "./room.js";
 import { selectElements, unknownIdsText } from "./scene.js";
-import { DEFAULT_MAX_DIMENSION, MAX_SCALE, snapshotScene } from "./snapshot.js";
+import { MAX_SCALE, snapshotScene } from "./snapshot.js";
 import {
   buildShowRoomPayload,
   CANVAS_RESOURCE_URI,
@@ -117,14 +107,14 @@ const room = new RoomClient();
 /**
  * Read-only clients for rooms this process is asked to render but is not
  * working in. A host may route a canvas widget's calls to a process other than
- * the one its conversation uses, so `show_room {link}` is answered from here
+ * the one its conversation uses, so `scene_show {link}` is answered from here
  * rather than by moving the process. See src/viewers.ts.
  */
 const viewers = new ViewerPool();
 /**
  * Mentions already surfaced to an agent, by element id -> the words they
  * carried, the server's markers stripped. Reset on join. This is what stops
- * wait_for_mention returning the same note twice in a row; it is deliberately
+ * mention_wait returning the same note twice in a row; it is deliberately
  * not what "pending" means.
  */
 let handledMentions: HandledNotes = new Map();
@@ -134,8 +124,8 @@ let handledMentions: HandledNotes = new Map();
  *
  * Pending means unacknowledged, not unseen. A note an agent has looked at but
  * not acted on is still an open request: the canvas widget has to be able to
- * announce it from its button, list_mentions has to be able to show it again, and poll_room
- * has to keep reporting it. Only acknowledge_mention closes a mention.
+ * announce it from its button, mention_list has to be able to show it again, and mention_poll
+ * has to keep reporting it. Only mention_acknowledge closes a mention.
  */
 let acknowledgedMentions: HandledNotes = new Map();
 /**
@@ -155,8 +145,8 @@ room.on("joined", () => {
  * Every mention of any of `tags` that has not been acknowledged, seen or not,
  * as this agent should see it: another agent's note is dropped unless the
  * caller asked for it. Both the addressing (which tags) and the filtering
- * (which authors) are applied in one place, so `list_mentions`, `poll_room`,
- * `wait_for_mention` and `show_room` cannot disagree about what is pending.
+ * (which authors) are applied in one place, so `mention_list`, `mention_poll`,
+ * `mention_wait` and `scene_show` cannot disagree about what is pending.
  */
 function pendingMentions(
   tags: readonly string[],
@@ -208,7 +198,7 @@ function previousFor(mention: Mention, elements: readonly ExcalidrawElement[], r
 /**
  * One mention rendered with its neighbourhood: the elements around it and the
  * hop markers saying why the far ones are there. Every mention block goes
- * through here so `read_scene near`, `snapshot_scene near` and the mention
+ * through here so `scene_read near`, `scene_snapshot near` and the mention
  * tools all read the same neighbourhood.
  */
 function mentionBlock(
@@ -228,7 +218,7 @@ function mentionBlock(
  * read back as a new mention, while a later human edit changes those words,
  * re-pends it and the next seen pass rewrites the marker.
  *
- * Only the words the tool returned are marked. list_mentions commits one
+ * Only the words the tool returned are marked. mention_list commits one
  * mention at a time, so a person can edit a later one while an earlier commit
  * is in flight; marking that newer text would record words the caller never
  * saw and swallow the edit. Leave it pending instead. A note somebody merely
@@ -253,20 +243,21 @@ async function commitSeen(mention: Mention): Promise<void> {
   }
 }
 
-const autoSeenSchema = z
-  .boolean()
-  .default(true)
-  .describe("Mark the mention seen on the canvas (amber stroke plus a marker) as soon as it is returned. Set false for silent polling.");
+/*
+ * Argument descriptions are capped at 100 characters and tool descriptions at
+ * 300, and src/budget.test.ts holds the whole tools/list under 10,000: every
+ * character here is in the model's context on every turn. The rules and formats
+ * these used to spell out are in README, served by room_help.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/108
+ */
+const autoSeenSchema = z.boolean().default(true);
 
 /**
  * The ownership guard's override. Off by default, so the safe behaviour is the
  * one an agent gets without thinking about it; the noisy path is the one it has
  * to ask for.
  */
-const forceSchema = z
-  .boolean()
-  .default(false)
-  .describe("Edit elements another agent in the room drew anyway. Without it those ids are skipped and reported as refused, so the agent still working on them keeps a true picture of the scene.");
+const forceSchema = z.boolean().default(false);
 
 /**
  * Splits requested ids into the ones this server may edit and the ones another
@@ -302,23 +293,13 @@ function guardNote(refusals: readonly Refusal[], force: boolean): string {
  * own handle, which is only known once it is in a room. An explicit tag still
  * behaves exactly as it did.
  */
-const tagSchema = z
-  .string()
-  .optional()
-  .describe(
-    `Text a note must contain to count as a mention. Omit it and this server answers to its own handle - "@<handle>", the handle room_status reports - and to "${BROADCAST_TAG}", the broadcast tag every agent in the room hears; matching is case-insensitive. Pass a tag to match that text alone, which is how you read notes addressed to someone else.`,
-  );
+const tagSchema = z.string().optional();
 
 /**
  * Off by default: two agents listening in one room would otherwise answer each
  * other's requests, and each other's answers, without either being asked.
  */
-const answerAgentMentionsSchema = z
-  .boolean()
-  .default(false)
-  .describe(
-    "Also return notes written by another agent in the room. False by default: a note stamped with another agent's handle is dropped, while notes people wrote (nothing stamps them) and this server's own notes are always returned. True returns them all, each with the 'from: <handle>' line naming its author - up to the room's agentReplyDepth, which bounds how far a chain an agent started may run before this agent stops hearing it. A chain a person started is never bounded.",
-  );
+const answerAgentMentionsSchema = z.boolean().default(false);
 
 /**
  * An [x, y] pair. Deliberately an array-with-length rather than a zod tuple:
@@ -327,10 +308,7 @@ const answerAgentMentionsSchema = z
  * it. `.length(2)` still rejects anything but exactly two numbers at runtime.
  * https://github.com/bjcoombs/excalidraw-room-mcp/issues/28
  */
-const point = z
-  .array(z.number())
-  .length(2)
-  .describe("An [x, y] pair.");
+const point = z.array(z.number()).length(2);
 
 /**
  * Where to put the element, instead of where. Given `place`, the server finds
@@ -340,48 +318,40 @@ const point = z
  */
 const placeSchema = z
   .object({
-    near: z.string().optional().describe("Id of the element to sit beside. The slot is the first free one on the chosen side."),
-    cluster: z
-      .string()
-      .optional()
-      .describe(
-        "Id of an element whose cluster to join: its group, its frame, or the nodes already placed in it. The slot search fills the cluster's footprint before growing it, and the result says when the cluster no longer fits inside the room's neighbourhood radius.",
-      ),
-    side: z
-      .enum(SIDES)
-      .optional()
-      .describe("Which side of the anchor to take, or 'auto' (the default) for the nearest free side."),
-    gap: z.number().min(0).optional().describe(`Space left around the element, in canvas px. ${DEFAULT_GAP} by default.`),
-    newCluster: z
-      .boolean()
-      .optional()
-      .describe(
-        "Start a separate cluster: the slot is more than the room's neighbourhood radius clear of the anchor's cluster, so a mention written on one does not pull in the other. Needs near.",
-      ),
+    near: z.string().optional(),
+    cluster: z.string().optional(),
+    side: z.enum(SIDES).optional(),
+    gap: z.number().min(0).optional(),
+    newCluster: z.boolean().optional(),
   })
   .strict()
-  .optional()
-  .describe("Let the server choose the coordinates. Given this, x and y are ignored.");
+  .optional();
 
+const ELEMENT_TYPES = ["rectangle", "ellipse", "diamond", "text", "arrow", "line", "freedraw", "stickynote"] as const;
+
+/**
+ * The full element spec, checked inside the scene_add handler rather than
+ * emitted in tools/list. Declared field by field it serialises to about 1,400
+ * characters with no descriptions at all, over the 900 a single tools/list
+ * entry may cost, so the emitted schema names the type and lists the fields in
+ * its description, and this strict object still refuses a misspelt key by name.
+ * README "Element specs" documents each field; room_help {topic: "scene"} serves it.
+ */
 const elementSpec = z
   .object({
-    type: z
-      .enum(["rectangle", "ellipse", "diamond", "text", "arrow", "line", "freedraw", "stickynote"])
-      .describe(
-        "stickynote is excalidraw.com's sticky note: 250x250 and #ffdf6b unless width, height and backgroundColor say otherwise, its label shrinking from fontSize (28) to fit before the note grows taller, and strokeColor its text colour.",
-      ),
-    id: z.string().optional().describe("Optional id. Random if omitted. Use to reference the element from a later spec."),
+    type: z.enum(ELEMENT_TYPES),
+    id: z.string().optional(),
     x: z.number().optional(),
     y: z.number().optional(),
     width: z.number().optional(),
     height: z.number().optional(),
-    text: z.string().optional().describe("Content of a text element."),
-    label: z.string().optional().describe("Text bound inside a shape or sticky note, or on an arrow."),
-    link: z.string().optional().describe("URL the element links to. Excalidraw shows a link icon on it; defaults to no link."),
+    text: z.string().optional(),
+    label: z.string().optional(),
+    link: z.string().optional(),
     fontSize: z.number().optional(),
-    points: z.array(point).optional().describe("Absolute [x,y] points for arrow, line or freedraw."),
-    start: z.string().optional().describe("Id of the element an arrow or line starts at."),
-    end: z.string().optional().describe("Id of the element an arrow or line ends at."),
+    points: z.array(point).optional(),
+    start: z.string().optional(),
+    end: z.string().optional(),
     strokeColor: z.string().optional(),
     backgroundColor: z.string().optional(),
     strokeWidth: z.number().optional(),
@@ -396,6 +366,20 @@ const elementSpec = z
   })
   .strict();
 
+const elementSpecs = z.array(elementSpec).min(1);
+
+/**
+ * What tools/list carries for scene_add: the type, which is what a model most
+ * needs pinned, and every other key let through to `elementSpecs`.
+ */
+const emittedElementSpec = z.object({ type: z.enum(ELEMENT_TYPES) }).passthrough();
+
+/** The zod issues as one line each, the way a refused argument is reported. */
+function issuesText(tool: string, error: z.ZodError): string {
+  const issues = error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`);
+  return `Invalid arguments for tool ${tool}: ${issues.join("; ")}`;
+}
+
 function text(s: string) {
   return { content: [{ type: "text" as const, text: s }] };
 }
@@ -408,52 +392,39 @@ function errorText(s: string) {
 /**
  * Binds a tool to the in-chat canvas. Hosts without MCP Apps ignore it.
  *
- * `show_room` alone carries it. create_room and join_room used to as well, and
+ * `scene_show` alone carries it. room_create and room_join used to as well, and
  * a host renders one widget per result that does, so asking for a room drew a
  * canvas before there was anything on it and a second one the moment the model
- * called show_room. Their results are text; the canvas is what show_room is
+ * called scene_show. Their results are text; the canvas is what scene_show is
  * for.
  * https://github.com/bjcoombs/excalidraw-room-mcp/issues/64
  */
 const CANVAS_META = { ui: { resourceUri: CANVAS_RESOURCE_URI } } as const;
 
-/** A result the host should render the canvas for: show_room's, and only its. */
+/** A result the host should render the canvas for: scene_show's, and only its. */
 function canvasResult(s: string, isError = false) {
   return { ...text(s), _meta: CANVAS_META, ...(isError ? { isError: true } : {}) };
 }
 
 /**
- * The handle argument of create_room and join_room. Optional: absent means
+ * The handle argument of room_create and room_join. Optional: absent means
  * the default derived from the os user.
  */
-const handleSchema = z
-  .string()
-  .optional()
-  .describe(
-    `Name to appear as in the room: lowercase letters, digits and hyphens, 1 to ${MAX_HANDLE_LENGTH} characters. Made unique against the agents already in the room by appending -2, -3, and the result text states the handle taken. Defaults to ${defaultHandle()}.`,
-  );
+const handleSchema = z.string().optional();
 
 /**
  * The room's neighbourhood radius. One number decides how far a mention
  * reaches for context and how far apart placement keeps clusters, so it is
  * agreed once on join rather than passed per call.
  */
-const nearbyRadiusSchema = z
-  .number()
-  .min(0)
-  .optional()
-  .describe(
-    `How far a neighbourhood query reaches around a mention, in canvas px, and the distance placement keeps between clusters. ${DEFAULT_NEARBY_RADIUS} by default; room_status reports it, and list_mentions, wait_for_mention, show_room, read_scene near and snapshot_scene near use it when they are given no radius of their own.`,
-  );
+const nearbyRadiusSchema = z.number().min(0).optional();
 
 /**
  * The room's bound on agent-to-agent chains. A property of the room, like the
  * neighbourhood radius: the facilitator who sets the room up decides how much
  * agent-to-agent traffic their canvas carries, and no rebuild changes it.
  */
-const roomReplyDepthSchema = agentReplyDepthSchema.describe(
-  `How many agent replies deep a chain an agent started may run before this agent stops hearing it, ${MIN_AGENT_REPLY_DEPTH} to ${MAX_AGENT_REPLY_DEPTH}. ${DEFAULT_AGENT_REPLY_DEPTH} by default, so an agent may answer another agent once and the conversation goes on only if a person writes again; 0 means agent-started chains are never answered, even with answerAgentMentions on. A chain a person started is never bounded. This agent takes the bound at its own join and applies it to what it hears; it is not synchronised across the room, so two agents in one room may hold different bounds. room_status reports it as "agentReplyDepth: <n>".`,
-);
+const roomReplyDepthSchema = agentReplyDepthSchema;
 
 /** A refusal naming the handle, or null when there is nothing to refuse. */
 function handleRefusal(handle: string | undefined): string | null {
@@ -513,10 +484,10 @@ const server = new McpServer(
 // Plain registerTool, not registerAppTool: the canvas metadata is what
 // registerAppTool is for, and this result is text. See CANVAS_META above.
 server.registerTool(
-  "create_room",
+  "room_create",
   {
     description:
-      "Create a new empty live-collaboration room, join it, and return the excalidraw.com link for a person to open. The link contains the encryption key; share it only with people who should see the drawing. The result states the handle this server took in the room.",
+      "Use to start a new empty room. Joins it and returns the link, which holds the room key, and the room status.",
     inputSchema: { handle: handleSchema, nearbyRadius: nearbyRadiusSchema, agentReplyDepth: roomReplyDepthSchema },
   },
   async ({ handle, nearbyRadius, agentReplyDepth }) => {
@@ -530,17 +501,17 @@ server.registerTool(
 );
 
 server.registerTool(
-  "join_room",
+  "room_join",
   {
     description:
-      "Join an existing excalidraw.com live-collaboration room from its link (the URL with #room=<id>,<key>). Loads the current scene from a connected peer, or from the room's persisted copy if nobody else is present. The result states the handle this server took in the room.",
+      "Use when given an excalidraw.com room link. Joins it and returns the room status and handle.",
     inputSchema: {
-      link: z.string().describe("Collaboration link, e.g. https://excalidraw.com/#room=abc...,key..."),
+      link: z.string(),
       handle: handleSchema,
       nearbyRadius: nearbyRadiusSchema,
       agentReplyDepth: roomReplyDepthSchema,
-      serverUrl: z.string().optional().describe("Relay URL. Defaults to excalidraw.com's public relay."),
-      origin: z.string().optional().describe("Origin header to present to the relay. Defaults to https://excalidraw.com, which the public relay requires."),
+      serverUrl: z.string().optional(),
+      origin: z.string().optional(),
     },
   },
   async ({ link, serverUrl, origin, handle, nearbyRadius, agentReplyDepth }) => {
@@ -554,24 +525,16 @@ server.registerTool(
 
 registerAppTool(
   server,
-  "show_room",
+  "scene_show",
   {
     _meta: CANVAS_META,
     description:
-      "Render the current room as a canvas in the chat. Returns a short summary as text - the room link, connection state, peer and element counts, and the pending mentions addressed to this agent with the ids of the elements around each. The canvas view fetches the elements for itself, so they never pass through this result unless you ask: pass include: \"json\" only if you need the element array in the text; read_scene with ids or near is the cheaper way to inspect elements. Pass link only to render a room this server is not in - it is read from a read-only viewer and the current room is untouched; without it the current room is used, which is what you want. The in-chat view depends on the host; prefer open_room to watch the canvas.",
+      "Use to show the live canvas in a chat that renders MCP Apps. Returns a short room summary.",
     inputSchema: {
       tag: tagSchema,
-      link: z
-        .string()
-        .optional()
-        .describe(
-          "Collaboration link of the room to render. The canvas view sends the link it was seeded with, because some hosts route the view's calls to a server process other than the one its conversation uses. A link for another room is served from a read-only viewer: this server stays in the room it is working in, and room_status lists the viewers it holds. Leave it unset: the model's own calls should use the room already joined.",
-        ),
-      radius: z.number().min(0).optional().describe("How far around each mention to look for related elements, in canvas px. Defaults to the room's nearbyRadius."),
-      include: z
-        .enum(["summary", "json"])
-        .default("summary")
-        .describe("What the text content carries. 'summary' (default) is a few lines; 'json' is the whole payload, which for a 35-element scene is roughly 10k tokens. The canvas view asks for 'json' itself, so the default keeps the elements out of the conversation."),
+      link: z.string().optional().describe("Leave unset; the canvas view sets it."),
+      radius: z.number().min(0).optional(),
+      include: z.enum(["summary", "json"]).default("summary"),
     },
   },
   async ({ tag, radius, include, link }) => {
@@ -596,15 +559,12 @@ registerAppTool(
 registerCanvasResource(server, canvasHtmlUrl());
 
 server.registerTool(
-  "open_room",
+  "room_open",
   {
     description:
-      "Open the room on excalidraw.com in the default browser; the primary way for a person to watch the canvas live. Returns the link, the connection state, and the peer and element counts. Pass link only to open a room this server is not in - it is joined first; without it the current room is used.",
+      "Use after joining so the person can watch live in their browser. Returns the link and room state.",
     inputSchema: {
-      link: z
-        .string()
-        .optional()
-        .describe("Collaboration link to join before opening, if this server is in no room or in a different one. Leave it unset to open the room already joined."),
+      link: z.string().optional(),
     },
   },
   async ({ link }) => {
@@ -617,39 +577,51 @@ server.registerTool(
   "room_status",
   {
     description:
-      "Connection state, the handle this server took in the room, the room's nearbyRadius and agentReplyDepth, the session's answerQuestions policy, the peers with their handles and whether each is an agent or a browser, the rooms this server is holding read-only viewers for, and scene counters for the current room.",
+      "Use to check the connection and room settings. Returns handle, radius, reply depth, answerQuestions, peers and counts.",
     inputSchema: {},
   },
   async () => text(statusText()),
 );
 
+/** README.md, read on the first room_help call and kept: it does not change under a running server. */
+let readme: string | undefined;
+
 server.registerTool(
-  "read_scene",
+  "room_help",
+  {
+    description: `Use for formats and rules the tool descriptions leave out. Returns README text on ${HELP_TOPIC_NAMES.join(", ")}.`,
+    inputSchema: { topic: z.string() },
+  },
+  async ({ topic }) => {
+    if (readme === undefined) {
+      try {
+        readme = readReadme();
+      } catch (err) {
+        return errorText(`README.md is not readable at ${README_URL.pathname}: ${(err as Error).message}`);
+      }
+    }
+    return text(helpText(readme, topic));
+  },
+);
+
+server.registerTool(
+  "scene_read",
   {
     description:
-      "Read the current drawing. 'summary' gives one line per element with position, size, text, and a sampled path for freehand strokes. 'json' returns the full Excalidraw element array as compact JSON. Filter to keep the response small: 'ids' returns just those elements (unknown ids are named back), and 'near' returns one element plus everything within a radius of it.",
+      "Use to read the drawing as data. Returns a line per element, or JSON, narrowed by ids, near or by.",
     inputSchema: {
       format: z.enum(["summary", "json"]).default("summary"),
       includeDeleted: z.boolean().default(false),
-      ids: z.array(z.string()).min(1).optional().describe("Return only the elements with these ids."),
+      ids: z.array(z.string()).min(1).optional(),
       near: z
-        .object({
-          id: z.string().describe("Element the neighbourhood is centred on."),
-          radius: z.number().min(0).optional().describe("How far beyond that element's bounding box to reach. Defaults to the room's nearbyRadius."),
-        })
+        .object({ id: z.string(), radius: z.number().min(0).optional() })
         .optional()
-        .describe("Return the named element and everything within the radius of it."),
-      by: z
-        .array(z.string())
-        .min(1)
-        .optional()
-        .describe(
-          `Return only elements written by these handles. "${PERSON_AUTHOR}" selects the elements nothing stamped, which is what a browser leaves, so by: ["${PERSON_AUTHOR}"] is what people in the room drew. Every summary line ends with "by <handle>" whether or not this is set.`,
-        ),
+,
+      by: z.array(z.string()).min(1).optional().describe(`Author handles; "${PERSON_AUTHOR}" for people.`),
     },
   },
   async ({ format, includeDeleted, ids, near, by }) => {
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     const selected = selectElements(room.getElements(includeDeleted), {
       ids,
       near: near && { id: near.id, radius: nearRadius(room.nearbyRadius, near.radius) },
@@ -670,45 +642,23 @@ server.registerTool(
 );
 
 server.registerTool(
-  "snapshot_scene",
+  "scene_snapshot",
   {
     description:
-      "Render a region of the room to a PNG and see it. Use it whenever the drawing itself is the question: to read hand-drawn content (handwriting, sketched boxes, freehand arrows) that reaches you as point arrays and is otherwise unreadable, to answer \"what does this look like\", and after moving, spacing or grouping elements to check whether anything still overlaps and the groups read as intended. Select with ids, near (one element and its neighbourhood), or bbox; with no selector the whole scene is rendered. The text block after the image gives the bounding box in scene coordinates, the scale, the pixel size and the ids of the elements drawn, so you can map what you see back to read_scene ids and near queries. Shapes, lines, arrows, freehand strokes and text are drawn flat, without the hand-drawn wobble the canvas shows; images, frames and embeds are drawn as a labelled dashed box and named on a placeholders line.",
+      "Use to read hand-drawn content or check a layout for overlap. Returns a PNG and the ids drawn.",
     inputSchema: {
-      ids: z.array(z.string()).min(1).optional().describe("Render only the elements with these ids. A container's bound label travels with it."),
-      near: z
-        .string()
-        .optional()
-        .describe("Element id to centre on: it and everything within the room's nearbyRadius of it are rendered."),
+      ids: z.array(z.string()).min(1).optional(),
+      near: z.string().optional(),
       bbox: z
-        .object({
-          x: z.number(),
-          y: z.number(),
-          width: z.number().positive(),
-          height: z.number().positive(),
-        })
-        .optional()
-        .describe("Region of scene space to render, and the elements that intersect it."),
-      scale: z
-        .number()
-        .positive()
-        .max(MAX_SCALE)
-        .optional()
-        .describe(`Pixels per scene unit, 1 by default and at most ${MAX_SCALE}. Raise it to read small handwriting.`),
-      maxWidth: z
-        .number()
-        .positive()
-        .optional()
-        .describe(`Pixel ceiling for the width, ${DEFAULT_MAX_DIMENSION} by default. A wider render is downscaled and the text block says so.`),
-      maxHeight: z
-        .number()
-        .positive()
-        .optional()
-        .describe(`Pixel ceiling for the height, ${DEFAULT_MAX_DIMENSION} by default. A taller render is downscaled and the text block says so.`),
+        .object({ x: z.number(), y: z.number(), width: z.number().positive(), height: z.number().positive() })
+        .optional(),
+      scale: z.number().positive().max(MAX_SCALE).optional(),
+      maxWidth: z.number().positive().optional(),
+      maxHeight: z.number().positive().optional(),
     },
   },
   async ({ ids, near, bbox, scale, maxWidth, maxHeight }) => {
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     const snapshot = await snapshotScene(room.getElements(), {
       ids,
       near,
@@ -729,15 +679,24 @@ server.registerTool(
 );
 
 server.registerTool(
-  "add_elements",
+  "scene_add",
   {
     description:
-      "Add elements to the drawing from compact specs. Shapes take x, y, width, height and an optional label. Arrows take start/end element ids (edges are computed) or absolute points. Any element may take a link (a URL), which makes it clickable on the canvas. Later specs may reference ids of earlier specs in the same call. Pass place instead of x and y to have the server find a free slot beside an element or inside a cluster, so two agents drawing at once never overlap; the result reports the coordinates it chose. The change reaches connected peers immediately and the room's stored copy shortly after; a result line beginning NOT PERSISTED means the stored copy is behind and the server is retrying in the background.",
-    inputSchema: { elements: z.array(elementSpec).min(1) },
+      "Use to draw shapes, text, arrows and sticky notes; place finds free space. Returns the ids added and any coordinates chosen.",
+    inputSchema: {
+      elements: z
+        .array(emittedElementSpec)
+        .min(1)
+        .describe("Specs: id x y width height text label link points start end place, style keys."),
+    },
   },
   async ({ elements }) => {
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
-    const specs = elements as PlacedSpec[];
+    // Checked before the connection, like every other argument refusal: a spec
+    // the server would refuse in a room is refused out of one too.
+    const parsed = elementSpecs.safeParse(elements);
+    if (!parsed.success) return errorText(issuesText("scene_add", parsed.error));
+    if (!room.isConnected) return text("not in a room; call room_join or room_create first");
+    const specs = parsed.data as PlacedSpec[];
     // Placement runs before anything is built, spec by spec: each slot is
     // found against the live scene plus the slots this call has already
     // taken, or two specs placed against one anchor would be sent to the
@@ -788,14 +747,14 @@ server.registerTool(
 );
 
 server.registerTool(
-  "add_raw_elements",
+  "scene_add_raw",
   {
     description:
-      "Add complete Excalidraw elements verbatim (the JSON shape from an .excalidraw file). Missing version fields are filled in; fractional indices are assigned if absent. An element carrying customData is stamped with this server's handle as its author, keeping the keys it came with; an element with no customData is left unattributed, so a scene imported from a file still reads as the work of whoever drew it. Hosts cap tool-argument size, so keep each call's arguments under the limit in README Limits (4 KB on Claude Desktop, 16 KB on Claude Code) and send a large scene as several batches; a later batch may reference ids from an earlier one. The change reaches connected peers immediately and the room's stored copy shortly after; a result line beginning NOT PERSISTED means the stored copy is behind and the server is retrying in the background.",
+      "Use to import complete Excalidraw elements verbatim, in batches. Returns the ids added.",
     inputSchema: { elements: z.array(z.record(z.unknown())).min(1) },
   },
   async ({ elements }) => {
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     const { generateKeyBetween } = await import("fractional-indexing");
     let last = room.lastIndex();
     const prepared: ExcalidrawElement[] = [];
@@ -829,17 +788,20 @@ server.registerTool(
 );
 
 server.registerTool(
-  "update_elements",
+  "scene_update",
   {
     description:
-      "Patch existing elements by id. 'set' is merged over the element; version and nonce are bumped. 'set' accepts any element field, including link (a URL, or null to remove it). Changing 'text' or 'fontSize' on a text element re-measures it unless width/height are given, keeps originalText in step, and, for a label bound to a shape, re-centres it and grows the shape to fit so the canvas redraws the new label. Changing 'x', 'y', 'width' or 'height' carries the element's bound label with it and re-computes the endpoint of every arrow bound to it, leaving each arrow's other end alone; use translate_elements to move a shape with its group, its frame's children and the arrows between moved shapes. An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded. The change reaches connected peers immediately and the room's stored copy shortly after; a result line beginning NOT PERSISTED means the stored copy is behind and the server is retrying in the background.",
+      "Use to change elements by id; labels and bound arrows follow. Returns the count and any refusals.",
     inputSchema: {
-      updates: z.array(z.object({ id: z.string(), set: z.record(z.unknown()) })).min(1),
+      updates: z
+        .array(z.object({ id: z.string(), set: z.record(z.unknown()) }))
+        .min(1)
+,
       force: forceSchema,
     },
   },
   async ({ updates, force }) => {
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     const { allowed, refusals } = guardIds(updates.map((u) => u.id), force);
     const editable = new Set(allowed);
     const guard = guardNote(refusals, force);
@@ -869,19 +831,19 @@ server.registerTool(
 );
 
 server.registerTool(
-  "translate_elements",
+  "scene_translate",
   {
     description:
-      "Move elements by a delta, carrying everything that must travel with them: each element's bound label, every other member of a group the ids belong to, the children of a moved frame, and any arrow bound at both ends to elements that are moving. An arrow bound at one end is re-attached to the moved shape instead of moved, and reported on its own line. Each element moves exactly once however many ways the closure reaches it. The result reports how many moved and which ids the closure added. An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded.",
+      "Use to move elements with their labels, groups, frame children and arrows. Returns the ids moved.",
     inputSchema: {
       ids: z.array(z.string()).min(1),
-      dx: z.number().describe("Horizontal delta in scene pixels; positive is right."),
-      dy: z.number().describe("Vertical delta in scene pixels; positive is down."),
+      dx: z.number(),
+      dy: z.number(),
       force: forceSchema,
     },
   },
   async ({ ids, dx, dy, force }) => {
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     const { allowed, refusals } = guardIds(ids, force);
     const guard = guardNote(refusals, force);
     // The closure runs over the whole scene, including elements the guard
@@ -901,14 +863,14 @@ server.registerTool(
 );
 
 server.registerTool(
-  "delete_elements",
+  "scene_delete",
   {
     description:
-      "Soft-delete elements by id (Excalidraw keeps tombstones so peers converge). An element another agent in the room drew is left alone and reported as refused unless force is true; a person's elements and those of an agent that has left are never guarded. The change reaches connected peers immediately and the room's stored copy shortly after; a result line beginning NOT PERSISTED means the stored copy is behind and the server is retrying in the background.",
+      "Use to remove elements by id. Returns the count and any refusals.",
     inputSchema: { ids: z.array(z.string()).min(1), force: forceSchema },
   },
   async ({ ids, force }) => {
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     const { allowed, refusals } = guardIds(ids, force);
     const deletable = new Set(allowed);
     const guard = guardNote(refusals, force);
@@ -929,20 +891,20 @@ server.registerTool(
 );
 
 server.registerTool(
-  "wait_for_mention",
+  "mention_wait",
   {
     description:
-      "Block until someone writes a text element addressed to this agent on the canvas, then return it with the elements around it. With no tag it answers to its own handle and to the '@claude' broadcast tag. Returns 'no mention' after timeoutSeconds so the caller can loop. A mention is reported once it has stopped changing for about 1.5s. Returning it also marks it seen on the canvas (amber stroke and a marker) so the person knows the note landed; pass autoSeen false to poll without touching the drawing. Acknowledge it with acknowledge_mention when done, which removes the handled note from the canvas; reply about the work in chat.",
+      "Use to hand the turn back and listen for notes to you. Blocks until one settles; returns it with its neighbourhood.",
     inputSchema: {
       tag: tagSchema,
       timeoutSeconds: z.number().min(1).max(600).default(60),
-      radius: z.number().min(0).optional().describe("How far around the mention to look for related elements, in canvas px. Defaults to the room's nearbyRadius."),
+      radius: z.number().min(0).optional(),
       autoSeen: autoSeenSchema,
       answerAgentMentions: answerAgentMentionsSchema,
     },
   },
   async ({ tag, timeoutSeconds, radius, autoSeen, answerAgentMentions }) => {
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     const tags = resolveTags(tag, room.handle);
     const mention = await room.waitForMention(tags, handledMentions, {
       timeoutMs: timeoutSeconds * 1000,
@@ -958,24 +920,20 @@ server.registerTool(
 );
 
 server.registerTool(
-  "list_mentions",
+  "mention_list",
   {
-    description: "List every pending (unacknowledged) mention addressed to this agent on the canvas right now, each with its nearby elements. With no tag it answers to its own handle and to the '@claude' broadcast tag. Mentions surfaced here are marked seen on the canvas as wait_for_mention does; pass autoSeen false to look without touching the drawing. Pass includeHandled true to also list the notes this server acknowledged and left on the canvas, marked handled, so they can be found and cleaned up.",
+    description:
+      "Use to see pending mentions now, without waiting. Returns each with its neighbourhood.",
     inputSchema: {
       tag: tagSchema,
-      radius: z.number().min(0).optional().describe("How far around each mention to look for related elements, in canvas px. Defaults to the room's nearbyRadius."),
+      radius: z.number().min(0).optional(),
       autoSeen: autoSeenSchema,
       answerAgentMentions: answerAgentMentionsSchema,
-      includeHandled: z
-        .boolean()
-        .default(false)
-        .describe(
-          "Also list mentions already acknowledged whose note is still on the canvas (kept with a check mark, a status or a reply). They are listed after the pending ones with 'handled' on the first line, and are never marked seen.",
-        ),
+      includeHandled: z.boolean().default(false),
     },
   },
   async ({ tag, radius, autoSeen, includeHandled, answerAgentMentions }) => {
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     const all = room.getElements();
     const tags = resolveTags(tag, room.handle);
     const pending = pendingMentions(tags, all, answerAgentMentions);
@@ -1000,41 +958,19 @@ server.registerTool(
 );
 
 server.registerTool(
-  "acknowledge_mention",
+  "mention_acknowledge",
   {
     description:
-      "Mark a mention as handled so it is not returned again. By default the text element is removed from the canvas (soft-deleted): the seen marker already told the person it landed and the drawing is the evidence it was done. Say what you did in chat, not on the canvas - artefacts of the work belong there, prose about it does not. " +
-      `Pass status ${MENTION_STATUSES.map((v) => `"${v}"`).join(" or ")} to keep the element instead, greyed with one check mark, and draw that status under it on its own grey line reading "claude: <status>" - use it when the person has to read the outcome where they wrote the request. Pass keep true to keep it greyed with a check mark and draw nothing. Pass reply (up to ${MAX_REPLY_LENGTH} characters) when the request is unclear: your question is drawn on the same line under it, as "claude: <question>", so the person answers where they asked. A reply to a mention another agent wrote is addressed to that agent by default, as "claude: @<its handle> <question>", so it reaches that agent as a mention of its own; replyTo addresses it to a different handle instead, and the room's agentReplyDepth bounds how far such a chain runs. Pass answer (up to ${MAX_ANSWER_LENGTH} characters) for a knowledge question, while set_mention_policy has answering on: the text element is replaced by a yellow sticky note in its place, ${POSTIT_WIDTH} px wide, holding the question, your answer and your handle, and source puts a public URL behind it. Whatever you were given, the person's own words are left exactly as they wrote them. status, reply and answer exclude each other. Editing the text makes the mention pending again and what you wrote comes back with it.`,
+      "Use when a mention is done, unclear or out of scope. Removes it, or keeps it with status, keep or reply, or swaps in an answer sticky note.",
     inputSchema: z
       .object({
-        id: z.string().describe("The mention's element id from wait_for_mention or list_mentions."),
-        keep: z.boolean().default(false).describe("Keep the text element on the canvas, greyed with a single check mark, instead of removing it."),
-        reply: replySchema
-          .optional()
-          .describe(
-            `A question to draw underneath, at most ${MAX_REPLY_LENGTH} characters, for a request you cannot act on as written. Excludes status. Must not contain a tag this agent answers to (its own handle or ${BROADCAST_TAG}), or your question would itself read as a mention.`,
-          ),
-        replyTo: z
-          .string()
-          .optional()
-          .describe(
-            "Handle to address the reply to, written on the line as \"@<handle>\" so it reaches that agent as a mention. Defaults to the mention's own author, which is what you want: an agent gets its answer back, and a note a person wrote is answered with no tag at all. Needs reply, and may not be an address this agent answers to.",
-          ),
-        status: statusSchema
-          .optional()
-          .describe(
-            "The outcome to draw underneath, attributed to you. \"out of scope\" for anything that is not a change to the drawing; \"see chat\" for work whose account is in the chat reply. Excludes reply.",
-          ),
-        answer: answerSchema
-          .optional()
-          .describe(
-            `What the question asks, in at most two sentences and ${MAX_ANSWER_LENGTH} characters, drawn on a sticky note that takes the place of the text element while set_mention_policy has answerQuestions on. Built from the words above and public knowledge only, never from the conversation or anything seen outside the room. ${MENTION_POLICY_HOSTING_RULE} Excludes status and reply; put the depth behind source rather than writing more here.`,
-          ),
-        source: z
-          .string()
-          .url()
-          .optional()
-          .describe("Public URL the answer cites. It becomes the link on the answer sticky note, which is where depth belongs. Needs answer."),
+        id: z.string(),
+        keep: z.boolean().default(false),
+        reply: replySchema.optional(),
+        replyTo: z.string().optional(),
+        status: statusSchema.optional(),
+        answer: answerSchema.optional().describe("Only while mention_policy is on."),
+        source: z.string().url().optional(),
       })
       // Strict on purpose: `note` was this tool's free-text status until 0.7.0,
       // and a caller still passing it must be told the argument is gone rather
@@ -1056,7 +992,7 @@ server.registerTool(
       current ? elementAuthor(current) : null,
     );
     if (plan.refusal) return errorText(plan.refusal);
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     if (!current || current.type !== "text") return text(`no text element with id ${id}`);
     // Either way the words the person wrote are recorded, so our own edit
     // never reads back as a new mention, and neither does a later move.
@@ -1130,16 +1066,12 @@ server.registerTool(
 );
 
 server.registerTool(
-  "set_mention_policy",
+  "mention_policy",
   {
     description:
-      "Turn knowledge answers on or off for this session. With answerQuestions true, a mention that asks a question - a definition, a comparison, a critique of what is on the canvas - may be answered on the canvas with acknowledge_mention answer instead of being acknowledged \"out of scope\"; reading the person's accounts, sending or posting anything, and acting outside the room stay out of scope either way, and an answer is built from the mention's own words and public knowledge only, never from the conversation. " +
-      `${MENTION_POLICY_HOSTING_RULE} ` +
-      "The flag is held in memory only: it is off when this server starts, a person turns it on by asking in chat, and joining a room or restarting turns it off again. Nothing is written to disk, so this tool call is the only record that it was asked for. room_status and poll_room report answerQuestions.",
+      "Use only when a person asks in chat to have canvas questions answered, or to stop. Returns the scope rule now in force.",
     inputSchema: {
-      answerQuestions: z
-        .boolean()
-        .describe("True to answer knowledge questions on the canvas for the rest of this session; false to go back to drawing requests only."),
+      answerQuestions: z.boolean(),
     },
   },
   async ({ answerQuestions }) => {
@@ -1149,18 +1081,18 @@ server.registerTool(
 );
 
 server.registerTool(
-  "poll_room",
+  "mention_poll",
   {
     description:
-      "Cheap state probe: connection state, sceneVersion, the peers, the ids and text of the pending mentions addressed to this agent, and whether the scene moved since a version you pass. Use it while you are working in a turn to notice a change without a full show_room; use wait_for_mention when you are handing the turn back to a person.",
+      "Use inside a turn to notice mentions or scene changes without blocking. Returns sceneVersion and pending mentions.",
     inputSchema: {
-      sinceVersion: z.number().optional().describe("A sceneVersion from an earlier call. changedSince is false only if the scene version still equals it."),
+      sinceVersion: z.number().optional(),
       tag: tagSchema,
       answerAgentMentions: answerAgentMentionsSchema,
     },
   },
   async ({ sinceVersion, tag, answerAgentMentions }) => {
-    if (!room.isConnected) return text("not in a room; call join_room or create_room first");
+    if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     const pending = pendingMentions(resolveTags(tag, room.handle), room.getElements(), answerAgentMentions);
     return text(
       pollText(
@@ -1175,8 +1107,11 @@ server.registerTool(
 
 
 server.registerTool(
-  "leave_room",
-  { description: "Disconnect from the current room.", inputSchema: {} },
+  "room_leave",
+  {
+    description: "Use when done with the room. Disconnects and returns left room.",
+    inputSchema: {},
+  },
   async () => {
     room.leave();
     return text("left room");

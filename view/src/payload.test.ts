@@ -1,5 +1,5 @@
 /**
- * The view's side of the show_room contract. Compiled for Node by
+ * The view's side of the scene_show contract. Compiled for Node by
  * tsconfig.view-test.json (this module touches no DOM and no React) and run by
  * `npm test` alongside the server's tests; src/view.test.ts pins the other end.
  */
@@ -57,7 +57,7 @@ test("parsePayload returns null for the pre-join refusal and for anything that i
   assert.equal(parsePayload({}), null);
   assert.equal(parsePayload({ content: [] }), null);
   assert.equal(
-    parsePayload({ content: [{ type: "text", text: "Not in a room. Call create_room or join_room first." }], isError: true }),
+    parsePayload({ content: [{ type: "text", text: "Not in a room. Call room_create or room_join first." }], isError: true }),
     null,
     "a plain-text refusal is no payload, not a crash",
   );
@@ -252,7 +252,7 @@ test("linkFromSummary refuses anything that is not a collaboration link", () => 
   assert.equal(linkFromSummary("room: javascript:alert(1)"), null);
 });
 
-test("linkFromSummary reads the link out of a show_room result's text", () => {
+test("linkFromSummary reads the link out of a scene_show result's text", () => {
   const result = summaryResult();
   assert.equal(linkFromSummary(resultText(result)), LINK);
   assert.equal(parsePayload(result), null, "a summary is not a payload");

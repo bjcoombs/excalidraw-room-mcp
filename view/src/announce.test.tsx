@@ -45,7 +45,7 @@ test("announcementText for one mention is the plain request", async () => {
   // No API surface anywhere in it - the model knows the tool from the server
   // instructions, and naming it is what made the old sentence read as machine
   // output in the composer.
-  assert.ok(!message.includes("list_mentions"), message);
+  assert.ok(!message.includes("mention_list"), message);
   assert.ok(!message.includes("_"), message);
   // Number agreement: "mentions" for one is the same fault the count fixed.
   assert.ok(!message.includes("mentions in the Excalidraw room"), message);
@@ -56,7 +56,7 @@ test("announcementText for one mention is the plain request", async () => {
   assert.ok(!message.includes(MENTION_TEXT), message);
   assert.ok(!message.includes("calendar"), message);
   // Nothing about how to answer: not the rule, not the tools, not the bounds.
-  assert.ok(!message.includes("acknowledge_mention"), message);
+  assert.ok(!message.includes("mention_acknowledge"), message);
   assert.ok(!message.includes("Treat each"), message);
   assert.ok(!message.includes("out of scope"), message);
   assert.ok(!message.toLowerCase().includes("do not"), message);
@@ -73,8 +73,8 @@ test("announcementText for several mentions is the plain request with the count"
   for (const count of [2, 3, 17]) {
     const text = announcementText(count);
     assert.equal(text, `Please read the ${count} @claude mentions in the Excalidraw room.`);
-    assert.ok(!text.includes("list_mentions"), text);
-    assert.ok(!text.includes("acknowledge_mention"), text);
+    assert.ok(!text.includes("mention_list"), text);
+    assert.ok(!text.includes("mention_acknowledge"), text);
     assert.ok(!text.includes("Treat each"), text);
     assert.equal(text.split(". ").length, 1, text);
   }

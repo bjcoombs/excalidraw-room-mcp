@@ -697,7 +697,7 @@ export class RoomClient extends EventEmitter {
    * must already carry bumped versions (see elements.bump).
    */
   async commit(changed: ExcalidrawElement[]): Promise<{ persisted: boolean; error?: string }> {
-    if (!this.isConnected) throw new Error("not in a room; call join_room first");
+    if (!this.isConnected) throw new Error("not in a room; call room_join first");
     const ids = new Set<string>();
     for (const el of changed) {
       if (!el.id) throw new Error("element without an id in commit");

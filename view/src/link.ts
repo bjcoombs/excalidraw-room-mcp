@@ -17,7 +17,7 @@
  */
 
 /** What the bar says while the widget has no room to show. */
-export const WAITING_FOR_LINK_TEXT = "Waiting for a room link. Ask for show_room once the room is joined.";
+export const WAITING_FOR_LINK_TEXT = "Waiting for a room link. Ask for scene_show once the room is joined.";
 
 /**
  * The room id in a collaboration link: the part between `#room=` and the

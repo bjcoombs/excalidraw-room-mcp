@@ -120,7 +120,7 @@ test("peer names are sacrificed before mention text", () => {
   assert.ok(pollBody(payload).length <= POLL_TEXT_LIMIT);
 });
 
-test("poll_room prints one line per unacknowledged mention as `mention <id> - <text>`", () => {
+test("mention_poll prints one line per unacknowledged mention as `mention <id> - <text>`", () => {
   const pending = [mention("n1", "@claude add a box here"), mention("n2", "@claude look in my calendar")];
   const payload = buildPollPayload(state({ pending }));
   const out = pollText(payload);

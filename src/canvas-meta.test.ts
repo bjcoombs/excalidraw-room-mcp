@@ -1,15 +1,15 @@
 /**
  * A host renders the in-chat canvas for any tool whose `_meta.ui.resourceUri`
  * names the view - both in `tools/list` and on the result it hands back - so a
- * second tool carrying it is a second widget in the transcript. `show_room` is
- * the tool that renders the room; create_room and join_room answer with text.
+ * second tool carrying it is a second widget in the transcript. `scene_show` is
+ * the tool that renders the room; room_create and room_join answer with text.
  * https://github.com/bjcoombs/excalidraw-room-mcp/issues/64
  *
  * Driven over stdio against the built server rather than read off the source,
  * because what a host sees is the wire, and the result half of the contract has
  * no representation in the registration at all. Nothing here needs the network:
- * `show_room` in a process that has joined nothing still answers, and
- * `join_room` with a link that is not one is refused before any socket opens.
+ * `scene_show` in a process that has joined nothing still answers, and
+ * `room_join` with a link that is not one is refused before any socket opens.
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -21,8 +21,8 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 /** The tools that used to carry the canvas metadata, and the one that still does. */
-const CANVAS_TOOL = "show_room";
-const TEXT_TOOLS = ["create_room", "join_room"];
+const CANVAS_TOOL = "scene_show";
+const TEXT_TOOLS = ["room_create", "room_join"];
 
 /** `_meta.ui.resourceUri`, whatever level it sits at, or undefined when there is none. */
 function uiResourceUri(meta: unknown): unknown {
@@ -37,12 +37,12 @@ const client = new Client({ name: "canvas-meta-test", version: "0" });
 await client.connect(transport);
 
 const listed = (await client.listTools()).tools as { name: string; _meta?: unknown }[];
-const showRoomResult = (await client.callTool({ name: "show_room", arguments: {} })) as { _meta?: unknown };
+const showRoomResult = (await client.callTool({ name: "scene_show", arguments: {} })) as { _meta?: unknown };
 // Not a collaboration link, so this is refused by the link parser: no network.
-const joinResult = (await client.callTool({ name: "join_room", arguments: { link: "not-a-room-link" } })) as { _meta?: unknown };
+const joinResult = (await client.callTool({ name: "room_join", arguments: { link: "not-a-room-link" } })) as { _meta?: unknown };
 await client.close();
 
-test("only show_room carries _meta.ui in its registration and result", () => {
+test("only scene_show carries _meta.ui in its registration and result", () => {
   const registered = new Map(listed.map((t) => [t.name, uiResourceUri(t._meta)]));
   const uri = registered.get(CANVAS_TOOL);
   assert.equal(typeof uri, "string", `${CANVAS_TOOL} should declare a canvas resource, got ${String(uri)}`);

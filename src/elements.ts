@@ -314,7 +314,7 @@ export function buildElements(specs: ElementSpec[], ctx: BuildContext): BuildRes
     seen.add(spec.id);
   }
   if (conflicts.length) {
-    throw new Error(`element id(s) already in the scene: ${conflicts.join(", ")}. Use update_elements to change them.`);
+    throw new Error(`element id(s) already in the scene: ${conflicts.join(", ")}. Use scene_update to change them.`);
   }
   if (repeated.length) {
     throw new Error(`element id(s) repeated within the batch: ${repeated.join(", ")}`);
@@ -569,8 +569,8 @@ export function authorLabel(el: ExcalidrawElement): string {
 
 /**
  * The element with this server's handle recorded on it. Applied on create
- * only - `add_elements`, `add_raw_elements` and the attributed lines
- * `acknowledge_mention` writes - so the stamp says who first drew a thing
+ * only - `scene_add`, `scene_add_raw` and the attributed lines
+ * `mention_acknowledge` writes - so the stamp says who first drew a thing
  * rather than who last touched it. Other `customData` keys are preserved,
  * including a caller's own on the raw path.
  */

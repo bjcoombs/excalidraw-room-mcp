@@ -141,7 +141,7 @@ test("leave persists a dirty scene", async () => {
   assert.equal(clean.seen.saves, 1);
 });
 
-test("update_elements result leads with NOT PERSISTED when commit did not persist", async () => {
+test("scene_update result leads with NOT PERSISTED when commit did not persist", async () => {
   const { room } = fakeRoom({ fail: true });
   const failed = await room.commit([note("n1")]);
   assert.equal(failed.persisted, false);
@@ -169,7 +169,7 @@ test("room_status reports pending persistence", async () => {
   assert.equal(line, `persisted: pending since ${room.status().persistPendingSince}`);
 });
 
-test("add_elements, add_raw_elements and delete_elements results lead with NOT PERSISTED when commit did not persist", async () => {
+test("scene_add, scene_add_raw and scene_delete results lead with NOT PERSISTED when commit did not persist", async () => {
   const { room } = fakeRoom({ fail: true });
   const failed = await room.commit([note("n1")]);
   assert.equal(failed.persisted, false);

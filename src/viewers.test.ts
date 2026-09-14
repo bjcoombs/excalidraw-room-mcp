@@ -125,7 +125,7 @@ function pool(over: { max?: number; idleMs?: number; timers?: ReturnType<typeof 
   return { p, made, timers };
 }
 
-test("show_room with another room link is served by a viewer and leaves the current room unchanged", async () => {
+test("scene_show with another room link is served by a viewer and leaves the current room unchanged", async () => {
   const current = fakeClient({ connected: true, roomId: ROOM_A });
   const { p, made } = pool();
 
@@ -207,7 +207,7 @@ test("the viewer pool evicts the least recently polled beyond eight", async () =
   assert.equal(made.length, 9, "the evicted room is the only one that would rejoin");
 });
 
-test("show_room without a link, and with the current room's own link, stays on the current room", async () => {
+test("scene_show without a link, and with the current room's own link, stays on the current room", async () => {
   const current = fakeClient({ connected: true, roomId: ROOM_A });
   const { p, made } = pool();
 
@@ -268,7 +268,7 @@ test("the viewer for a room this process then joins is closed, so the room holds
   await p.view(LB);
   assert.deepEqual(p.roomIds(), [ROOM_B]);
 
-  // What create_room and join_room do once they are in the room.
+  // What room_create and room_join do once they are in the room.
   p.closeRoom(ROOM_B);
 
   assert.equal(made[0].leaves, 1);

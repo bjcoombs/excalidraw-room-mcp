@@ -190,7 +190,7 @@ export function RoomView({ app }: { app: App }) {
   /**
    * Read one tool result.
    *
-   * The seed is the exception. `show_room` returns the model's summary by
+   * The seed is the exception. `scene_show` returns the model's summary by
    * default, and the host hands the view whatever the model's call returned, so
    * a seed without a payload is the normal case rather than a failure: the
    * view's own first refresh, dispatched on connect with include: "json", is
@@ -242,7 +242,7 @@ export function RoomView({ app }: { app: App }) {
     // still the newest one dispatched.
     const generation = (lastGeneration.current += 1);
     try {
-      // include: "json" is how the view gets the elements at all: show_room
+      // include: "json" is how the view gets the elements at all: scene_show
       // returns text only, and its default is the model's summary. A
       // callServerTool result is the view's own call and never enters the
       // conversation, so the full payload here costs the reader nothing.
@@ -251,7 +251,7 @@ export function RoomView({ app }: { app: App }) {
       // the model uses is already in it and ignores the argument.
       const args: Record<string, unknown> = { include: "json" };
       if (link.current) args.link = link.current;
-      const result = await app.callServerTool({ name: "show_room", arguments: args });
+      const result = await app.callServerTool({ name: "scene_show", arguments: args });
       if (generation !== lastGeneration.current) return;
       setLastUpdateAt(Date.now());
       setError(null);

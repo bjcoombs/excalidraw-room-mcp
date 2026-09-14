@@ -617,7 +617,7 @@ test("build errors name every offending id and read exactly as written", () => {
   const withExisting = { existing: new Map(existing.map((e) => [e.id, e])), lastIndex: null };
   assert.equal(
     message(() => buildElements([{ type: "rectangle", id: "a" }, { type: "ellipse", id: "b" }], withExisting)),
-    "element id(s) already in the scene: a, b. Use update_elements to change them.",
+    "element id(s) already in the scene: a, b. Use scene_update to change them.",
   );
   assert.equal(
     message(() =>
@@ -1006,7 +1006,7 @@ test("a label bound to a line re-centres without resizing the line", () => {
 
 test("every agent write stamps author and authorKind and keeps other customData", () => {
   // The two create paths: specs through buildElements, and a complete element
-  // handed to add_raw_elements with customData of the caller's own.
+  // handed to scene_add_raw with customData of the caller's own.
   const { created } = buildElements(
     [{ type: "rectangle", id: "r", x: 0, y: 0, width: 100, height: 50, label: "A" }],
     ctx(),
@@ -1228,7 +1228,7 @@ test("summary marks a bound label outside its container", () => {
   assert.doesNotMatch(summarise([container, { ...adrift, x: -30, y: 887.5 }]), /outside container/, "the top-left corner counts as inside");
 });
 
-test("translate_elements moves a group member, its label, and an arrow between two translated shapes once each", () => {
+test("scene_translate moves a group member, its label, and an arrow between two translated shapes once each", () => {
   const scene = boundScene().map((el) =>
     el.id === "r1" || el.id === "r2" ? { ...el, groupIds: ["g1"] } : el,
   );
@@ -1261,7 +1261,7 @@ test("translate_elements moves a group member, its label, and an arrow between t
   assert.equal(all.moved.length, scene.length);
 });
 
-test("translate_elements carries frame children and refuses foreign elements without force", () => {
+test("scene_translate carries frame children and refuses foreign elements without force", () => {
   const frame = raw({ id: "f1", type: "frame", x: 0, y: 0, width: 400, height: 300 });
   const child = raw({ id: "c1", type: "rectangle", x: 20, y: 20, width: 60, height: 40, frameId: "f1" });
   const outside = raw({ id: "o1", type: "rectangle", x: 900, y: 0, width: 60, height: 40 });
@@ -1601,7 +1601,7 @@ function fitsBody(text: string, width: number, baseHeight: number, fontSize: num
   return box.width <= maxWidth && box.height <= baseHeight - STICKY_NOTE_BODY_INSET_Y;
 }
 
-test("add_elements stickynote creates a container with baseHeight and a bound label with baseFontSize", () => {
+test("scene_add stickynote creates a container with baseHeight and a bound label with baseFontSize", () => {
   const before = Date.now();
   const { created } = buildElements(
     [
@@ -1679,7 +1679,7 @@ test("add_elements stickynote creates a container with baseHeight and a bound la
   assert.equal(stickyNote({ width: 80, fontSize: 20, label: "xxxx" }).label!.fontSize, 20);
 });
 
-test("add_elements stickynote defaults to 250x250, fill #ffdf6b and font 28", () => {
+test("scene_add stickynote defaults to 250x250, fill #ffdf6b and font 28", () => {
   const { note, label } = stickyNote({ label: "hi" });
   assert.equal(STICKY_NOTE_FILL, "#ffdf6b");
   assert.equal(note.x, 0);
@@ -1719,7 +1719,7 @@ test("add_elements stickynote defaults to 250x250, fill #ffdf6b and font 28", ()
   assert.equal(stickyNote({ fontSize: Number.POSITIVE_INFINITY, label: "x" }).label!.fontSize, 28);
 });
 
-test("add_elements stickynote grows height past baseHeight when the label does not fit at 16 px", () => {
+test("scene_add stickynote grows height past baseHeight when the label does not fit at 16 px", () => {
   const words = "Every word of this paragraph is needed. ".repeat(12).trim();
   assert.equal(fitsBody(words, 250, 250, 16), false, "the case needs words too long for the smallest font");
   const { note, label } = stickyNote({ width: 250, height: 250, label: words });
@@ -1739,7 +1739,7 @@ test("add_elements stickynote grows height past baseHeight when the label does n
   assert.equal(small.note.height, Number(small.label!.height) + STICKY_NOTE_BODY_INSET_Y);
 });
 
-test("add_elements stickynote copies strokeColor onto its label", () => {
+test("scene_add stickynote copies strokeColor onto its label", () => {
   const { note, label } = stickyNote({ label: "red ink", strokeColor: "#e03131" });
   assert.equal(note.strokeColor, "#e03131");
   assert.equal(label!.strokeColor, "#e03131");
