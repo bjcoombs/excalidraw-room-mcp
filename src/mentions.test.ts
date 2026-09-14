@@ -2347,6 +2347,15 @@ test("acknowledging a mention that labels a rectangle removes the label and keep
   ).created;
   assert.equal(noteContainerToRemove([oval, ovalLabel], ovalLabel), null);
 
+  // Nor is a sticky note standing elsewhere on the canvas this mention's own:
+  // only the container the words are bound inside goes with them.
+  const [elsewhere] = buildElements(
+    [{ type: "stickynote", id: "sn", x: 900, y: 0, label: "someone else's note" }],
+    ctx(),
+  ).created;
+  assert.equal(noteContainerToRemove([elsewhere, box, label], label), null);
+  assert.deepEqual(removedWithMention([elsewhere, box, label], label, planAcknowledgement({})), []);
+
   // A mention standing on its own has no container to consider, and one naming
   // a container the room does not hold has nothing to remove either.
   const loose = rawElement({ id: "n", type: "text", text: "@claude hi" });
