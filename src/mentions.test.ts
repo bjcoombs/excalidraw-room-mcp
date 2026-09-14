@@ -65,6 +65,9 @@ import {
   MENTION_SCOPE_RULE_ANSWERING,
   MentionPolicy,
   newGroupId,
+  noteContainerToRemove,
+  removedWithMention,
+  STICKYNOTE_TYPE,
   policyLine,
   REPLY_KIND_CUSTOM_DATA_KEY,
   scopeRuleFor,
@@ -2261,4 +2264,93 @@ test("a depth that is not a whole number is read the bounded way", () => {
   assert.equal(chainOf(answering).depth, 1, "a line answering something is at least one hop from a root");
   const fractional = rawElement({ id: "y", type: "text", customData: { [DEPTH_CUSTOM_DATA_KEY]: 2.5 } });
   assert.equal(chainOf(fractional).depth, 0);
+});
+
+test("acknowledging a mention written inside a sticky note removes the note, not just its text", () => {
+  // What pressing N on excalidraw.com and typing into the note leaves on the
+  // canvas: a stickynote container and the words bound inside it.
+  const [note, words] = buildElements(
+    [{ type: "stickynote", id: "sn", x: 40, y: 80, width: POSTIT_WIDTH, label: "@claude tidy this diagram" }],
+    ctx(),
+  ).created;
+  const board = [note, words];
+  assert.deepEqual(findMentions(board).map((m) => m.id), [words.id], "the bound label is the mention");
+  assert.equal(noteContainerToRemove(board, words)?.id, note.id, "the note is the box the words were written in");
+
+  // Acknowledged with nothing else asked for, exactly as mention_acknowledge
+  // commits it: the words tombstoned, and the note with them.
+  const [removedNote, ...rest] = removedWithMention(board, words, planAcknowledgement({ keep: false }));
+  assert.deepEqual(rest, [], "one thing goes with the words, not a sweep of the canvas");
+  assert.equal(removedNote.id, note.id);
+  assert.equal(removedNote.isDeleted, true);
+  assert.equal(removedNote.version, note.version + 1, "bumped, or peers discard the tombstone");
+  assert.notEqual(removedNote.versionNonce, note.versionNonce);
+
+  const after = [removedNote, markRemoved(words)];
+  assert.equal(findMentions(after).length, 0);
+  assert.deepEqual(after.filter((el) => !el.isDeleted), [], "nothing of the note is left on the canvas");
+
+  // A kept note keeps its sticky note: the line written under it is read
+  // together with the question it answers.
+  for (const kept of [{ keep: true }, { status: "see chat" as const }, { reply: "which service?" }]) {
+    assert.deepEqual(removedWithMention(board, words, planAcknowledgement(kept)), [], JSON.stringify(kept));
+  }
+
+  // Acknowledged a second time the note is already gone, so nothing is bumped
+  // again, and the words are still recorded as dealt with.
+  assert.equal(noteContainerToRemove(after, after[1]), null);
+  assert.deepEqual(removedWithMention(after, after[1], planAcknowledgement({})), []);
+  assert.equal(isHandled(markHandled(new Map(), after[1]), after[1]), true);
+});
+
+test("answering a mention written inside a sticky note removes the question note and draws the answer sticky", () => {
+  const [note, words] = buildElements(
+    [{ type: "stickynote", id: "sn", x: 40, y: 80, width: POSTIT_WIDTH, label: "@claude what is a 303" }],
+    ctx(),
+  ).created;
+  const board = [note, words];
+  const plan = planAcknowledgement({ answer: "A redirect to GET." });
+  assert.equal(plan.kept, false, "an answered note is removed, so the note holding it goes too");
+
+  const removed = removedWithMention(board, words, plan);
+  assert.deepEqual(removed.map((el) => el.id), [note.id]);
+  const answer = buildAnswerPostIt(words, plan.answer!, ctx(), "alpha");
+  const after = [markRemoved(words), ...removed, answer.container, answer.label];
+
+  assert.deepEqual(
+    after.filter((el) => !el.isDeleted).map((el) => el.id),
+    [answer.container.id, answer.label.id],
+    "the answer sticky is the only note left standing",
+  );
+  assert.equal(answer.container.type, STICKYNOTE_TYPE);
+  assert.equal(findMentions(after).length, 0, "and nothing on the canvas asks the question twice");
+  // The spent-answer lookup still works with the question note gone, so a
+  // second answer replaces this sticky rather than drawing another beside it.
+  assert.equal(findAnswerPostIt(after, words.id)?.id, answer.container.id);
+  assert.equal(boundLabelOf(after, answer.container)?.id, answer.label.id);
+});
+
+test("acknowledging a mention that labels a rectangle removes the label and keeps the rectangle", () => {
+  // This container is the person's own drawing: the request is about it.
+  const [box, label] = buildElements(
+    [{ type: "rectangle", id: "r", x: 0, y: 0, width: 160, height: 80, label: "@claude make this blue" }],
+    ctx(),
+  ).created;
+  assert.equal(noteContainerToRemove([box, label], label), null);
+  assert.deepEqual(removedWithMention([box, label], label, planAcknowledgement({})), []);
+  const after = [box, markRemoved(label)];
+  assert.deepEqual(after.filter((el) => !el.isDeleted), [box], "the shape is untouched, not even bumped");
+
+  const [oval, ovalLabel] = buildElements(
+    [{ type: "ellipse", id: "e", x: 400, y: 0, width: 160, height: 80, label: "@claude and this one" }],
+    ctx(),
+  ).created;
+  assert.equal(noteContainerToRemove([oval, ovalLabel], ovalLabel), null);
+
+  // A mention standing on its own has no container to consider, and one naming
+  // a container the room does not hold has nothing to remove either.
+  const loose = rawElement({ id: "n", type: "text", text: "@claude hi" });
+  assert.equal(noteContainerToRemove([box, label, loose], loose), null);
+  const orphan = rawElement({ id: "o", type: "text", containerId: "gone", text: "@claude hi" });
+  assert.equal(noteContainerToRemove([box, label, orphan], orphan), null);
 });

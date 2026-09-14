@@ -92,6 +92,8 @@ The agent creates or joins a room, draws what was asked, then calls `mention_wai
 - `reply` (up to 400 characters) draws a question under a request that is unclear, and the note stays live. It must not contain a tag the agent answers to, or the question would read as a mention. `replyTo` is under Reply chains.
 - `answer` and `source` are under Questions on the canvas.
 
+A note written inside a sticky note is removed with the sticky note, so no empty note is left behind; a mention labelling a shape you drew leaves the shape and removes only the label.
+
 `status`, `reply` and `answer` exclude each other, and `note`, the free-text status before 0.7.0, is refused by name. Say what was done in chat, not on the canvas: artefacts of the work belong on the canvas, prose about it does not.
 
 ### Mention announcements

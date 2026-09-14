@@ -386,6 +386,12 @@ export const POSTIT_FILL = "#ffdf6b";
  */
 export const POSTIT_WIDTH = WRAP_WIDTH;
 
+/**
+ * The container excalidraw.com's N tool draws: the note a person types a
+ * mention into, and the one {@link buildAnswerPostIt} answers it with.
+ */
+export const STICKYNOTE_TYPE = "stickynote";
+
 /** Why a reply was refused, in words the caller can act on. */
 export const REPLY_BLANK_TEXT = "reply must not be blank; pass the question you want the person to answer, or acknowledge without a reply.";
 export const REPLY_TOO_LONG_TEXT =
@@ -678,7 +684,7 @@ export function buildAnswerPostIt(
   const { created } = buildElements(
     [
       {
-        type: "stickynote",
+        type: STICKYNOTE_TYPE,
         x: mention.x,
         y: mention.y,
         width: POSTIT_WIDTH,
@@ -718,6 +724,51 @@ export function findAnswerPostIt(elements: readonly ExcalidrawElement[], mention
     if (data?.[REPLY_CUSTOM_DATA_KEY] === mentionId && data[REPLY_KIND_CUSTOM_DATA_KEY] === ANSWER_KIND) return el;
   }
   return null;
+}
+
+/**
+ * The container to tombstone along with an acknowledged mention, or null when
+ * the container stays.
+ *
+ * A sticky note is a box drawn to carry words: with the mention gone the empty
+ * yellow note is litter in the same coordinate space as the drawing, and the
+ * person has to sweep it up by hand. Every other container is the drawing
+ * itself, which the mention was only labelling - `@claude make this blue`
+ * written on a rectangle is a request about the rectangle, so the label goes
+ * and the shape stays.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/126
+ *
+ * A container already tombstoned is not one to remove: a second
+ * acknowledgement of the same note must not bump a deleted note again.
+ */
+export function noteContainerToRemove(
+  elements: readonly ExcalidrawElement[],
+  mention: ExcalidrawElement,
+): ExcalidrawElement | null {
+  for (const el of elements) {
+    if (el.id === mention.containerId && !el.isDeleted && el.type === STICKYNOTE_TYPE) return el;
+  }
+  return null;
+}
+
+/**
+ * What an acknowledgement tombstones besides the mention itself: the sticky
+ * note the words were written in, and only when this acknowledgement removes
+ * the words. A kept note - `keep`, a status or a reply - keeps its sticky
+ * note, because the attributed line under it is read together with the
+ * question it answers.
+ *
+ * A list rather than an element or null so the caller appends it unconditionally,
+ * which is what keeps the branch here, where it can be tested, rather than in
+ * the tool handler, which no unit test reaches.
+ */
+export function removedWithMention(
+  elements: readonly ExcalidrawElement[],
+  mention: ExcalidrawElement,
+  plan: AcknowledgePlan,
+): ExcalidrawElement[] {
+  const container = plan.kept ? null : noteContainerToRemove(elements, mention);
+  return container ? [markRemoved(container)] : [];
 }
 
 /** The non-deleted text bound inside a container, if any. */
