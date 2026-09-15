@@ -106,12 +106,22 @@ test("canvas-listener keeps its canvas tools and gains Agent to spawn answerers"
   assert.ok(granted.has("Agent"), "canvas-listener spawns canvas-answerer, so it needs Agent");
 });
 
+// The sentence that restricts what canvas-listener may spawn, verbatim. There
+// is no per-agent spawn allowlist, so this sentence is the whole restriction:
+// asserting it exactly means weakening or deleting it fails this test, where
+// matching "canvas-answerer" and "spawn" separately would pass on any two
+// unrelated occurrences elsewhere in the file.
+const SPAWN_RESTRICTION =
+  "**`Agent` is for spawning `canvas-answerer` and nothing else.** Nothing enforces that: there is no " +
+  "per-agent spawn allowlist, so the restriction is this sentence.";
+
 test("canvas-listener's Agent grant is restricted to canvas-answerer in words", () => {
   const file = bundledAgentPaths().find((p) => path.basename(p) === "canvas-listener.md");
   assert.ok(file);
   const body = readFileSync(file, "utf8");
-  // There is no per-agent spawn allowlist, so the restriction is an
-  // instruction. If the sentence goes, the restriction goes with it.
-  assert.match(body, /canvas-answerer/);
-  assert.match(body, /spawn/i);
+  assert.ok(
+    body.includes(SPAWN_RESTRICTION),
+    "canvas-listener must carry the sentence restricting Agent to canvas-answerer, verbatim: " +
+      "it is the only thing standing between the listener and spawning anything else",
+  );
 });
