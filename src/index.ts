@@ -23,7 +23,7 @@ import {
 } from "./elements.js";
 import { forcedLine, protectedBy, refusalLines, type Refusal } from "./guard.js";
 import { isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
-import { HELP_TOPIC_NAMES, helpText, README_URL, readReadme } from "./help.js";
+import { helpText, README_URL, readReadme } from "./help.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import { DEFAULT_LISTENER, ListenLease, leaseLine, waitUnderLease } from "./lease.js";
 import {
@@ -608,7 +608,7 @@ server.registerTool(
   "room_status",
   {
     description:
-      "Use to check the connection and room settings. Returns handle, radius, reply depth, answerQuestions, the mention listener, peers and counts.",
+      "Use to check the connection and room settings. Returns handle, radius, reply depth, answerQuestions, listener, peers and counts.",
     inputSchema: {},
   },
   async () => text(statusText()),
@@ -620,7 +620,12 @@ let readme: string | undefined;
 server.registerTool(
   "room_help",
   {
-    description: `Use for formats and rules the tool descriptions leave out. Returns README text on ${HELP_TOPIC_NAMES.join(", ")}.`,
+    // The eight topic names are already in SERVER_INSTRUCTIONS, which every
+    // session reads at initialize, and an unknown topic lists them back. Naming
+    // them a third time here spent 44 characters of the tools/list budget on a
+    // list the model already holds.
+    description:
+      "Use for formats and rules the tool descriptions leave out. Returns README text by topic; an unknown topic lists them.",
     inputSchema: { topic: z.string() },
   },
   async ({ topic }) => {
@@ -937,7 +942,7 @@ gated(server.registerTool(
         .min(1)
         .max(64)
         .default(DEFAULT_LISTENER)
-        .describe("Who is listening. One name at a time; a second name is refused, not served."),
+        .describe("Who listens. One name at a time; a second is refused, not served."),
     },
   },
   async ({ tag, timeoutSeconds, radius, autoSeen, answerAgentMentions, listener }) => {
