@@ -10,6 +10,7 @@ import {
   measureText,
   PERSON_AUTHOR,
   stampAuthor,
+  STICKY_NOTE_PADDING,
   summarise,
   wrapText,
   WRAP_WIDTH,
@@ -50,8 +51,22 @@ import {
   answerGroupId,
   answerUnderNoteText,
   boundLabelOf,
+  ANSWER_WITH_URL_TEXT,
   buildAnswerPostIt,
+  buildConfidenceMarker,
   buildMentionAnswer,
+  CONFIDENCE_CUSTOM_DATA_KEY,
+  CONFIDENCE_HIGH_WITHOUT_SOURCE_TEXT,
+  CONFIDENCE_LEVELS,
+  CONFIDENCE_MARKER_BASELINE,
+  CONFIDENCE_MARKER_FONT_SIZE,
+  confidenceMarkerText,
+  confidenceSchema,
+  confidenceUnknownText,
+  CONFIDENCE_WITHOUT_ANSWER_TEXT,
+  containsUrl,
+  findConfidenceMarker,
+  spentAnswerElements,
   DEFAULT_INK,
   findAnswerPostIt,
   isSourceUrl,
@@ -1608,6 +1623,7 @@ test("the refusal messages, the marker colours and the custom-data keys are what
   assert.equal(ROOT_AUTHOR_KIND_CUSTOM_DATA_KEY, "excalidrawRoomRootAuthorKind");
   assert.equal(DEPTH_CUSTOM_DATA_KEY, "excalidrawRoomDepth");
   assert.equal(ANSWER_KIND, "answer");
+  assert.equal(CONFIDENCE_CUSTOM_DATA_KEY, "excalidrawRoomConfidence");
 
   assert.equal(
     statusUnknownText("declined"),
@@ -1639,6 +1655,22 @@ test("the refusal messages, the marker colours and the custom-data keys are what
     "answer and reply exclude each other: an answer replaces the note with a sticky note holding what you know, a reply " +
       "keeps it and writes the question you need answered under it. Pass one or the other.",
   );
+
+  assert.equal(
+    CONFIDENCE_WITHOUT_ANSWER_TEXT,
+    "confidence belongs to an answer: it is drawn on the answer sticky note, so pass it with answer or not at all.",
+  );
+  assert.equal(
+    CONFIDENCE_HIGH_WITHOUT_SOURCE_TEXT,
+    'confidence "high" needs a source: a confident claim on the canvas outlives the session that wrote it, so pass the ' +
+      'URL behind it as source, or state "moderate" or "low".',
+  );
+  assert.equal(
+    ANSWER_WITH_URL_TEXT,
+    "answer must not contain a URL: the citation is the link on the answer sticky note, so pass it as source and spend " +
+      "the answer's characters on what the question asked.",
+  );
+  assert.equal(confidenceUnknownText("certain"), 'confidence must be "high", "moderate" or "low", not "certain".');
 
   assert.equal(
     AGENT_REPLY_DEPTH_RANGE_TEXT,
@@ -2400,6 +2432,157 @@ test("a sticky-note question and its answer share a group id", () => {
   assert.deepEqual(nested.changed[1].groupIds, [group], "the answer joins the shared group only");
   assert.deepEqual(inheritGroups(words, grouped).groupIds, ["theirs"], "and a label takes its box's list, not a copy of its own");
   assert.deepEqual(inheritGroups(words, { ...note, groupIds: undefined }).groupIds, [], "a box in no group puts its label in none");
+});
+
+/**
+ * Confidence: the answer channel's epistemic status, stated on the note rather
+ * than inside the answer, and the top of the scale paid for with a citation.
+ * https://github.com/bjcoombs/excalidraw-room-mcp/issues/131
+ */
+test("a confident answer needs a source, and every confidence refusal leaves the note untouched", () => {
+  const source = "https://www.rfc-editor.org/rfc/rfc9110";
+  const answer = "A 303 tells the client to fetch the result with GET.";
+  const written = "@claude what does a 303 do";
+  const [note, words] = buildElements(
+    [{ type: "stickynote", id: "sn", x: 40, y: 80, width: POSTIT_WIDTH, label: written }],
+    ctx(),
+  ).created;
+  const board = [note, words];
+
+  // Confidence without an answer has nothing to mark, and says so the way a
+  // source without an answer does.
+  const orphan = planAcknowledgement({ confidence: "low" });
+  assert.equal(orphan.refusal, CONFIDENCE_WITHOUT_ANSWER_TEXT);
+  assert.match(CONFIDENCE_WITHOUT_ANSWER_TEXT, /confidence/);
+  assert.match(CONFIDENCE_WITHOUT_ANSWER_TEXT, /answer/);
+  // High without a URL is a confident claim with nothing behind it.
+  const unsourced = planAcknowledgement({ answer, confidence: "high" });
+  assert.equal(unsourced.refusal, CONFIDENCE_HIGH_WITHOUT_SOURCE_TEXT);
+  assert.match(CONFIDENCE_HIGH_WITHOUT_SOURCE_TEXT, /source/);
+  // A URL inside the answer spends the characters the citation already has a
+  // place for, and the refusal names that place.
+  const pasted = planAcknowledgement({ answer: `A redirect to GET. See https://example.com/303.` });
+  assert.equal(pasted.refusal, ANSWER_WITH_URL_TEXT);
+  assert.match(ANSWER_WITH_URL_TEXT, /source/);
+  const bareHost = planAcknowledgement({ answer: "A redirect to GET, per www.rfc-editor.org." });
+  assert.equal(bareHost.refusal, ANSWER_WITH_URL_TEXT);
+  // A level outside the three, from a host that forwarded it unvalidated.
+  const unknown = planAcknowledgement({ answer, source, confidence: "certain" as never });
+  assert.equal(unknown.refusal, confidenceUnknownText("certain"));
+
+  // Every one of them plans nothing: no line, no answer, nothing kept, and the
+  // canvas functions given the plan touch neither the note nor its words.
+  for (const plan of [orphan, unsourced, pasted, bareHost, unknown]) {
+    assert.equal(plan.answer, undefined);
+    assert.equal(plan.confidence, undefined);
+    assert.equal(answeredStickyNote(board, words, plan), null, "nothing is drawn under the note");
+    assert.equal(noteStays(plan, null), false);
+    // Last: this narrows `plan` to the literal, so nothing reads it after.
+    assert.deepEqual(plan, { refusal: plan.refusal, kept: false, replies: false });
+  }
+  assert.equal(words.originalText, written, "the words are exactly as they were typed");
+  assert.equal(note.isDeleted, false);
+  assert.equal(words.isDeleted, false);
+
+  // Moderate and low need no source: an agent with no web lookup can still say
+  // how far to trust what it wrote.
+  for (const confidence of ["moderate", "low"] as const) {
+    const plan = planAcknowledgement({ answer, confidence });
+    assert.equal(plan.refusal, undefined, confidence);
+    assert.equal(plan.confidence, confidence);
+    assert.equal(plan.link, undefined);
+  }
+  const confident = planAcknowledgement({ answer, source, confidence: "high" });
+  assert.equal(confident.refusal, undefined);
+  assert.equal(confident.confidence, "high");
+  assert.equal(confident.link, source);
+  // An answer with no confidence is planned exactly as it was before.
+  const silent = planAcknowledgement({ answer, source });
+  assert.equal(silent.confidence, undefined);
+  assert.ok(!("confidence" in silent), "and no confidence key at all");
+
+  // The closed set, as the tool declares it and as the module reads it.
+  assert.deepEqual([...CONFIDENCE_LEVELS], ["high", "moderate", "low"]);
+  assert.equal(confidenceSchema.safeParse("high").success, true);
+  assert.equal(confidenceSchema.safeParse("certain").success, false);
+  assert.equal(containsUrl("A redirect to GET."), false);
+  assert.equal(containsUrl("no dots here"), false);
+  assert.equal(containsUrl("HTTPS://EXAMPLE.COM"), true);
+  assert.equal(containsUrl("see http://example.com/x for more"), true);
+  assert.equal(containsUrl("www.example.com"), true);
+});
+
+test("the confidence marker sits in the answer note's footer row, distinct from the answer text", () => {
+  const source = "https://www.rfc-editor.org/rfc/rfc9110";
+  const [note, words] = buildElements(
+    [{ type: "stickynote", id: "sn", x: 40, y: 80, width: POSTIT_WIDTH, label: "@claude what does a 303 do" }],
+    ctx(),
+  ).created;
+  const plan = planAcknowledgement({ answer: "A 303 tells the client to fetch the result with GET.", source, confidence: "high" });
+  const answered = buildMentionAnswer(words, markAcknowledged(words), note, plan.answer!, ctx(), "alpha", {
+    link: plan.link,
+    confidence: plan.confidence,
+  });
+  const [question, container, label, marker] = answered.changed;
+
+  assert.equal(answered.changed.length, 4, "the note, the answer sticky, its words and the marker");
+  assert.equal(marker.type, "text", "an element of its own, not part of the answer");
+  assert.equal(marker.text, "confidence: high");
+  assert.equal(marker.text, confidenceMarkerText("high"));
+  // Fixed position: the bottom-left of the footer row, whose right holds the date.
+  assert.equal(marker.x, container.x + STICKY_NOTE_PADDING);
+  assert.equal(marker.y, container.y + container.height - CONFIDENCE_MARKER_BASELINE - CONFIDENCE_MARKER_FONT_SIZE);
+  assert.ok(marker.y > Number(label.y) + Number(label.height), "clear of the answer's own words");
+  assert.ok(marker.y + marker.height <= container.y + container.height, "and inside the note");
+  assert.ok(marker.x + marker.width < container.x + container.width, "with room left for the footer date");
+  // Visually distinct: the footer's type size, well under the answer's, in the
+  // acknowledged grey rather than the canvas ink.
+  assert.equal(marker.fontSize, CONFIDENCE_MARKER_FONT_SIZE);
+  assert.ok(Number(marker.fontSize) < Number(label.fontSize), `${marker.fontSize} vs ${label.fontSize}`);
+  assert.equal(marker.strokeColor, ACKNOWLEDGED_STROKE);
+  assert.equal(container.strokeColor, DEFAULT_INK);
+  // Never concatenated into the answer.
+  assert.ok(!(label.originalText as string).includes("confidence"), label.originalText as string);
+  assert.equal(label.originalText, answerUnderNoteText(plan.answer!, "alpha"));
+  assert.equal(elementAuthor(marker), "alpha");
+  const data = marker.customData as Record<string, unknown>;
+  assert.equal(data[CONFIDENCE_CUSTOM_DATA_KEY], "high");
+  assert.equal(data[REPLY_CUSTOM_DATA_KEY], words.id);
+  assert.equal(data[REPLY_KIND_CUSTOM_DATA_KEY], ANSWER_KIND);
+  // It drags with the question and the answer, and it asks nothing of anyone.
+  assert.deepEqual(marker.groupIds, container.groupIds);
+  assert.deepEqual(question.groupIds, container.groupIds);
+  assert.equal(findMentions([question, answered.mention, container, label, marker]).length, 1, "only the person's note");
+
+  // Found to be cleared when a later answer replaces the note, and never read
+  // as the attributed line under the person's note.
+  const board = [question, answered.mention, container, label, marker];
+  assert.equal(findConfidenceMarker(board, words.id)?.id, marker.id);
+  assert.equal(findAttributedLine(board, words.id), null, "the marker is not a line under the note");
+  assert.equal(findConfidenceMarker([...board.slice(0, 4), markRemoved(marker)], words.id), null, "a tombstone is not one to clear");
+  assert.equal(findAnswerPostIt(board, words.id)?.id, container.id, "and it is not mistaken for the note itself");
+  // A later answer clears all three, so no marker outlives the answer it marks.
+  const spent = spentAnswerElements(board, words.id);
+  assert.deepEqual(spent.map((el) => el.id), [container.id, label.id, marker.id]);
+  assert.deepEqual(spent.map((el) => el.isDeleted), [true, true, true]);
+  assert.deepEqual(spentAnswerElements(board, "other"), [], "and nothing is cleared for another note");
+
+  // Stated on a loose text mention's replacement note in the same place.
+  const [loose] = buildElements([{ type: "text", id: "q", x: 12, y: 24, text: "@claude what does a 303 do" }], ctx()).created;
+  const replaced = buildMentionAnswer(loose, markRemoved(loose), null, "A redirect to GET.", ctx(), "alpha", { confidence: "low" });
+  assert.equal(replaced.changed.length, 3);
+  const [box, boxLabel, lowMarker] = replaced.changed;
+  assert.equal(lowMarker.text, "confidence: low");
+  assert.equal(lowMarker.x, box.x + STICKY_NOTE_PADDING);
+  assert.equal(lowMarker.y, box.y + box.height - CONFIDENCE_MARKER_BASELINE - CONFIDENCE_MARKER_FONT_SIZE);
+  assert.ok(!(boxLabel.originalText as string).includes("confidence"));
+  assert.deepEqual(lowMarker.groupIds, [], "nothing to group with when the note it replaced was loose");
+
+  // An answer that states nothing draws no marker at all.
+  const silent = buildMentionAnswer(words, markAcknowledged(words), note, "A redirect to GET.", ctx(), "alpha");
+  assert.equal(silent.changed.length, 3);
+  assert.equal(buildAnswerPostIt(words, "A redirect to GET.", ctx(), "alpha").marker, undefined);
+  assert.equal(buildConfidenceMarker(container, words.id, "moderate", ctx(), "alpha").text, "confidence: moderate");
 });
 
 test("answering a plain text mention still replaces it with an answer sticky", () => {
