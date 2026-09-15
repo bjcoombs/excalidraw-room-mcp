@@ -13,8 +13,10 @@ set -euo pipefail
 # README.md is what room_help reads its topics from, at ../README.md from
 # dist/. The last two are what scene_snapshot rasterises with: the resvg
 # WebAssembly module, and the one font it loads so text renders the same on
-# every host. Keep each of those on a line of its own - the acceptance check
-# reads the whole line as the path.
+# every host. The two agents/ files are what `install-agent` copies out of the
+# installed package, so a bundle without them has a subcommand that cannot
+# work. Keep each of those on a line of its own - the acceptance check reads
+# the whole line as the path.
 required=(
   manifest.json
   README.md
@@ -22,6 +24,8 @@ required=(
   dist/view/canvas.html
   node_modules/@resvg/resvg-wasm/index_bg.wasm
   assets/fonts/DejaVuSans.ttf
+  agents/canvas-listener.md
+  agents/canvas-answerer.md
 )
 
 # Path prefixes that must not appear at the root of the bundle - one per
