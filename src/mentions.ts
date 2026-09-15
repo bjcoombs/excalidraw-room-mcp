@@ -538,12 +538,6 @@ export const ANSWER_WITH_URL_TEXT =
   "the answer's characters on what the question asked.";
 
 /**
- * Whether an answer has a URL in it. Loose on purpose: a bare `www.` host is
- * a citation a reader will click at the same as a full one, and both spend the
- * characters the answer needs and duplicate the link icon `source` already
- * draws.
- */
-/**
  * Why a level outside the three was refused. Checked here as well as by
  * `confidenceSchema`, because a host that forwards arguments unvalidated must
  * not get free text drawn on the canvas as a confidence.
@@ -553,6 +547,12 @@ export function confidenceUnknownText(confidence: string): string {
   return `confidence must be ${quoted.slice(0, -1).join(", ")} or ${quoted[quoted.length - 1]}, not ${JSON.stringify(confidence)}.`;
 }
 
+/**
+ * Whether an answer has a URL in it. Loose on purpose: a bare `www.` host is
+ * a citation a reader will click at the same as a full one, and both spend the
+ * characters the answer needs and duplicate the link icon `source` already
+ * draws.
+ */
 export function containsUrl(text: string): boolean {
   return /https?:\/\//i.test(text) || /\bwww\.[a-z0-9-]+\.[a-z]/i.test(text);
 }
