@@ -23,8 +23,9 @@ import {
 } from "./elements.js";
 import { forcedLine, protectedBy, refusalLines, type Refusal } from "./guard.js";
 import { isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
-import { HELP_TOPIC_NAMES, helpText, README_URL, readReadme } from "./help.js";
+import { helpText, README_URL, readReadme } from "./help.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
+import { DEFAULT_LISTENER, LISTENER_PATTERN, ListenLease, leaseLine, waitUnderLease } from "./lease.js";
 import {
   agentReplyDepthLine,
   agentReplyDepthRefusal,
@@ -140,6 +141,14 @@ let acknowledgedMentions: HandledNotes = new Map();
  * not a permission for the next.
  */
 const mentionPolicy = new MentionPolicy();
+/**
+ * Which caller on this connection is waiting for mentions. In memory beside
+ * the two handled maps, but deliberately not cleared by the join that clears
+ * them: the maps are about notes on one canvas, the lease is about who on this
+ * connection is waiting, and a wait in flight across a room change outlives
+ * the join. src/lease.ts has the whole argument.
+ */
+const listenLease = new ListenLease();
 room.on("joined", () => {
   handledMentions = new Map();
   acknowledgedMentions = new Map();
@@ -471,6 +480,7 @@ function statusText(): string {
     `nearbyRadius: ${s.nearbyRadius}`,
     agentReplyDepthLine(s.agentReplyDepth),
     policyLine(mentionPolicy),
+    leaseLine(listenLease),
     `peers: ${peers}`,
     viewersLine(viewers),
     `elements: ${s.elementCount} (${s.deletedCount} deleted)`,
@@ -600,7 +610,7 @@ server.registerTool(
   "room_status",
   {
     description:
-      "Use to check the connection and room settings. Returns handle, radius, reply depth, answerQuestions, peers and counts.",
+      "Use to check the connection and room settings. Returns handle, radius, reply depth, answerQuestions, listener, peers and counts.",
     inputSchema: {},
   },
   async () => text(statusText()),
@@ -612,7 +622,12 @@ let readme: string | undefined;
 server.registerTool(
   "room_help",
   {
-    description: `Use for formats and rules the tool descriptions leave out. Returns README text on ${HELP_TOPIC_NAMES.join(", ")}.`,
+    // The eight topic names are already in SERVER_INSTRUCTIONS, which every
+    // session reads at initialize, and an unknown topic lists them back. Naming
+    // them a third time here spent 44 characters of the tools/list budget on a
+    // list the model already holds.
+    description:
+      "Use for formats and rules the tool descriptions leave out. Returns README text by topic; an unknown topic lists them.",
     inputSchema: { topic: z.string() },
   },
   async ({ topic }) => {
@@ -924,15 +939,27 @@ gated(server.registerTool(
       radius: z.number().min(0).optional(),
       autoSeen: autoSeenSchema,
       answerAgentMentions: answerAgentMentionsSchema,
+      listener: z
+        .string()
+        .regex(LISTENER_PATTERN)
+        .default(DEFAULT_LISTENER)
+        .describe("Who listens. One name at a time; a second is refused, not served."),
     },
   },
-  async ({ tag, timeoutSeconds, radius, autoSeen, answerAgentMentions }) => {
+  async ({ tag, timeoutSeconds, radius, autoSeen, answerAgentMentions, listener }) => {
     if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     const tags = resolveTags(tag, room.handle);
-    const mention = await room.waitForMention(tags, handledMentions, {
-      timeoutMs: timeoutSeconds * 1000,
-      accept: (m) => visibleMentions([m], room.handle, answerAgentMentions, room.agentReplyDepth).length > 0,
-    });
+    const timeoutMs = timeoutSeconds * 1000;
+    // The lease gates the wait rather than the merge rule: a foreign listener
+    // is turned away here, before anything blocks. See src/lease.ts.
+    const outcome = await waitUnderLease(listenLease, listener, timeoutMs, () =>
+      room.waitForMention(tags, handledMentions, {
+        timeoutMs,
+        accept: (m) => visibleMentions([m], room.handle, answerAgentMentions, room.agentReplyDepth).length > 0,
+      }),
+    );
+    if (!outcome.granted) return text(outcome.text);
+    const mention = outcome.value;
     if (!mention) return text(`no mention of ${tags[0]} within ${timeoutSeconds}s`);
     const elements = room.getElements();
     const reach = nearRadius(room.nearbyRadius, radius);
