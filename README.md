@@ -83,6 +83,7 @@ The agent creates or joins a room, draws what was asked, then calls `mention_wai
 - `mention_wait` blocks until a mention addressed to the agent has stopped changing for about 1.5 s, because peers broadcast every keystroke, then returns it with its neighbourhood. After `timeoutSeconds` (1 to 600, 60 by default) it returns `no mention of <tag> within <n>s`.
 - `mention_list` returns every pending mention now, without waiting. `includeHandled: true` also lists acknowledged notes still on the canvas, after the pending ones, marked `handled` and never marked seen.
 - `mention_poll` is the cheap probe to use inside a turn: connection, `sceneVersion`, peers, the ids and text of pending mentions, `answerQuestions`, and `changedSince`, which is false only while the scene version still equals the `sinceVersion` passed. Keep `mention_wait` for handing the turn back to a person.
+- `mention_wait` takes a `listener` name, `lead` by default, and one name holds the listening lease at a time. The same name renews it; a different name gets back `<holder> is listening for mentions on this connection` at once, without waiting, and reads pending notes with `mention_list` instead. The hold runs to the wait's own `timeoutSeconds` plus 30 seconds, so a listener that was killed mid-wait frees the lease within half a minute and the next caller takes it under any name; a restarted listener reusing its name reclaims it immediately. `room_status` reports the holder and the seconds left. Only `mention_wait` is gated: `mention_list`, `mention_acknowledge` and the `scene_` tools work without the lease, so an agent handed one note still reads and answers it.
 - All three take `tag` (match that text alone instead of the agent's own `@<handle>` and `@claude`; matching is case-insensitive) and `answerAgentMentions` (see Handles and addressing). `mention_wait` and `mention_list` take `radius`, overriding the room's `nearbyRadius`, and `autoSeen`: true by default, it marks a returned mention seen on the canvas, and `autoSeen: false` looks without touching the drawing.
 
 `mention_acknowledge` closes a mention by `id`. By default it removes the note: the seen marker already told the person it landed, and the drawing is the evidence. Otherwise:
@@ -170,7 +171,7 @@ An agent's `reply` to another agent's note is addressed back to it, as `<handle>
 
 ### Lead and listener
 
-Blocking ten minutes on `mention_wait` ties up your main session. Split the roles. The lead (your session) creates the room and handles anything structural. A listener subagent owns the wait loop, makes small edits in place and hands anything else back. Install it with `npx -y excalidraw-room-mcp install-agent` (`--global` for every project), then, with a room open, ask the session to "start the canvas listener".
+Blocking ten minutes on `mention_wait` ties up your main session. Split the roles. The lead (your session) creates the room and handles anything structural. A listener subagent owns the wait loop, makes small edits in place and hands anything else back. Install it with `npx -y excalidraw-room-mcp install-agent` (`--global` for every project), then, with a room open, ask the session to "start the canvas listener". A subagent borrows the lead's connection, so both are the same room peer and the listening lease is what keeps one note going to one of them: the listener waits under `listener: "canvas-listener"`, and a lead that calls `mention_wait` while that is live is told who is listening rather than handed the same note.
 
 ## Tools
 
@@ -192,7 +193,7 @@ Tool names carry their group: `room_` for the connection, `scene_` for the drawi
 | `scene_update` | Patch elements by id (`updates: [{id, set}]`). `force` edits another present agent's work. |
 | `scene_translate` | Move elements by `dx`/`dy`, carrying bound labels, group members, frame children and arrows bound at both ends. `force` as above. |
 | `scene_delete` | Soft-delete by id. `force` as above. |
-| `mention_wait` | Block until a mention addressed to this agent appears and settles, then return it with its neighbourhood. `tag`, `answerAgentMentions`, `autoSeen`, `timeoutSeconds`. |
+| `mention_wait` | Block until a mention addressed to this agent appears and settles, then return it with its neighbourhood. `tag`, `answerAgentMentions`, `autoSeen`, `timeoutSeconds`, `listener`. |
 | `mention_list` | All pending mentions now, with the same options. `includeHandled: true` also lists notes kept on the canvas. |
 | `mention_poll` | Cheap state probe: connection, scene version, peers, pending mention ids, changes since a version. |
 | `mention_acknowledge` | Mark a mention handled: remove the note (default), or keep it with `keep`, a `status` (`out of scope`, `see chat`), or a `reply` question. An `answer` with `source` replaces the note with a sticky note holding the question and the answer. `replyTo` addresses a reply to another agent. |

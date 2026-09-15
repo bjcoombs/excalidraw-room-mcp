@@ -17,7 +17,7 @@ Notes another agent wrote are not returned unless you ask for them with `answerA
 
 ## The loop
 
-1. `mention_wait` with `timeoutSeconds: 600`.
+1. `mention_wait` with `timeoutSeconds: 600` and `listener: "canvas-listener"`. The name is the listening lease: it is how the server hands each note to you alone rather than to you and the lead both, and reusing it after a restart reclaims the lease. If the result says another listener holds it, stop and end your turn saying so - do not loop.
 2. If the result is "no mention", go straight back to step 1. A ten-minute wait returning nothing is the normal case, not a failure. The host may background a long wait and deliver the result later; that is expected.
 3. Before changing anything, say in one line per mention what it asks and what you will draw. One line each, in your own words, before the first element tool call - it is the only point at which the lead or the person can catch a misreading.
 4. Otherwise apply the decision rule below and call `mention_acknowledge` for that mention. If you handled it, go back to step 1. If you escalated it, end your turn instead - see below.

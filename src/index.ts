@@ -24,6 +24,7 @@ import {
 import { forcedLine, protectedBy, refusalLines, type Refusal } from "./guard.js";
 import { isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
 import { HELP_TOPIC_NAMES, helpText, README_URL, readReadme } from "./help.js";
+import { DEFAULT_LISTENER, ListenLease, leaseLine, waitUnderLease } from "./lease.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
 import {
   agentReplyDepthLine,
@@ -139,10 +140,17 @@ let acknowledgedMentions: HandledNotes = new Map();
  * not a permission for the next.
  */
 const mentionPolicy = new MentionPolicy();
+/**
+ * Which caller on this connection is waiting for mentions. In memory beside
+ * the two handled maps and reset by the same join, because a lease taken for
+ * one room says nothing about who listens in the next. See src/lease.ts.
+ */
+const listenLease = new ListenLease();
 room.on("joined", () => {
   handledMentions = new Map();
   acknowledgedMentions = new Map();
   mentionPolicy.reset();
+  listenLease.reset();
 });
 
 /**
@@ -470,6 +478,7 @@ function statusText(): string {
     `nearbyRadius: ${s.nearbyRadius}`,
     agentReplyDepthLine(s.agentReplyDepth),
     policyLine(mentionPolicy),
+    leaseLine(listenLease),
     `peers: ${peers}`,
     viewersLine(viewers),
     `elements: ${s.elementCount} (${s.deletedCount} deleted)`,
@@ -599,7 +608,7 @@ server.registerTool(
   "room_status",
   {
     description:
-      "Use to check the connection and room settings. Returns handle, radius, reply depth, answerQuestions, peers and counts.",
+      "Use to check the connection and room settings. Returns handle, radius, reply depth, answerQuestions, the mention listener, peers and counts.",
     inputSchema: {},
   },
   async () => text(statusText()),
@@ -923,15 +932,28 @@ gated(server.registerTool(
       radius: z.number().min(0).optional(),
       autoSeen: autoSeenSchema,
       answerAgentMentions: answerAgentMentionsSchema,
+      listener: z
+        .string()
+        .min(1)
+        .max(64)
+        .default(DEFAULT_LISTENER)
+        .describe("Who is listening. One name at a time; a second name is refused, not served."),
     },
   },
-  async ({ tag, timeoutSeconds, radius, autoSeen, answerAgentMentions }) => {
+  async ({ tag, timeoutSeconds, radius, autoSeen, answerAgentMentions, listener }) => {
     if (!room.isConnected) return text("not in a room; call room_join or room_create first");
     const tags = resolveTags(tag, room.handle);
-    const mention = await room.waitForMention(tags, handledMentions, {
-      timeoutMs: timeoutSeconds * 1000,
-      accept: (m) => visibleMentions([m], room.handle, answerAgentMentions, room.agentReplyDepth).length > 0,
-    });
+    const timeoutMs = timeoutSeconds * 1000;
+    // The lease gates the wait rather than the merge rule: a foreign listener
+    // is turned away here, before anything blocks. See src/lease.ts.
+    const outcome = await waitUnderLease(listenLease, listener, timeoutMs, () =>
+      room.waitForMention(tags, handledMentions, {
+        timeoutMs,
+        accept: (m) => visibleMentions([m], room.handle, answerAgentMentions, room.agentReplyDepth).length > 0,
+      }),
+    );
+    if (!outcome.granted) return text(outcome.text);
+    const mention = outcome.value;
     if (!mention) return text(`no mention of ${tags[0]} within ${timeoutSeconds}s`);
     const elements = room.getElements();
     const reach = nearRadius(room.nearbyRadius, radius);
