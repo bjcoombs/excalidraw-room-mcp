@@ -142,7 +142,7 @@ test("scene_snapshot takes only the six selector and size arguments, none of the
   assert.match(firstSentence, /overlap/);
 });
 
-test("mention_acknowledge takes id, keep, reply, replyTo, status, answer and source, and refuses anything else by name", async () => {
+test("mention_acknowledge takes id, keep, reply, replyTo, status, answer, source and confidence, and refuses anything else by name", async () => {
   const ack = tools.find((t) => t.name === "mention_acknowledge");
   assert.ok(ack, "mention_acknowledge is not in tools/list");
   const schema = ack.inputSchema as {
@@ -150,8 +150,18 @@ test("mention_acknowledge takes id, keep, reply, replyTo, status, answer and sou
     required?: string[];
     additionalProperties?: boolean;
   };
-  assert.deepEqual(Object.keys(schema.properties).sort(), ["answer", "id", "keep", "reply", "replyTo", "source", "status"]);
+  assert.deepEqual(Object.keys(schema.properties).sort(), [
+    "answer",
+    "confidence",
+    "id",
+    "keep",
+    "reply",
+    "replyTo",
+    "source",
+    "status",
+  ]);
   assert.deepEqual(schema.properties.status.enum, ["out of scope", "see chat"]);
+  assert.deepEqual(schema.properties.confidence.enum, ["high", "moderate", "low"]);
   assert.deepEqual(schema.required ?? [], ["id"]);
   // Strict, so `note` - the free-text status this tool took until 0.7.0 - is
   // refused by name rather than silently dropped.

@@ -24,6 +24,7 @@ import {
   PERSON_AUTHOR,
   randomId,
   stampAuthor,
+  STICKY_NOTE_PADDING,
   summarise,
   wrapText,
   WRAP_WIDTH,
@@ -364,6 +365,14 @@ export const REPLY_KIND_CUSTOM_DATA_KEY = "excalidrawRoomReplyKind";
 export const ANSWER_KIND = "answer";
 
 /**
+ * Where the confidence marker records the level it states. It is a text
+ * element of its own rather than words inside the note, so this is what tells
+ * it from the attributed line under a note - both carry the back reference -
+ * and what a later acknowledgement finds to clear.
+ */
+export const CONFIDENCE_CUSTOM_DATA_KEY = "excalidrawRoomConfidence";
+
+/**
  * Where a note records the stroke colour it carried before the server marked
  * it seen. The amber seen stroke overwrites the person's own colour, so
  * without this the colour to put back when the note is kept is gone: an
@@ -499,6 +508,55 @@ export function isSourceUrl(source: string): boolean {
   return /^https?:\/\/\S+$/.test(source);
 }
 
+/**
+ * How well founded an answer is, as the canvas states it.
+ *
+ * A closed set rather than free prose: the value is rendered in one fixed
+ * place on the answer note, so a reader learns to read it once, and the server
+ * can require a citation behind the top of the scale. Hedging written into the
+ * answer text is neither of those things.
+ */
+export const CONFIDENCE_LEVELS = ["high", "moderate", "low"] as const;
+
+export type ConfidenceLevel = (typeof CONFIDENCE_LEVELS)[number];
+
+/** The set as the tool declares it, so an unknown level is refused by the schema too. */
+export const confidenceSchema = z.enum(CONFIDENCE_LEVELS);
+
+export function isConfidenceLevel(value: string): value is ConfidenceLevel {
+  return (CONFIDENCE_LEVELS as readonly string[]).includes(value);
+}
+
+/** Why a confidence or a URL inside an answer was refused, in words the caller can act on. */
+export const CONFIDENCE_WITHOUT_ANSWER_TEXT =
+  "confidence belongs to an answer: it is drawn on the answer sticky note, so pass it with answer or not at all.";
+export const CONFIDENCE_HIGH_WITHOUT_SOURCE_TEXT =
+  'confidence "high" needs a source: a confident claim on the canvas outlives the session that wrote it, so pass the ' +
+  'URL behind it as source, or state "moderate" or "low".';
+export const ANSWER_WITH_URL_TEXT =
+  "answer must not contain a URL: the citation is the link on the answer sticky note, so pass it as source and spend " +
+  "the answer's characters on what the question asked.";
+
+/**
+ * Why a level outside the three was refused. Checked here as well as by
+ * `confidenceSchema`, because a host that forwards arguments unvalidated must
+ * not get free text drawn on the canvas as a confidence.
+ */
+export function confidenceUnknownText(confidence: string): string {
+  const quoted = CONFIDENCE_LEVELS.map((c) => `"${c}"`);
+  return `confidence must be ${quoted.slice(0, -1).join(", ")} or ${quoted[quoted.length - 1]}, not ${JSON.stringify(confidence)}.`;
+}
+
+/**
+ * Whether an answer has a URL in it. Loose on purpose: a bare `www.` host is
+ * a citation a reader will click at the same as a full one, and both spend the
+ * characters the answer needs and duplicate the link icon `source` already
+ * draws.
+ */
+export function containsUrl(text: string): boolean {
+  return /https?:\/\//i.test(text) || /\bwww\.[a-z0-9-]+\.[a-z]/i.test(text);
+}
+
 /** The attributed line for a status: the prefix and the fixed words, nothing else. */
 export function attributedStatusText(status: MentionStatus, handle?: string | null): string {
   return `${attributionPrefix(handle)}${status}`;
@@ -558,6 +616,10 @@ export function findAttributedLine(elements: readonly ExcalidrawElement[], menti
   for (const el of elements) {
     if (el.isDeleted || el.type !== "text") continue;
     const data = el.customData as Record<string, unknown> | undefined;
+    // The confidence marker carries the same back reference but belongs to the
+    // answer note it is drawn on, not under the person's note, so it is
+    // neither reported as the previous line nor cleared as one.
+    if (typeof data?.[CONFIDENCE_CUSTOM_DATA_KEY] === "string") continue;
     if (data?.[REPLY_CUSTOM_DATA_KEY] === mentionId) return el;
   }
   return null;
@@ -583,6 +645,12 @@ export interface AttributedLineOptions {
    * draws, so the count holds however the chain was continued.
    */
   chain?: ChainOrigin;
+  /**
+   * How well founded the answer is. Read by {@link buildAnswerPostIt} only,
+   * which draws it as a marker on the note; an attributed line has no place to
+   * put one and ignores it.
+   */
+  confidence?: ConfidenceLevel;
 }
 
 export function buildAttributedLine(
@@ -668,10 +736,93 @@ export function postItParagraphs(text: string): { question: string; answer: stri
   };
 }
 
-/** An answer sticky note: the container and the text bound inside it. */
+/** An answer sticky note: the container, the text bound inside it, and the confidence marker. */
 export interface AnswerPostIt {
   container: ExcalidrawElement;
   label: ExcalidrawElement;
+  /** The confidence marker, or undefined when the answer stated none. */
+  marker?: ExcalidrawElement;
+}
+
+/**
+ * The confidence marker's type size and where its baseline sits above the
+ * note's bottom edge: the footer row's own, so the marker reads as the note's
+ * own furniture on the left of the row whose right holds the date.
+ *
+ * The row is free by construction. A sticky note's label is laid out from the
+ * top inside the padding and the note grows by STICKY_NOTE_BODY_INSET_Y past
+ * the words, which reserves this row whatever the answer's length, so the
+ * marker never lands on the answer text and needs no space of its own.
+ */
+export const CONFIDENCE_MARKER_FONT_SIZE = 12;
+export const CONFIDENCE_MARKER_BASELINE = 14;
+
+/** The words the marker draws. A label and the level, so the canvas says what the number is. */
+export function confidenceMarkerText(level: ConfidenceLevel): string {
+  return `confidence: ${level}`;
+}
+
+/**
+ * The confidence marker for an answer note: a small grey text element in the
+ * note's footer row, at its bottom-left corner.
+ *
+ * A separate element rather than part of the bound label, so the level is
+ * never read as a sentence of the answer, never wraps into it and costs the
+ * answer none of its 400 characters. Half the answer's type size at the
+ * smallest and in the acknowledged grey, so the two are told apart at a
+ * glance.
+ */
+export function buildConfidenceMarker(
+  container: ExcalidrawElement,
+  mentionId: string,
+  level: ConfidenceLevel,
+  ctx: BuildContext,
+  handle?: string | null,
+  opts: AttributedLineOptions = {},
+): ExcalidrawElement {
+  const { created } = buildElements(
+    [
+      {
+        type: "text",
+        x: container.x + STICKY_NOTE_PADDING,
+        y: container.y + container.height - CONFIDENCE_MARKER_BASELINE - CONFIDENCE_MARKER_FONT_SIZE,
+        text: confidenceMarkerText(level),
+        fontSize: CONFIDENCE_MARKER_FONT_SIZE,
+        strokeColor: ACKNOWLEDGED_STROKE,
+      },
+    ],
+    ctx,
+  );
+  const el = created[0];
+  return stampAuthor(
+    {
+      ...el,
+      customData: {
+        [REPLY_CUSTOM_DATA_KEY]: mentionId,
+        [REPLY_KIND_CUSTOM_DATA_KEY]: ANSWER_KIND,
+        [CONFIDENCE_CUSTOM_DATA_KEY]: level,
+        ...(opts.chain ? chainCustomData(opts.chain) : {}),
+      },
+    },
+    handle,
+  );
+}
+
+/**
+ * The non-deleted confidence marker written for a mention id, if the room
+ * holds one. Tombstoned with the note it marks: a marker left behind would
+ * state the old answer's confidence under the new one.
+ */
+export function findConfidenceMarker(
+  elements: readonly ExcalidrawElement[],
+  mentionId: string,
+): ExcalidrawElement | null {
+  for (const el of elements) {
+    if (el.isDeleted || el.type !== "text") continue;
+    const data = el.customData as Record<string, unknown> | undefined;
+    if (data?.[REPLY_CUSTOM_DATA_KEY] === mentionId && typeof data[CONFIDENCE_CUSTOM_DATA_KEY] === "string") return el;
+  }
+  return null;
 }
 
 /**
@@ -728,7 +879,14 @@ export function buildAnswerPostIt(
     },
   };
   const label: ExcalidrawElement = { ...text, fontFamily: mention.fontFamily ?? text.fontFamily };
-  return { container: stampAuthor(container, handle), label: stampAuthor(label, handle) };
+  const stamped = stampAuthor(container, handle);
+  return {
+    container: stamped,
+    label: stampAuthor(label, handle),
+    ...(opts.confidence
+      ? { marker: buildConfidenceMarker(stamped, mention.id, opts.confidence, ctx, handle, opts) }
+      : {}),
+  };
 }
 
 /**
@@ -745,6 +903,26 @@ export function findAnswerPostIt(elements: readonly ExcalidrawElement[], mention
     if (data?.[REPLY_CUSTOM_DATA_KEY] === mentionId && data[REPLY_KIND_CUSTOM_DATA_KEY] === ANSWER_KIND) return el;
   }
   return null;
+}
+
+/**
+ * What an earlier answer to this mention leaves to be tombstoned: the answer
+ * sticky note, the words bound inside it, and the confidence marker beside it.
+ *
+ * All three go together. A container tombstoned on its own leaves its words
+ * floating where the box was, and a marker left behind states the old answer's
+ * confidence under the new one. Gathered here rather than in the tool handler
+ * so the set is one thing a unit test can name.
+ */
+export function spentAnswerElements(
+  elements: readonly ExcalidrawElement[],
+  mentionId: string,
+): ExcalidrawElement[] {
+  const spent = findAnswerPostIt(elements, mentionId);
+  if (!spent) return [];
+  const label = boundLabelOf(elements, spent);
+  const marker = findConfidenceMarker(elements, mentionId);
+  return [spent, ...(label ? [label] : []), ...(marker ? [marker] : [])].map(markRemoved);
 }
 
 /**
@@ -906,14 +1084,27 @@ export function buildMentionAnswer(
   opts: AttributedLineOptions = {},
 ): MentionAnswer {
   const postIt = buildAnswerPostIt(mention, answer, ctx, handle, opts, note);
-  if (note === null) return { mention: acknowledged, changed: [postIt.container, postIt.label] };
+  if (note === null)
+    return {
+      mention: acknowledged,
+      // The marker last, so a reader of the commit sees the note and its words
+      // before the mark on them.
+      changed: [postIt.container, postIt.label, ...(postIt.marker ? [postIt.marker] : [])],
+    };
   const group = answerGroupId(mention.id);
   // Bumped, or peers keep the note in whatever groups they already had it in.
   const question = bump(withGroup(note, group));
   const container = withGroup(postIt.container, group);
   return {
     mention: inheritGroups(acknowledged, question),
-    changed: [question, container, inheritGroups(postIt.label, container)],
+    changed: [
+      question,
+      container,
+      inheritGroups(postIt.label, container),
+      // In the note's groups rather than the label's own, so dragging the
+      // question takes the marker along with the answer it marks.
+      ...(postIt.marker ? [inheritGroups(postIt.marker, container)] : []),
+    ],
   };
 }
 
@@ -1053,6 +1244,8 @@ export interface AcknowledgeRequest {
   status?: string;
   answer?: string;
   source?: string;
+  /** How well founded the answer is. Valid only alongside `answer`. */
+  confidence?: ConfidenceLevel;
 }
 
 /** What it should do, or why it will not. */
@@ -1075,6 +1268,8 @@ export interface AcknowledgePlan {
   answer?: string;
   /** URL the answer sticky note links to, when a source was cited. */
   link?: string;
+  /** The confidence the answer note states, when the caller stated one. */
+  confidence?: ConfidenceLevel;
 }
 
 /**
@@ -1087,11 +1282,20 @@ export interface AcknowledgePlan {
  * that forwards arguments unvalidated must not get an essay drawn on a canvas.
  */
 function answerRefusal(req: AcknowledgeRequest): string | null {
-  if (req.answer === undefined) return req.source === undefined ? null : SOURCE_WITHOUT_ANSWER_TEXT;
+  if (req.answer === undefined) {
+    if (req.source !== undefined) return SOURCE_WITHOUT_ANSWER_TEXT;
+    return req.confidence === undefined ? null : CONFIDENCE_WITHOUT_ANSWER_TEXT;
+  }
   if (req.status !== undefined) return ANSWER_WITH_STATUS_TEXT;
   if (req.reply !== undefined) return ANSWER_WITH_REPLY_TEXT;
   if (!answerSchema.safeParse(req.answer).success) return req.answer.trim() ? ANSWER_TOO_LONG_TEXT : ANSWER_BLANK_TEXT;
+  if (containsUrl(req.answer)) return ANSWER_WITH_URL_TEXT;
   if (req.source !== undefined && !isSourceUrl(req.source)) return SOURCE_NOT_URL_TEXT;
+  if (req.confidence !== undefined && !isConfidenceLevel(req.confidence)) return confidenceUnknownText(req.confidence);
+  // The top of the scale is the only one that costs anything: moderate and low
+  // are usable by an agent with no web lookup at all, which is the server
+  // installed on its own.
+  if (req.confidence === "high" && req.source === undefined) return CONFIDENCE_HIGH_WITHOUT_SOURCE_TEXT;
   return null;
 }
 
@@ -1177,6 +1381,7 @@ export function planAcknowledgement(
       replies: false,
       answers: true,
       ...(req.source !== undefined ? { link: req.source } : {}),
+      ...(req.confidence !== undefined ? { confidence: req.confidence } : {}),
     };
   }
   return { kept: req.keep === true, replies: false };
