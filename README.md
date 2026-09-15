@@ -174,7 +174,13 @@ An agent's `reply` to another agent's note is addressed back to it, as `<handle>
 
 ### Lead and listener
 
-Blocking ten minutes on `mention_wait` ties up your main session. Split the roles. The lead (your session) creates the room and handles anything structural. A listener subagent owns the wait loop, makes small edits in place and hands anything else back. Install it with `npx -y excalidraw-room-mcp install-agent` (`--global` for every project), then, with a room open, ask the session to "start the canvas listener".
+Blocking ten minutes on `mention_wait` ties up your main session. Split the roles. The lead (your session) creates the room and handles anything structural. A listener subagent owns the wait loop, makes small edits in place and hands anything else back. Install both bundled subagents with `npx -y excalidraw-room-mcp install-agent` (`--global` for every project), which writes one file per agent into `.claude/agents` and prints where each one went, then, with a room open, ask the session to "start the canvas listener".
+
+`canvas-listener` is the loop. It waits, makes the small edits itself, asks on the canvas when a request is unclear, and escalates anything structural to the lead.
+
+`canvas-answerer` answers one knowledge question and ends. The listener spawns one per pending question while `answerQuestions` is on and goes straight back to waiting, so two questions do not queue behind each other's lookup: the slow part of a question is the lookup, and questions touch nothing on the canvas but their own note. Canvas edits stay sequential, handled by the listener, because they share space and a burst of them applied at once would fight over placement.
+
+The answerer is granted `room_status`, `scene_read`, `mention_acknowledge`, `WebSearch` and `WebFetch`, and nothing else. With no element tools it cannot draw anything but the answer on the note it was given, so "answers only, on that note" holds by construction rather than by instruction. It answers established, uncontested fact; a disputed question, or one turning on context inside your own organisation it cannot see, is acknowledged `out of scope` and handed up as text. It never cites a URL it did not fetch in that turn, and where no web lookup is available it still answers, at `moderate` or `low` confidence.
 
 ## Tools
 
