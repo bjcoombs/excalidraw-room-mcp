@@ -38,10 +38,9 @@ import {
   formatMention,
   nearbyNeighbourhood,
   handledKey,
-  boundLabelOf,
   answeredStickyNote,
   buildMentionAnswer,
-  findAnswerPostIt,
+  confidenceSchema,
   markAcknowledged,
   markHandled,
   markRemoved,
@@ -58,6 +57,7 @@ import {
   noteStays,
   removedWithMention,
   scopeRuleFor,
+  spentAnswerElements,
   replySchema,
   resolveTags,
   statusSchema,
@@ -993,13 +993,16 @@ gated(server.registerTool(
         status: statusSchema.optional(),
         answer: answerSchema.optional().describe("Only while mention_policy is on."),
         source: z.string().url().optional(),
+        confidence: confidenceSchema
+          .optional()
+          .describe("How well founded the answer is. \"high\" needs a source. room_help answers."),
       })
       // Strict on purpose: `note` was this tool's free-text status until 0.7.0,
       // and a caller still passing it must be told the argument is gone rather
       // than have its words silently dropped.
       .strict(),
   },
-  async ({ id, keep, reply, replyTo, status, answer, source }) => {
+  async ({ id, keep, reply, replyTo, status, answer, source, confidence }) => {
     // Read before the plan so a reply can default to the note's own author, and
     // only when there is a room to read it from: the refusals below are decided
     // before anything on the canvas is touched and before the room is even
@@ -1008,7 +1011,7 @@ gated(server.registerTool(
     // connection state is.
     const current = room.isConnected ? room.getElement(id) : undefined;
     const plan = planAcknowledgement(
-      { keep, reply, replyTo, status, answer, source },
+      { keep, reply, replyTo, status, answer, source, confidence },
       resolveTags(undefined, room.handle),
       room.handle,
       current ? elementAuthor(current) : null,
@@ -1043,15 +1046,9 @@ gated(server.registerTool(
     // or an ellipse is a request about that drawing, so that container stays.
     // https://github.com/bjcoombs/excalidraw-room-mcp/issues/126
     changed.push(...removedWithMention(room.getElements(), current, plan));
-    // A sticky note answering this note from an earlier acknowledgement is spent
-    // too, and it takes its bound text with it: a container tombstoned on its
-    // own leaves the words floating where the box was.
-    const spent = findAnswerPostIt(room.getElements(), id);
-    if (spent) {
-      changed.push(markRemoved(spent));
-      const spentLabel = boundLabelOf(room.getElements(), spent);
-      if (spentLabel) changed.push(markRemoved(spentLabel));
-    }
+    // A sticky note answering this note from an earlier acknowledgement is
+    // spent too, and it takes its bound text and its confidence marker with it.
+    changed.push(...spentAnswerElements(room.getElements(), id));
     if (plan.answer !== undefined) {
       // A loose note is removed and the sticky note takes its place: the
       // question is the heading of the answer inside the box, so keeping the
@@ -1065,7 +1062,7 @@ gated(server.registerTool(
         plan.answer,
         { existing: new Map(room.getElements(true).map((e) => [e.id, e])), lastIndex: room.lastIndex() },
         room.handle,
-        { link: plan.link, chain: nextChain(chainOf(current)) },
+        { link: plan.link, confidence: plan.confidence, chain: nextChain(chainOf(current)) },
       );
       updated = answered.mention;
       changed.push(...answered.changed);
