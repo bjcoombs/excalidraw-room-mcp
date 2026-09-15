@@ -19,7 +19,20 @@
  *
  * Pure state with the clock injected; nothing here reads the room or the
  * wall clock on its own. `src/index.ts` holds the single instance beside the
- * handled and acknowledged maps and resets it on join.
+ * handled and acknowledged maps.
+ *
+ * There is deliberately no reset, and a join does not clear the lease. The
+ * handled maps are about notes on one canvas, so a join empties them; the
+ * lease is about who on this connection is waiting, which a change of room
+ * does not answer. It cannot be cleared on join without reopening the hole it
+ * closes: `RoomClient.leave` does not remove the `"scene"` listener that
+ * `waitForMention` attaches, so a wait in flight when the process moves rooms
+ * keeps looping against the new room's elements until its own deadline. Were
+ * the lease freed at that moment, a fresh caller would take it under any name
+ * and both waits would be live in the new room - the exact double-delivery
+ * this module exists to prevent. Tying the hold to the wait's own deadline
+ * covers that case for free: the lease lapses when the wait it gated can no
+ * longer return, whichever room that wait ended up in.
  * https://github.com/bjcoombs/excalidraw-room-mcp/issues/133
  */
 
@@ -41,6 +54,22 @@ export const DEFAULT_LISTENER = "lead";
  * within half a minute.
  */
 export const LISTEN_LEASE_GRACE_MS = 30_000;
+
+/**
+ * A listener name is letters, digits, underscores and hyphens, 1 to 64
+ * characters - the handle grammar of src/handle.ts widened to the casing an
+ * agent name is written in.
+ *
+ * The grammar is a safety boundary, not a style preference. The name is echoed
+ * verbatim into `leaseLine`, which is one line of `room_status`, and into
+ * `refusalText`: a name carrying a newline would forge a further status line,
+ * so `"worker\nlistening: none"` could make a held lease read as a free one.
+ */
+export const LISTENER_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function isValidListener(listener: string): boolean {
+  return LISTENER_PATTERN.test(listener);
+}
 
 /** The lease was taken or renewed under the asked-for name. */
 export interface LeaseGranted {
@@ -98,11 +127,6 @@ export class ListenLease {
     return { listener: this.listener, secondsRemaining: remaining(this.expiresAt, t) };
   }
 
-  /** Drop the lease. A join calls this: the next room starts with nobody listening. */
-  reset(): void {
-    this.listener = null;
-    this.expiresAt = 0;
-  }
 }
 
 function remaining(expiresAt: number, now: number): number {

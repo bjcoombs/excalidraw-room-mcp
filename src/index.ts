@@ -25,7 +25,7 @@ import { forcedLine, protectedBy, refusalLines, type Refusal } from "./guard.js"
 import { isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
 import { helpText, README_URL, readReadme } from "./help.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
-import { DEFAULT_LISTENER, ListenLease, leaseLine, waitUnderLease } from "./lease.js";
+import { DEFAULT_LISTENER, LISTENER_PATTERN, ListenLease, leaseLine, waitUnderLease } from "./lease.js";
 import {
   agentReplyDepthLine,
   agentReplyDepthRefusal,
@@ -142,15 +142,16 @@ let acknowledgedMentions: HandledNotes = new Map();
 const mentionPolicy = new MentionPolicy();
 /**
  * Which caller on this connection is waiting for mentions. In memory beside
- * the two handled maps and reset by the same join, because a lease taken for
- * one room says nothing about who listens in the next. See src/lease.ts.
+ * the two handled maps, but deliberately not cleared by the join that clears
+ * them: the maps are about notes on one canvas, the lease is about who on this
+ * connection is waiting, and a wait in flight across a room change outlives
+ * the join. src/lease.ts has the whole argument.
  */
 const listenLease = new ListenLease();
 room.on("joined", () => {
   handledMentions = new Map();
   acknowledgedMentions = new Map();
   mentionPolicy.reset();
-  listenLease.reset();
 });
 
 /**
@@ -939,8 +940,7 @@ gated(server.registerTool(
       answerAgentMentions: answerAgentMentionsSchema,
       listener: z
         .string()
-        .min(1)
-        .max(64)
+        .regex(LISTENER_PATTERN)
         .default(DEFAULT_LISTENER)
         .describe("Who listens. One name at a time; a second is refused, not served."),
     },
