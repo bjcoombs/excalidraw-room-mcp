@@ -24,8 +24,8 @@ import {
 import { forcedLine, protectedBy, refusalLines, type Refusal } from "./guard.js";
 import { isValidHandle, MAX_HANDLE_LENGTH } from "./handle.js";
 import { HELP_TOPIC_NAMES, helpText, README_URL, readReadme } from "./help.js";
-import { DEFAULT_LISTENER, ListenLease, leaseLine, waitUnderLease } from "./lease.js";
 import { LISTEN_TIP, SERVER_INSTRUCTIONS } from "./instructions.js";
+import { DEFAULT_LISTENER, ListenLease, leaseLine, waitUnderLease } from "./lease.js";
 import {
   agentReplyDepthLine,
   agentReplyDepthRefusal,
